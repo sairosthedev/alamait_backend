@@ -153,34 +153,30 @@ class MonthlyAccrualCronService {
                 console.log(`ℹ️ Found ${existingAccruals.length} existing accrual entries for ${month}/${year}. Continuing to create for missing students...`);
             }
 
-            // 🆕 PROCESS LEASE STARTS: Process lease starts for applications beginning in current month
-            console.log(`🏠 Processing lease starts for applications beginning in ${month}/${year}...`);
-            await this.processLeaseStartsForMonth(month, year);
+            // 🆕 COMPREHENSIVE: Ensure all accruals exist for all active students
+            // This method ensures:
+            // 1. Lease start accruals exist for all active students
+            // 2. All monthly accruals exist from lease start to current month
+            // 3. Never creates duplicates
+            console.log(`🔄 Running comprehensive accrual ensurement for all active students...`);
+            const comprehensiveResult = await RentalAccrualService.ensureAllAccrualsForActiveStudents({
+                includeFutureMonths: false,
+                dryRun: false
+            });
             
-            // Create monthly accruals for all active students (service checks per student and skips existing)
-            console.log(`🏠 Creating monthly rent accruals for ${month}/${year}...`);
-            const result = await RentalAccrualService.createMonthlyRentAccrual(month, year);
-            
-            if (result && result.success) {
-                console.log(`✅ Monthly accruals created successfully for ${month}/${year}`);
-                console.log(`   Accruals created: ${result.accrualsCreated}`);
-                console.log(`   Errors: ${result.errors?.length || 0}`);
+            if (comprehensiveResult && comprehensiveResult.success) {
+                console.log(`✅ Comprehensive accrual ensurement completed`);
+                console.log(`   Students checked: ${comprehensiveResult.summary.studentsChecked}`);
+                console.log(`   Lease starts - Created: ${comprehensiveResult.summary.leaseStarts.created}, Skipped: ${comprehensiveResult.summary.leaseStarts.skipped}, Errors: ${comprehensiveResult.summary.leaseStarts.errors}`);
+                console.log(`   Monthly accruals - Created: ${comprehensiveResult.summary.monthlyAccruals.created}, Skipped: ${comprehensiveResult.summary.monthlyAccruals.skipped}, Errors: ${comprehensiveResult.summary.monthlyAccruals.errors}`);
                 
-                if (result.errors && result.errors.length > 0) {
-                    console.log('⚠️ Some errors occurred:');
-                    result.errors.forEach((error, index) => {
-                        console.log(`   ${index + 1}. ${error.student}: ${error.error}`);
-                    });
+                if (comprehensiveResult.errors && comprehensiveResult.errors.length > 0) {
+                    console.log(`⚠️ ${comprehensiveResult.errors.length} errors occurred during comprehensive ensurement`);
                 }
             } else {
-                console.log(`❌ Failed to create monthly accruals for ${month}/${year}`);
-                console.log(`   Error: ${result?.error || 'Unknown error'}`);
+                console.log(`❌ Comprehensive accrual ensurement failed`);
+                console.log(`   Error: ${comprehensiveResult?.error || 'Unknown error'}`);
             }
-            
-            // After attempting current month, backfill any missing prior months
-            console.log('🧩 Running backfill for missing monthly accruals...');
-            const backfill = await RentalAccrualService.backfillMissingAccruals();
-            console.log(`   Backfill -> created: ${backfill.created}, skipped: ${backfill.skipped}, errors: ${backfill.errors?.length || 0}`);
 
             this.lastRun = now;
             this.calculateNextRun();

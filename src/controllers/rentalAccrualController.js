@@ -13,6 +13,50 @@ const { auth, financeAccess } = require('../middleware/auth');
 class RentalAccrualController {
     
     /**
+     * 🆕 COMPREHENSIVE: Ensure all accruals exist for all active students
+     * This ensures lease starts and all monthly accruals are created
+     * POST /api/rental-accrual/ensure-all
+     */
+    static async ensureAllAccruals(req, res) {
+        try {
+            const { includeFutureMonths = false, dryRun = false } = req.body;
+            
+            console.log(`🔄 Comprehensive accrual ensurement requested`);
+            console.log(`   Include future months: ${includeFutureMonths}`);
+            console.log(`   Dry run: ${dryRun}`);
+            
+            const result = await RentalAccrualService.ensureAllAccrualsForActiveStudents({
+                includeFutureMonths: includeFutureMonths === true,
+                dryRun: dryRun === true
+            });
+            
+            if (result && result.success) {
+                res.json({
+                    success: true,
+                    message: dryRun 
+                        ? 'Dry run completed - no accruals were created' 
+                        : 'Comprehensive accrual ensurement completed',
+                    data: result
+                });
+            } else {
+                res.status(500).json({
+                    success: false,
+                    message: 'Comprehensive accrual ensurement failed',
+                    error: result?.error || 'Unknown error'
+                });
+            }
+            
+        } catch (error) {
+            console.error('❌ Error in comprehensive accrual ensurement:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error ensuring all accruals',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Create monthly rent accruals for all active students
      * POST /api/rental-accrual/create-monthly
      */

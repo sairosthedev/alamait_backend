@@ -2444,8 +2444,8 @@ class FinancialReportsController {
                     
                     if (isLoanAccount) {
                         // Try to find the account, but if not found, create a virtual loan account
-                        account = await Account.findOne({ code: accountCode });
-                        if (!account) {
+                    account = await Account.findOne({ code: accountCode });
+                    if (!account) {
                             // Create virtual loan account
                             account = {
                                 code: accountCode,
@@ -2475,10 +2475,10 @@ class FinancialReportsController {
                                     isVirtual: true
                                 };
                             } else {
-                                return res.status(404).json({
-                                    success: false,
-                                    message: 'Account not found'
-                                });
+                        return res.status(404).json({
+                            success: false,
+                            message: 'Account not found'
+                        });
                             }
                         }
                     }
@@ -2645,7 +2645,7 @@ class FinancialReportsController {
                     
                     // 🆕 PRIORITY: Check expenses object directly by account code (e.g., 5007, 5003)
                     // Expenses are stored by account code in monthData.expenses[accountCode]
-                    let totalExpense = 0;
+                        let totalExpense = 0;
                     let expenseFoundByCode = false;
                     
                     for (const monthKey of monthsToCheck) {
@@ -2672,10 +2672,10 @@ class FinancialReportsController {
                                 else if (monthData.expenses && monthData.expenses[expenseCategory] !== undefined) {
                                     totalExpense += monthData.expenses[expenseCategory] || 0;
                                 }
+                                }
                             }
                         }
-                    }
-                    
+                        
                     // Always set accountData if we found the expense (by code or category)
                     if (expenseFoundByCode || expenseCategory) {
                         accountData = {
@@ -2695,14 +2695,14 @@ class FinancialReportsController {
                     // First try exact account code match
                     if (cashFlowData.expenses[accountCode] !== undefined) {
                         const expenseAmount = cashFlowData.expenses[accountCode];
-                        accountData = {
+                    accountData = {
                             totalDebit: expenseAmount,
                             totalCredit: 0,
                             netAmount: expenseAmount,
                             transactionCount: 0,
-                            type: 'expense',
-                            category: 'expense'
-                        };
+                        type: 'expense',
+                        category: 'expense'
+                    };
                     } else {
                         // Try to find by expense name (case-insensitive, handle underscores/spaces)
                         // Expense names in cashFlowData.expenses might be like "Counches", "Outside benches and umbrella"
@@ -2976,8 +2976,8 @@ class FinancialReportsController {
                                 // 🆕 EXCLUDE other income keywords (council, rates) - those belong in 4006
                                 $and: [
                                     {
-                                        description: { 
-                                            $regex: /forfeit|no-show|no show|breach.*contract/i 
+                                description: { 
+                                    $regex: /forfeit|no-show|no show|breach.*contract/i 
                                         }
                                     },
                                     {
@@ -3065,10 +3065,10 @@ class FinancialReportsController {
                     
                     if (isNumericAccountCode) {
                         // Numeric account code (e.g., 5007) - query by account code
-                        query = {
-                            'entries.accountCode': accountCode, // Direct expense account entries ONLY
-                            status: { $nin: ['reversed', 'draft'] }
-                        };
+                    query = {
+                        'entries.accountCode': accountCode, // Direct expense account entries ONLY
+                        status: { $nin: ['reversed', 'draft'] }
+                    };
                     } else {
                         // Expense name (e.g., "counches", "outside_benches_and_umbrella") - query by description
                         // Normalize the account code to match description patterns
@@ -3251,7 +3251,7 @@ class FinancialReportsController {
                 if (query.$and && Array.isArray(query.$and)) {
                     query.$and.push({ 'metadata.isForfeiture': { $ne: true } });
                 } else {
-                    query['metadata.isForfeiture'] = { $ne: true };
+            query['metadata.isForfeiture'] = { $ne: true };
                 }
             }
             

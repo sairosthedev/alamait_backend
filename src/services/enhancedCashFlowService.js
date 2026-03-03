@@ -2822,12 +2822,12 @@ class EnhancedCashFlowService {
                                accountName.toLowerCase().includes('construction') ||
                                accountName.toLowerCase().includes('property')) {
                         purchase_of_buildings += debit;
-                    }
-                });
-            }
-        });
-        
-        return {
+                        }
+                    });
+                }
+            });
+            
+                    return {
             purchase_of_equipment,
             purchase_of_buildings,
             loans_given // 🆕 Added loans given to investing activities
@@ -5094,24 +5094,24 @@ class EnhancedCashFlowService {
                                     matchingCashCredit = cashCredits[0];
                                 } else {
                                     // For other accounts, track which cash credits have been used
-                                    const usedCashCredits = new Set();
-                                    for (const otherExpense of allExpenseEntries) {
-                                        if (otherExpense !== expenseEntry) {
-                                            const matchingCash = cashCredits.find(c => 
-                                                (c.credit || 0) === (otherExpense.debit || 0) && 
-                                                !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
-                                            );
-                                            if (matchingCash) {
-                                                usedCashCredits.add(matchingCash._id?.toString() || matchingCash.id?.toString() || JSON.stringify(matchingCash));
-                                            }
+                                const usedCashCredits = new Set();
+                                for (const otherExpense of allExpenseEntries) {
+                                    if (otherExpense !== expenseEntry) {
+                                        const matchingCash = cashCredits.find(c => 
+                                            (c.credit || 0) === (otherExpense.debit || 0) && 
+                                            !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
+                                        );
+                                        if (matchingCash) {
+                                            usedCashCredits.add(matchingCash._id?.toString() || matchingCash.id?.toString() || JSON.stringify(matchingCash));
                                         }
                                     }
-                                    
-                                    // Find first unused cash credit
-                                    matchingCashCredit = cashCredits.find(c => 
-                                        !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
-                                    );
                                 }
+                                
+                                // Find first unused cash credit
+                                matchingCashCredit = cashCredits.find(c => 
+                                    !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
+                                );
+                            }
                             }
                             
                             // 🆕 For fixed asset accounts (12xx), always include (they have cash credits, so always process)

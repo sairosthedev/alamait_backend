@@ -258,8 +258,8 @@ class RentalAccrualService {
                 }
             } else if (typeof debtor.accountCode === 'string') {
                 // Normal case: accountCode is a string
-                childCode = debtor.accountCode;
-                console.log(`✅ Using debtor account code: ${childCode} for student ${studentId}`);
+            childCode = debtor.accountCode;
+            console.log(`✅ Using debtor account code: ${childCode} for student ${studentId}`);
             } else {
                 // Unexpected type, fallback to debtor ID
                 childCode = `1100-${debtor._id.toString()}`;
@@ -289,6 +289,9 @@ class RentalAccrualService {
                 console.log(`   ✅ Fixed: Using student ID as account code: ${childCode}`);
             }
         }
+        
+        // Initialize child variable
+        let child = null;
         
         // 🆕 CRITICAL: If debtor exists, also check for accounts with wrong format (student ID instead of debtor ID)
         // This handles cases where accounts were created with the wrong format
@@ -371,7 +374,7 @@ class RentalAccrualService {
                 }
                 
                 console.log(`✅ AR account already exists: ${child.code}`);
-                return child;
+            return child;
             }
         }
 
@@ -387,7 +390,7 @@ class RentalAccrualService {
                 console.log(`   ✅ Fixed: Using student ID as account code: ${childCode}`);
             }
         }
-        
+
         // Create account with debtor account code format
         child = new Account({
             code: String(childCode), // Explicitly convert to string as final safeguard
@@ -509,9 +512,9 @@ class RentalAccrualService {
             // Build comprehensive duplicate check array
             const duplicateChecks = [
                 // Existing checks - by application
-                { 'metadata.applicationId': application._id, 'metadata.type': 'lease_start' },
-                { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' },
-                { source: 'rental_accrual', sourceModel: 'Application', sourceId: application._id },
+                    { 'metadata.applicationId': application._id, 'metadata.type': 'lease_start' },
+                    { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' },
+                    { source: 'rental_accrual', sourceModel: 'Application', sourceId: application._id },
                 // 🆕 ENHANCED: Check by description patterns (catches both "Lease start for" and "Lease start accounting entries")
                 // Check by application code in description (if present)
                 { description: { $regex: new RegExp(`Lease start.*${application.applicationCode}`, 'i') } },
@@ -519,15 +522,15 @@ class RentalAccrualService {
                 { description: { $regex: new RegExp(`Lease start.*${application.firstName}.*${application.lastName}`, 'i') } },
                 { description: { $regex: new RegExp(`Lease start accounting entries.*${application.firstName}.*${application.lastName}`, 'i') } },
                 // 🆕 CRITICAL: Check by student name + date (catches duplicates regardless of description format)
-                ...(studentId ? [{
-                    source: 'rental_accrual',
-                    'metadata.type': 'lease_start',
-                    'metadata.studentId': studentId,
-                    date: {
-                        $gte: new Date(leaseStartDateStr),
-                        $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
-                    },
-                    status: { $ne: 'deleted' }
+                    ...(studentId ? [{
+                        source: 'rental_accrual',
+                        'metadata.type': 'lease_start',
+                        'metadata.studentId': studentId,
+                        date: {
+                            $gte: new Date(leaseStartDateStr),
+                            $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
+                        },
+                        status: { $ne: 'deleted' }
                 }] : []),
             ];
             
@@ -727,8 +730,8 @@ class RentalAccrualService {
                 // Fallback: use ensureStudentARAccount (but this should use debtor ID if debtor exists)
                 accountsReceivable = await this.ensureStudentARAccount(
                     studentId, // Use extracted student ID
-                    `${application.firstName} ${application.lastName}`
-                );
+                `${application.firstName} ${application.lastName}`
+            );
                 
                 // 🆕 CRITICAL SAFETY CHECK: Ensure accountsReceivable.code is a string
                 arAccountCode = accountsReceivable.code;
@@ -1045,39 +1048,60 @@ class RentalAccrualService {
             console.log(`🏠 Creating rent accruals for ${month}/${year}...`);
             
             // Get all active student applications for the month
-            const startDate = new Date(year, month - 1, 1);
-            const endDate = new Date(year, month, 0);
+            // Use UTC to avoid timezone issues
+            const startDate = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+            const endDate = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
             
             // Find students with active leases for this month
+            // A student is active for a month if:
+            // - Their lease starts on or before the last day of the month
+            // - Their lease ends on or after the first day of the month
             const Application = require('../models/Application');
             const activeStudents = await Application.find({
                     status: 'approved',
                     startDate: { $lte: endDate },
                     endDate: { $gte: startDate },
                     paymentStatus: { $ne: 'cancelled' }
-                });
+                })
+                .sort({ startDate: 1 }); // Sort by start date for easier debugging
             
             console.log(`Found ${activeStudents.length} active students for ${month}/${year}`);
+            console.log(`   Date range: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]}`);
             
             let accrualsCreated = 0;
             let errors = [];
             
             for (const student of activeStudents) {
                 try {
+                    const studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim() || 'Unknown';
                     const result = await this.createStudentRentAccrual(student, month, year);
                     if (result.success) {
                         accrualsCreated++;
+                        console.log(`   ✅ Created accrual for ${studentName}`);
                     } else {
-                        errors.push({ student: student.firstName, error: result.error });
+                        // Only log as error if it's not a duplicate or lease start month skip
+                        const isExpectedSkip = result.error && (
+                            result.error.includes('already exists') || 
+                            result.error.includes('lease_start') ||
+                            result.error.includes('Lease start month')
+                        );
+                        if (!isExpectedSkip) {
+                            errors.push({ student: studentName, error: result.error });
+                            console.log(`   ⚠️ Skipped ${studentName}: ${result.error}`);
+                        } else {
+                            console.log(`   ℹ️ Skipped ${studentName}: ${result.error}`);
+                        }
                     }
                 } catch (error) {
-                    errors.push({ student: student.firstName, error: error.message });
+                    const studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim() || 'Unknown';
+                    errors.push({ student: studentName, error: error.message });
+                    console.error(`   ❌ Error creating accrual for ${studentName}:`, error.message);
                 }
             }
             
             console.log(`✅ Created ${accrualsCreated} rent accruals for ${month}/${year}`);
             if (errors.length > 0) {
-                console.log(`⚠️ ${errors.length} errors occurred:`, errors);
+                console.log(`⚠️ ${errors.length} unexpected errors occurred:`, errors);
             }
             
             return {
@@ -1434,6 +1458,304 @@ class RentalAccrualService {
     }
     
     /**
+     * 🆕 COMPREHENSIVE: Ensure all accruals exist for all active students
+     * This method ensures:
+     * 1. Lease start accruals exist for all active students
+     * 2. All monthly accruals exist from lease start to current month
+     * 3. Never creates duplicates
+     * 
+     * This is the main method to call to ensure data integrity
+     */
+    static async ensureAllAccrualsForActiveStudents(options = {}) {
+        try {
+            const { 
+                includeFutureMonths = false,
+                dryRun = false 
+            } = options;
+
+            console.log(`\n🔄 COMPREHENSIVE ACCRUAL ENSUREMENT PROCESS`);
+            console.log(`   Mode: ${dryRun ? 'DRY RUN (no changes)' : 'LIVE (will create missing accruals)'}`);
+            if (includeFutureMonths) {
+                console.log(`   ⚠️ Including future months (not recommended)`);
+            }
+
+            const Application = require('../models/Application');
+            const now = new Date();
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+
+            // Get all active students (approved, not cancelled)
+            const activeStudents = await Application.find({
+                status: 'approved',
+                paymentStatus: { $ne: 'cancelled' }
+            })
+            .populate('student', 'firstName lastName email')
+            .sort({ startDate: 1 })
+            .lean();
+
+            console.log(`   Found ${activeStudents.length} active students to check`);
+
+            let leaseStartsCreated = 0;
+            let leaseStartsSkipped = 0;
+            let leaseStartErrors = 0;
+            let monthlyAccrualsCreated = 0;
+            let monthlyAccrualsSkipped = 0;
+            let monthlyAccrualErrors = 0;
+            const errors = [];
+
+            for (const student of activeStudents) {
+                const studentName = student.student 
+                    ? `${student.student.firstName || ''} ${student.student.lastName || ''}`.trim()
+                    : `${student.firstName || ''} ${student.lastName || ''}`.trim() || 'Unknown';
+                
+                // 🆕 CRITICAL: Skip applications without a student ID (needed for accruals)
+                // Some applications might not have a student field populated
+                if (!student.student && !student._id) {
+                    console.log(`   ⚠️ Skipping ${studentName} - missing student ID and application ID`);
+                    continue;
+                }
+                
+                if (!student.startDate || !student.endDate) {
+                    console.log(`   ⚠️ Skipping ${studentName} - missing start or end date`);
+                    continue;
+                }
+
+                const leaseStart = new Date(student.startDate);
+                const leaseEnd = new Date(student.endDate);
+                
+                if (isNaN(leaseStart.getTime()) || isNaN(leaseEnd.getTime())) {
+                    console.log(`   ⚠️ Skipping ${studentName} - invalid dates`);
+                    continue;
+                }
+
+                const leaseStartMonth = leaseStart.getMonth() + 1;
+                const leaseStartYear = leaseStart.getFullYear();
+                const leaseEndMonth = leaseEnd.getMonth() + 1;
+                const leaseEndYear = leaseEnd.getFullYear();
+
+                // STEP 1: Ensure lease start accrual exists
+                console.log(`\n   📋 Checking ${studentName} (Lease: ${leaseStartMonth}/${leaseStartYear} to ${leaseEndMonth}/${leaseEndYear})`);
+                
+                // Define student IDs outside try block so they're available for monthly accrual checks
+                // 🆕 CRITICAL: Handle cases where student.student might be null
+                // Use application ID as fallback if student ID is not available
+                const studentId = student.student?._id || student.student || student._id;
+                const applicationId = student._id?.toString() || student._id;
+                const studentIdString = studentId?.toString();
+                
+                // Validate that we have at least one ID to work with
+                if (!studentId && !applicationId) {
+                    console.log(`   ⚠️ Skipping ${studentName} - no valid student or application ID`);
+                    continue;
+                }
+                
+                try {
+                    // Check if lease start accrual exists
+                    
+                    // Build comprehensive query for lease start
+                    const leaseStartQuery = {
+                        source: 'rental_accrual',
+                        $and: [
+                            {
+                                $or: [
+                                    { 'metadata.type': 'lease_start' },
+                                    { description: { $regex: /lease start/i } }
+                                ]
+                            },
+                            {
+                                $or: [
+                                    { 'metadata.applicationId': applicationId },
+                                    { 'metadata.studentId': studentIdString },
+                                    { sourceId: applicationId },
+                                    { sourceId: studentIdString },
+                                    { description: { $regex: new RegExp(`${studentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i') } }
+                                ]
+                            }
+                        ],
+                        status: { $ne: 'deleted' }
+                    };
+                    
+                    const existingLeaseStart = await TransactionEntry.findOne(leaseStartQuery);
+
+                    if (!existingLeaseStart) {
+                        // Check if lease start is in future (skip if so, unless includeFutureMonths)
+                        const isFutureLease = leaseStartYear > currentYear || 
+                            (leaseStartYear === currentYear && leaseStartMonth > currentMonth);
+                        
+                        if (isFutureLease && !includeFutureMonths) {
+                            console.log(`      ⏭️ Lease start is in future (${leaseStartMonth}/${leaseStartYear}) - skipping`);
+                            leaseStartsSkipped++;
+                        } else {
+                            if (dryRun) {
+                                console.log(`      🔍 [DRY RUN] Would create lease start accrual`);
+                                leaseStartsCreated++;
+                            } else {
+                                const leaseStartResult = await this.processLeaseStart(student);
+                                if (leaseStartResult && leaseStartResult.success && !leaseStartResult.skipped) {
+                                    console.log(`      ✅ Created lease start accrual`);
+                                    leaseStartsCreated++;
+                                } else if (leaseStartResult && leaseStartResult.skipped) {
+                                    console.log(`      ⏭️ Lease start skipped: ${leaseStartResult.message}`);
+                                    leaseStartsSkipped++;
+                                } else {
+                                    console.log(`      ❌ Failed to create lease start: ${leaseStartResult?.error || 'Unknown'}`);
+                                    leaseStartErrors++;
+                                    errors.push({
+                                        student: studentName,
+                                        type: 'lease_start',
+                                        error: leaseStartResult?.error || 'Unknown error'
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        console.log(`      ✅ Lease start accrual already exists`);
+                        leaseStartsSkipped++;
+                    }
+                } catch (error) {
+                    console.error(`      ❌ Error checking/creating lease start for ${studentName}:`, error.message);
+                    leaseStartErrors++;
+                    errors.push({
+                        student: studentName,
+                        type: 'lease_start',
+                        error: error.message
+                    });
+                }
+
+                // STEP 2: Ensure all monthly accruals exist from lease start to current month
+                // Start from the month AFTER lease start (lease start month is handled separately)
+                let checkMonth = leaseStartMonth;
+                let checkYear = leaseStartYear;
+                
+                // Move to next month (skip lease start month)
+                checkMonth++;
+                if (checkMonth > 12) {
+                    checkMonth = 1;
+                    checkYear++;
+                }
+
+                // Check each month up to current month (or lease end, whichever is earlier)
+                while (checkYear < currentYear || (checkYear === currentYear && checkMonth <= currentMonth)) {
+                    // Stop if we've passed the lease end date
+                    if (checkYear > leaseEndYear || (checkYear === leaseEndYear && checkMonth > leaseEndMonth)) {
+                        break;
+                    }
+
+                    try {
+                        // Check if monthly accrual exists (use studentId from above)
+                        const existingMonthlyAccrual = await this.checkExistingMonthlyAccrual(
+                            studentIdString || studentId,
+                            checkMonth,
+                            checkYear,
+                            applicationId || student._id,
+                            student.debtor
+                        );
+
+                        if (!existingMonthlyAccrual) {
+                            if (dryRun) {
+                                console.log(`      🔍 [DRY RUN] Would create monthly accrual for ${checkMonth}/${checkYear}`);
+                                monthlyAccrualsCreated++;
+                            } else {
+                                const monthlyResult = await this.createStudentRentAccrual(student, checkMonth, checkYear);
+                                if (monthlyResult && monthlyResult.success) {
+                                    console.log(`      ✅ Created monthly accrual for ${checkMonth}/${checkYear}`);
+                                    monthlyAccrualsCreated++;
+                                } else {
+                                    // Check if it's an expected skip (duplicate, lease start month, etc.)
+                                    const isExpectedSkip = monthlyResult?.error && (
+                                        monthlyResult.error.includes('already exists') ||
+                                        monthlyResult.error.includes('lease_start') ||
+                                        monthlyResult.error.includes('Lease start month')
+                                    );
+                                    
+                                    if (isExpectedSkip) {
+                                        console.log(`      ℹ️ Skipped ${checkMonth}/${checkYear}: ${monthlyResult.error}`);
+                                        monthlyAccrualsSkipped++;
+                                    } else {
+                                        console.log(`      ❌ Failed to create monthly accrual for ${checkMonth}/${checkYear}: ${monthlyResult?.error || 'Unknown'}`);
+                                        monthlyAccrualErrors++;
+                                        errors.push({
+                                            student: studentName,
+                                            type: 'monthly_accrual',
+                                            month: checkMonth,
+                                            year: checkYear,
+                                            error: monthlyResult?.error || 'Unknown error'
+                                        });
+                                    }
+                                }
+                            }
+                        } else {
+                            // Accrual already exists - skip silently
+                            monthlyAccrualsSkipped++;
+                        }
+                    } catch (error) {
+                        console.error(`      ❌ Error checking/creating monthly accrual for ${checkMonth}/${checkYear}:`, error.message);
+                        monthlyAccrualErrors++;
+                        errors.push({
+                            student: studentName,
+                            type: 'monthly_accrual',
+                            month: checkMonth,
+                            year: checkYear,
+                            error: error.message
+                        });
+                    }
+
+                    // Move to next month
+                    checkMonth++;
+                    if (checkMonth > 12) {
+                        checkMonth = 1;
+                        checkYear++;
+                    }
+                }
+            }
+
+            // Summary
+            console.log(`\n📊 COMPREHENSIVE ACCRUAL ENSUREMENT SUMMARY:`);
+            console.log(`   Lease Starts:`);
+            console.log(`      Created: ${leaseStartsCreated}`);
+            console.log(`      Already existed: ${leaseStartsSkipped}`);
+            console.log(`      Errors: ${leaseStartErrors}`);
+            console.log(`   Monthly Accruals:`);
+            console.log(`      Created: ${monthlyAccrualsCreated}`);
+            console.log(`      Already existed: ${monthlyAccrualsSkipped}`);
+            console.log(`      Errors: ${monthlyAccrualErrors}`);
+            
+            if (errors.length > 0) {
+                console.log(`\n⚠️ ${errors.length} errors occurred:`);
+                errors.slice(0, 20).forEach((err, idx) => {
+                    console.log(`   ${idx + 1}. ${err.student} (${err.type}${err.month ? ` - ${err.month}/${err.year}` : ''}): ${err.error}`);
+                });
+                if (errors.length > 20) {
+                    console.log(`   ... and ${errors.length - 20} more errors`);
+                }
+            }
+
+            return {
+                success: true,
+                summary: {
+                    studentsChecked: activeStudents.length,
+                    leaseStarts: {
+                        created: leaseStartsCreated,
+                        skipped: leaseStartsSkipped,
+                        errors: leaseStartErrors
+                    },
+                    monthlyAccruals: {
+                        created: monthlyAccrualsCreated,
+                        skipped: monthlyAccrualsSkipped,
+                        errors: monthlyAccrualErrors
+                    }
+                },
+                errors,
+                dryRun
+            };
+
+        } catch (error) {
+            console.error('❌ Error in comprehensive accrual ensurement:', error);
+            throw error;
+        }
+    }
+
+    /**
      * 🆕 ENHANCED: Create rent accrual for a specific student
      * Now handles full month rent (not prorated) and excludes admin fees
      */
@@ -1481,8 +1803,30 @@ class RentalAccrualService {
             // 🆕 ENHANCED: Comprehensive duplicate detection for monthly accruals
             // Multiple checks to prevent duplicates from any source or ID format
             const monthKey = `${year}-${String(month).padStart(2, '0')}`;
-            const studentIdString = student.student.toString();
-            const sourceId = student.student; // Lease/student ID used as sourceId
+            
+            // 🆕 CRITICAL: Handle cases where student.student might be null or undefined
+            // This can happen for applications that don't have a student field populated
+            // Try to get student ID from various sources
+            let studentIdValue = null;
+            if (student.student) {
+                // If student.student is an object with _id, use that
+                if (typeof student.student === 'object' && student.student._id) {
+                    studentIdValue = student.student._id;
+                } else {
+                    // Otherwise use student.student directly (could be ObjectId or string)
+                    studentIdValue = student.student;
+                }
+            } else if (student._id) {
+                // Fallback to application ID if student ID is not available
+                studentIdValue = student._id;
+            }
+            
+            if (!studentIdValue) {
+                throw new Error(`Student ID is missing for ${student.firstName || ''} ${student.lastName || ''}. Cannot create monthly accrual without student ID or application ID.`);
+            }
+            
+            const studentIdString = studentIdValue.toString();
+            const sourceId = studentIdValue; // Use the resolved student ID as sourceId
             
             // Get debtor ID if available (for enhanced duplicate detection)
             let debtorIdForCheck = null;
@@ -1558,8 +1902,9 @@ class RentalAccrualService {
             }
             
             // Check 4: Also check using the general method as a backup
+            // 🆕 FIX: Use studentIdValue (safely calculated) instead of student.student (might be null)
             const existingAccrual = await this.checkExistingMonthlyAccrual(
-                student.student, 
+                studentIdValue, 
                 month, 
                 year, 
                 student._id, 
@@ -1613,9 +1958,9 @@ class RentalAccrualService {
             } else {
                 // No debtor info provided, use standard method (for monthly cron service)
                 accountsReceivable = await this.ensureStudentARAccount(
-                    student.student, // Use student ID, not application ID
-                    `${student.firstName} ${student.lastName}`
-                );
+                student.student, // Use student ID, not application ID
+                `${student.firstName} ${student.lastName}`
+            );
             }
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             
@@ -1630,16 +1975,18 @@ class RentalAccrualService {
                 // Try to extract debtor ID from the object
                 if (typeof arAccountCode === 'object' && arAccountCode !== null) {
                     const Debtor = require('../models/Debtor');
-                    const debtor = await Debtor.findOne({ user: student.student }).select('_id').lean();
+                    // 🆕 FIX: Use studentIdValue instead of student.student (might be null)
+                    const debtor = await Debtor.findOne({ user: studentIdValue }).select('_id').lean();
                     if (debtor?._id) {
                         arAccountCode = `1100-${debtor._id.toString()}`;
                         console.log(`   ✅ Fixed: Extracted debtor ID and created account code: ${arAccountCode}`);
                     } else {
-                        arAccountCode = `1100-${student.student}`;
+                        arAccountCode = `1100-${studentIdString}`;
                         console.log(`   ✅ Fixed: Using student ID as account code: ${arAccountCode}`);
                     }
                 } else {
-                    arAccountCode = `1100-${student.student}`;
+                    // 🆕 FIX: Use studentIdString instead of student.student (might be null)
+                    arAccountCode = `1100-${studentIdString}`;
                     console.log(`   ✅ Fixed: Using student ID as account code: ${arAccountCode}`);
                 }
             }
@@ -1653,7 +2000,7 @@ class RentalAccrualService {
                 residence: student.residence,
                 createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
                 metadata: {
-                    studentId: student.student.toString(), // Use student ID, not application ID
+                    studentId: studentIdString, // 🆕 FIX: Use safely calculated studentIdString instead of student.student (might be null)
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
                     room: student.allocatedRoom,
@@ -1941,12 +2288,12 @@ class RentalAccrualService {
                         } else if (advancePayment.source === 'advance_payment') {
                             // For explicit advance payments, try to get from AR credit or totalCredit
                             if (studentAREntry) {
-                                advanceAmount = studentAREntry.credit || 0;
+                            advanceAmount = studentAREntry.credit || 0;
                                 console.log(`   ⚠️ Advance payment ${advancePayment.transactionId} doesn't have account 2200, using AR credit amount: $${advanceAmount}`);
-                            } else {
-                                // Try to get amount from totalCredit
-                                advanceAmount = advancePayment.totalCredit || 0;
-                                console.log(`   ⚠️ Could not find amount in entries, using totalCredit: $${advanceAmount}`);
+                        } else {
+                            // Try to get amount from totalCredit
+                            advanceAmount = advancePayment.totalCredit || 0;
+                            console.log(`   ⚠️ Could not find amount in entries, using totalCredit: $${advanceAmount}`);
                             }
                         } else {
                             // If it's a payment transaction without 2200, it's not actually an advance payment

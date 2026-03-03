@@ -20,6 +20,14 @@ router.use(auth);
 router.use(financeAccess);
 
 /**
+ * 🆕 COMPREHENSIVE: Ensure all accruals exist for all active students
+ * This ensures lease starts and all monthly accruals are created (no duplicates)
+ * POST /api/rental-accrual/ensure-all
+ * Body: { includeFutureMonths: false, dryRun: false }
+ */
+router.post('/ensure-all', RentalAccrualController.ensureAllAccruals);
+
+/**
  * Create monthly rent accruals for all active students
  * POST /api/rental-accrual/create-monthly
  * Body: { month: 8, year: 2025 }
