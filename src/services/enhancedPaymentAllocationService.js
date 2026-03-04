@@ -855,6 +855,7 @@ class EnhancedPaymentAllocationService {
           console.log(`🏠 Processing rent payment: $${remainingAmount}`);
           
           // Allocate rent to oldest outstanding months first (FIFO)
+          // RULE: When payment exceeds a month's outstanding, create TWO entries: (1) allocation capped at month owed, (2) advance for the remainder
           for (const month of outstandingBalances) {
             if (remainingAmount <= 0) break;
             
@@ -870,7 +871,11 @@ class EnhancedPaymentAllocationService {
               continue;
             }
             
+            // Cap at month's outstanding so we never over-allocate; remainder becomes advance (separate entry below)
             const amountToAllocate = Math.min(remainingAmount, month.rent.outstanding);
+            if (remainingAmount > month.rent.outstanding) {
+              console.log(`📋 Payment ($${remainingAmount}) exceeds ${month.monthKey} owed ($${month.rent.outstanding}): creating allocation entry for $${amountToAllocate}, remainder will be advance entry`);
+            }
             
             if (amountToAllocate > 0) {
               console.log(`🎯 Allocating $${amountToAllocate} rent to ${month.monthKey}`);
@@ -923,9 +928,9 @@ class EnhancedPaymentAllocationService {
             }
           }
           
-          // 🆕 BUSINESS RULE: Handle remaining rent as advance payment to Deferred Income
+          // Second entry: any rent left after capping each month = advance (Deferred Income)
           if (remainingAmount > 0) {
-            console.log(`💳 Remaining $${remainingAmount} rent will be treated as advance payment to Deferred Income`);
+            console.log(`💳 Creating advance entry: $${remainingAmount} rent → Deferred Income (excess over month(s) owed)`);
             const advanceResult = await this.handleAdvancePayment(
               paymentData.paymentId, userId, remainingAmount, paymentData, 'rent'
             );
@@ -2278,6 +2283,7 @@ class EnhancedPaymentAllocationService {
    */
   static async createPaymentAllocationTransaction(paymentId, userId, amount, paymentData, paymentType, monthSettled, arTransactionId) {
     try {
+      // For rent: caller must pass amount <= month's outstanding; excess must create a separate advance entry (handleAdvancePayment)
       console.log(`💳 Creating payment allocation transaction for $${amount} ${paymentType} to ${monthSettled}`);
       
       // 🆕 CRITICAL FIX: Check if payment allocation transaction already exists

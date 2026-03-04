@@ -2514,43 +2514,73 @@ class TransactionController {
                     });
                 }
             } else if (accrualMonth && accrualYear) {
-                // Try to find the accrual by month/year and student
-                // Look for both monthly accruals AND lease start transactions
-                // Support both formats: separate accrualMonth/accrualYear fields and combined month field
-                const monthString = `${accrualYear}-${accrualMonth.toString().padStart(2, '0')}`;
-                
+                // Try to find the accrual by month/year and student (monthly accrual or lease start)
+                const monthNum = parseInt(accrualMonth, 10);
+                const yearNum = parseInt(accrualYear, 10);
+                const monthString = `${yearNum}-${String(monthNum).padStart(2, '0')}`;
+                const monthStart = new Date(yearNum, monthNum - 1, 1, 0, 0, 0, 0);
+                const monthEnd = new Date(yearNum, monthNum, 0, 23, 59, 59, 999);
+                const studentIdObj = mongoose.Types.ObjectId.isValid(studentId) ? new mongoose.Types.ObjectId(studentId) : null;
+
+                const studentMatch = {
+                    $or: [
+                        { 'metadata.studentId': studentId },
+                        { reference: studentId },
+                        { sourceId: studentIdObj }
+                    ]
+                };
+                if (studentIdObj) {
+                    studentMatch.$or.push({ 'metadata.studentId': studentIdObj });
+                }
+
                 originalAccrual = await TransactionEntry.findOne({
                     $and: [
+                        { source: 'rental_accrual' },
+                        studentMatch,
                         {
                             $or: [
-                                // Handle both string and ObjectId formats for studentId
-                                { 'metadata.studentId': studentId },
-                                { 'metadata.studentId': new mongoose.Types.ObjectId(studentId) }
-                            ]
-                        },
-                        {
-                            $or: [
-                                // Format 1: Separate accrualMonth and accrualYear fields
-                                {
-                                    'metadata.accrualMonth': parseInt(accrualMonth),
-                                    'metadata.accrualYear': parseInt(accrualYear)
-                                },
-                                // Format 2: Combined month field (e.g., "2025-08")
-                                {
-                                    'metadata.month': monthString
-                                }
+                                { 'metadata.accrualMonth': monthNum, 'metadata.accrualYear': yearNum },
+                                { 'metadata.month': monthString },
+                                { 'metadata.type': 'lease_start', date: { $gte: monthStart, $lte: monthEnd } },
+                                { date: { $gte: monthStart, $lte: monthEnd }, description: { $regex: /lease start/i } }
                             ]
                         },
                         {
                             $or: [
                                 { 'metadata.type': 'monthly_rent_accrual' },
-                                { 'metadata.type': 'lease_start' }
+                                { 'metadata.type': 'lease_start' },
+                                { description: { $regex: /lease start/i } }
                             ]
                         }
                     ],
                     status: 'posted'
                 });
-                
+
+                // Fallback: find by date in month + description contains "Lease start" + student name in description
+                if (!originalAccrual && studentName) {
+                    const nameEscaped = studentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    originalAccrual = await TransactionEntry.findOne({
+                        source: 'rental_accrual',
+                        status: 'posted',
+                        date: { $gte: monthStart, $lte: monthEnd },
+                        description: { $regex: new RegExp(`lease start.*${nameEscaped}`, 'i') }
+                    });
+                }
+
+                // Fallback: find by date in month + entries contain AR account for this student (via debtor)
+                if (!originalAccrual && studentIdObj) {
+                    const Debtor = require('../../models/Debtor');
+                    const debtor = await Debtor.findOne({ user: studentIdObj }).select('accountCode').lean();
+                    if (debtor?.accountCode) {
+                        originalAccrual = await TransactionEntry.findOne({
+                            source: 'rental_accrual',
+                            status: 'posted',
+                            date: { $gte: monthStart, $lte: monthEnd },
+                            'entries.accountCode': debtor.accountCode
+                        });
+                    }
+                }
+
                 if (!originalAccrual) {
                     return res.status(400).json({
                         success: false,
