@@ -211,6 +211,44 @@ async function getStudentInfo(studentId) {
             };
         }
 
+        // If still not found, treat ID as Application ID and resolve from application's student
+        const Application = require('../models/Application');
+        const app = await Application.findById(studentId)
+            .populate('student', 'firstName lastName email phone role roomValidUntil currentRoom residence')
+            .select('student firstName lastName')
+            .lean();
+        if (app && app.student) {
+            const s = app.student;
+            return {
+                _id: s._id,
+                firstName: s.firstName ?? app.firstName,
+                lastName: s.lastName ?? app.lastName,
+                email: s.email,
+                phone: s.phone,
+                role: s.role || 'student',
+                status: 'active',
+                isExpired: false,
+                roomValidUntil: s.roomValidUntil,
+                currentRoom: s.currentRoom,
+                residence: s.residence
+            };
+        }
+        if (app && (app.firstName || app.lastName)) {
+            return {
+                _id: studentId,
+                firstName: app.firstName || 'Unknown',
+                lastName: app.lastName || 'Student',
+                email: null,
+                phone: null,
+                role: 'student',
+                status: 'active',
+                isExpired: false,
+                roomValidUntil: null,
+                currentRoom: null,
+                residence: null
+            };
+        }
+
         return null;
     } catch (error) {
         console.error('Error getting student info:', error);

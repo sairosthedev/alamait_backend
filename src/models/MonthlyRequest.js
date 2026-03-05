@@ -55,7 +55,8 @@ const monthlyRequestItemSchema = new mongoose.Schema({
     },
     purpose: {
         type: String,
-        trim: true
+        trim: true,
+        required: false
     },
     category: {
         type: String,

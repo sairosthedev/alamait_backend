@@ -59,7 +59,10 @@ class RentalAccrualService {
             studentCriteria.push({ 'metadata.studentId': applicationId.toString() });
         }
         if (debtorId) {
+            const debtorIdStr = (typeof debtorId === 'string' ? debtorId : (debtorId && debtorId.toString && debtorId.toString()) || String(debtorId));
             studentCriteria.push({ sourceModel: 'Debtor', sourceId: debtorId });
+            studentCriteria.push({ 'metadata.debtorId': debtorIdStr });
+            studentCriteria.push({ 'entries.accountCode': `1100-${debtorIdStr}` });
         }
 
         if (studentCriteria.length > 0) {
@@ -469,17 +472,21 @@ class RentalAccrualService {
             const Debtor = require('../models/Debtor');
             const mongoose = require('mongoose');
             
-            // Try multiple query formats to find the debtor
+            // Try multiple query formats to find the debtor (user first, then application)
             let debtor = await Debtor.findOne({ user: studentId }).select('_id accountCode').lean();
             if (!debtor) {
-                // Try with ObjectId conversion
                 if (mongoose.Types.ObjectId.isValid(studentId)) {
                     debtor = await Debtor.findOne({ user: new mongoose.Types.ObjectId(studentId) }).select('_id accountCode').lean();
                 }
             }
             if (!debtor) {
-                // Try as string
                 debtor = await Debtor.findOne({ user: String(studentId) }).select('_id accountCode').lean();
+            }
+            if (!debtor && application._id) {
+                debtor = await Debtor.findOne({ application: application._id }).select('_id accountCode').lean();
+                if (debtor) {
+                    console.log(`   ✅ Debtor found by application ID: ${debtor._id}`);
+                }
             }
             
             let debtorId = null;
@@ -1558,11 +1565,15 @@ class RentalAccrualService {
                 }
 
                 // Resolve debtor and AR account code so monthly accruals use 1100-debtorId (not 1100-studentId)
+                // Try user first, then application (some debtors are linked by application only)
                 let debtorIdForStudent = null;
                 let debtorAccountCodeForStudent = null;
                 try {
                     const Debtor = require('../models/Debtor');
-                    const debtorDoc = await Debtor.findOne({ user: studentId }).select('_id accountCode').lean();
+                    let debtorDoc = await Debtor.findOne({ user: studentId }).select('_id accountCode').lean();
+                    if (!debtorDoc && applicationId && mongoose.Types.ObjectId.isValid(applicationId)) {
+                        debtorDoc = await Debtor.findOne({ application: applicationId }).select('_id accountCode').lean();
+                    }
                     if (debtorDoc) {
                         debtorIdForStudent = debtorDoc._id;
                         debtorAccountCodeForStudent = typeof debtorDoc.accountCode === 'string'

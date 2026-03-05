@@ -163,7 +163,8 @@ const requestItemSchema = new mongoose.Schema({
     },
     purpose: {
         type: String,
-        trim: true
+        trim: true,
+        required: false
     },
     quotations: [{
         provider: {

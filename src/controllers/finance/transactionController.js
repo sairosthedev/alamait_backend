@@ -714,9 +714,33 @@ class TransactionController {
             const endDate = new Date(Date.UTC(year, monthNumber, 1));
 
             const identifierVariants = await getLinkedStudentIdentifiers(effectiveStudentId);
-            const identifiersToMatch = (identifierVariants && identifierVariants.length)
+            let identifiersToMatch = (identifierVariants && identifierVariants.length)
                 ? identifierVariants
                 : [effectiveStudentId.toString()];
+
+            // When request uses Application ID, include the actual User ID so we find accruals stored by user/debtor
+            if (studentInfo?._id && studentInfo._id.toString() !== effectiveStudentId.toString()) {
+                identifiersToMatch = [...new Set([...identifiersToMatch, studentInfo._id.toString()])];
+            }
+
+            const Debtor = require('../../models/Debtor');
+            const Application = require('../../models/Application');
+            const debtorByUser = await Debtor.findOne({ user: effectiveStudentId }).select('_id accountCode').lean();
+            if (debtorByUser?.accountCode) {
+                identifiersToMatch = [...new Set([...identifiersToMatch, debtorByUser.accountCode.replace('1100-', '')])];
+            }
+            if (!debtorByUser && mongoose.Types.ObjectId.isValid(effectiveStudentId)) {
+                let app = await Application.findOne({ student: effectiveStudentId }).select('_id').lean();
+                if (!app) {
+                    app = await Application.findById(effectiveStudentId).select('_id').lean();
+                }
+                if (app) {
+                    const debtorByApp = await Debtor.findOne({ application: app._id }).select('_id accountCode').lean();
+                    if (debtorByApp?.accountCode) {
+                        identifiersToMatch = [...new Set([...identifiersToMatch, debtorByApp.accountCode.replace('1100-', '')])];
+                    }
+                }
+            }
 
             const studentMatchClauses = [];
             identifiersToMatch.forEach(id => {
@@ -743,9 +767,21 @@ class TransactionController {
                 $or: studentMatchClauses
             };
 
-            const accrualEntries = await TransactionEntry.find(accrualQuery)
+            let accrualEntries = await TransactionEntry.find(accrualQuery)
                 .sort({ date: 1 })
                 .lean();
+
+            if (accrualEntries.length === 0 && studentName) {
+                const nameEscaped = studentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                accrualEntries = await TransactionEntry.find({
+                    status: 'posted',
+                    date: { $gte: startDate, $lt: endDate },
+                    source: { $in: ['rental_accrual', 'rental_accrual_reversal', 'manual'] },
+                    description: { $regex: new RegExp(nameEscaped, 'i') }
+                })
+                    .sort({ date: 1 })
+                    .lean();
+            }
 
             let totalAccrualAmount = 0;
             const detailedEntries = accrualEntries.map(entry => {
