@@ -2589,19 +2589,47 @@ class TransactionController {
                 }
             }
 
-            // 🆕 CRITICAL: Get debtor to use the correct AR account code (debtor account code, not user ID)
+            // Resolve debtor: studentId may be User ID or Application ID
             const Debtor = require('../../models/Debtor');
-            let debtor = await Debtor.findOne({ user: studentId });
-            
-            // If not found by user, try to find by application or other methods
+            const Application = require('../../models/Application');
+            let debtor = await Debtor.findOne({ user: studentId }).lean();
+            let actualUserId = studentId;
+
             if (!debtor) {
-                const Application = require('../../models/Application');
-                const application = await Application.findOne({ student: studentId });
-                if (application) {
-                    debtor = await Debtor.findOne({ application: application._id });
+                debtor = await Debtor.findOne({ application: studentId }).lean();
+                if (debtor) {
+                    actualUserId = debtor.user?.toString();
                 }
             }
-            
+            if (!debtor) {
+                const applicationByStudent = await Application.findOne({ student: studentId }).select('_id student').lean();
+                if (applicationByStudent) {
+                    debtor = await Debtor.findOne({ application: applicationByStudent._id }).lean();
+                    if (debtor) actualUserId = debtor.user?.toString();
+                }
+            }
+            if (!debtor && mongoose.Types.ObjectId.isValid(studentId)) {
+                const applicationById = await Application.findById(studentId).select('student').lean();
+                if (applicationById?.student) {
+                    actualUserId = applicationById.student.toString();
+                    debtor = await Debtor.findOne({ user: actualUserId }).lean();
+                }
+            }
+            if (!debtor && actualUserId !== studentId) {
+                debtor = await Debtor.findOne({ user: actualUserId }).lean();
+            }
+            // Fallback: get debtor from accrual we already found (entries contain 1100-{debtorId})
+            if (!debtor && originalAccrual?.entries?.length) {
+                const arEntry = originalAccrual.entries.find(e => e.accountCode && e.accountCode.startsWith('1100-') && e.accountCode !== '1100');
+                if (arEntry) {
+                    const debtorIdFromAccrual = arEntry.accountCode.replace('1100-', '');
+                    if (mongoose.Types.ObjectId.isValid(debtorIdFromAccrual)) {
+                        debtor = await Debtor.findById(debtorIdFromAccrual).lean();
+                        if (debtor) actualUserId = debtor.user?.toString();
+                    }
+                }
+            }
+
             if (!debtor) {
                 return res.status(400).json({
                     success: false,
