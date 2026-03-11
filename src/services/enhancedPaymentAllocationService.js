@@ -1959,7 +1959,8 @@ class EnhancedPaymentAllocationService {
       const paymentIdStr = paymentId?.toString ? paymentId.toString() : String(paymentId);
       const paymentDate = paymentData.date ? new Date(paymentData.date) : new Date();
       
-      // Check 1: By payment ID (primary check)
+      // Check 1: By payment ID + payment type (allow separate advance for rent vs deposit)
+      // Same payment can have one advance for 'rent' and one for 'deposit' - they must be separate transactions
       const existingAdvanceTx = await TransactionEntry.findOne({
         $or: [
           { sourceId: paymentObjectId },
@@ -1970,13 +1971,13 @@ class EnhancedPaymentAllocationService {
           { reference: paymentId }
         ],
         source: 'advance_payment',
+        'metadata.paymentType': paymentType,
         status: { $ne: 'reversed' }
       });
       
       if (existingAdvanceTx) {
-        console.log(`⚠️ Advance payment transaction already exists for payment ${paymentId}: ${existingAdvanceTx.transactionId}`);
+        console.log(`⚠️ Advance payment transaction already exists for payment ${paymentId} type ${paymentType}: ${existingAdvanceTx.transactionId}`);
         console.log(`   Skipping duplicate creation - returning existing transaction`);
-        console.log(`   🚨 Creating duplicate would overstate cash received`);
         return existingAdvanceTx;
       }
       

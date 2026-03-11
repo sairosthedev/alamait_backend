@@ -2082,6 +2082,7 @@ class RentalAccrualService {
             // 🆕 FINAL CHECK: One more comprehensive duplicate check right before creating the transaction entry
             // This is the last chance to prevent duplicates before database write
             // Check by both metadata AND sourceId to catch all possible duplicates
+            // IMPORTANT: Use the already-resolved studentIdString/sourceId instead of student.student (which can be null)
             const finalDuplicateCheck = await TransactionEntry.findOne({
                 $or: [
                     {
@@ -2089,7 +2090,7 @@ class RentalAccrualService {
                         'metadata.type': 'monthly_rent_accrual',
                         'metadata.accrualMonth': month,
                         'metadata.accrualYear': year,
-                        'metadata.studentId': student.student.toString(),
+                        'metadata.studentId': studentIdString,
                         status: { $ne: 'deleted' }
                     },
                     {
@@ -2111,22 +2112,23 @@ class RentalAccrualService {
             }
             
             // Create transaction entry with CORRECT date (1st of the month)
+            // IMPORTANT: Use the resolved studentIdString/sourceId instead of student.student (which can be null)
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
                 date: monthStart, // This should be 1st of the month
                 description: `Monthly rent accrual: ${student.firstName} ${student.lastName} - ${month}/${year}`,
-                reference: student.student.toString(),
+                reference: studentIdString,
                 entries,
                 totalDebit: rentAmount,
                 totalCredit: rentAmount,
                 source: 'rental_accrual',
-                sourceId: student.student, // Use student ID, not application ID
+                sourceId: sourceId, // Use resolved student/application ID
                 sourceModel: 'Lease',
                 residence: student.residence,
                 createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
                 status: 'posted',
                 metadata: {
-                    studentId: student.student.toString(), // Use student ID, not application ID
+                    studentId: studentIdString,
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
                     room: student.allocatedRoom,

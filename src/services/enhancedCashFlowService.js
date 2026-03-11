@@ -2815,14 +2815,30 @@ class EnhancedCashFlowService {
                             // This will be used in the detailed breakdown
                         }
                     } else if (accountName.toLowerCase().includes('equipment') || 
-                        accountName.toLowerCase().includes('furniture') ||
-                        accountName.toLowerCase().includes('machinery')) {
-                        purchase_of_equipment += debit;
+                               accountName.toLowerCase().includes('furniture') ||
+                               accountName.toLowerCase().includes('machinery')) {
+                        // Only treat as cash flow if this transaction actually moved cash (e.g. Cash/Bank credited)
+                        const hasCashOutflow = entry.entries.some(e => {
+                            const eAccountCode = String(e.accountCode || '').trim();
+                            const isCashAccount = eAccountCode.startsWith('100') || eAccountCode.startsWith('101');
+                            return isCashAccount && (e.credit || 0) > 0;
+                        });
+                        if (hasCashOutflow && debit > 0) {
+                            purchase_of_equipment += debit;
+                        }
                     } else if (accountName.toLowerCase().includes('building') || 
                                accountName.toLowerCase().includes('construction') ||
                                accountName.toLowerCase().includes('property')) {
-                        purchase_of_buildings += debit;
+                        // Only treat as cash flow if this transaction actually moved cash (e.g. Cash/Bank credited)
+                        const hasCashOutflow = entry.entries.some(e => {
+                            const eAccountCode = String(e.accountCode || '').trim();
+                            const isCashAccount = eAccountCode.startsWith('100') || eAccountCode.startsWith('101');
+                            return isCashAccount && (e.credit || 0) > 0;
+                        });
+                        if (hasCashOutflow && debit > 0) {
+                            purchase_of_buildings += debit;
                         }
+                    }
                     });
                 }
             });
