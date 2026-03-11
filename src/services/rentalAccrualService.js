@@ -248,10 +248,16 @@ class RentalAccrualService {
             throw new Error('ensureStudentARAccount: studentId is required');
         }
 
-        // 🆕 CRITICAL: Always use debtor account code, not user ID
+        // 🆕 CRITICAL: Use same resolution as lease start – debtor by user first, then by application
         const Debtor = require('../models/Debtor');
-        const debtor = await Debtor.findOne({ user: userId }).select('accountCode _id').lean();
-        
+        let debtor = await Debtor.findOne({ user: userId }).select('accountCode _id').lean();
+        if (!debtor && userId && mongoose.Types.ObjectId.isValid(userId)) {
+            debtor = await Debtor.findOne({ application: userId }).select('accountCode _id').lean();
+            if (debtor) {
+                console.log(`✅ ensureStudentARAccount: resolved debtor by application ID for ${userId}`);
+            }
+        }
+
         let childCode;
         if (debtor?.accountCode) {
             // 🆕 CRITICAL FIX: Ensure accountCode is a string, not an object
@@ -1997,15 +2003,27 @@ class RentalAccrualService {
                     console.log(`   ✅ Found account with debtor account code: ${student.debtorAccountCode}`);
                 }
                 } else {
-                    // No debtor info provided, use standard method (for monthly cron service)
-                    // Pass resolved student ID (not populated object) so Debtor.findOne({ user }) matches
-                    const userIdForAR = (student.student && typeof student.student === 'object' && student.student._id)
-                        ? student.student._id
-                        : (student.student || studentIdValue);
-                    accountsReceivable = await this.ensureStudentARAccount(
-                        userIdForAR,
-                        `${student.firstName} ${student.lastName}`
-                    );
+                    // No debtor info provided: use same resolution as lease start (user then application) so AR is 1100-debtorId
+                    const Debtor = require('../models/Debtor');
+                    const Account = require('../models/Account');
+                    let debtorDoc = await Debtor.findOne({ user: studentIdValue }).select('_id accountCode').lean();
+                    if (!debtorDoc && studentIdValue && mongoose.Types.ObjectId.isValid(studentIdValue)) {
+                        debtorDoc = await Debtor.findOne({ application: studentIdValue }).select('_id accountCode').lean();
+                    }
+                    if (debtorDoc) {
+                        debtorIdForCheck = debtorDoc._id.toString();
+                        const code = typeof debtorDoc.accountCode === 'string' ? debtorDoc.accountCode : `1100-${debtorDoc._id.toString()}`;
+                        accountsReceivable = await Account.findOne({ code });
+                        if (!accountsReceivable) {
+                            // ensureStudentARAccount now tries application too; will resolve same debtor and create/find account
+                            accountsReceivable = await this.ensureStudentARAccount(studentIdValue, `${student.firstName} ${student.lastName}`);
+                            const correctCode = typeof debtorDoc.accountCode === 'string' ? debtorDoc.accountCode : `1100-${debtorDoc._id.toString()}`;
+                            const byCode = await Account.findOne({ code: correctCode });
+                            if (byCode) accountsReceivable = byCode;
+                        }
+                    } else {
+                        accountsReceivable = await this.ensureStudentARAccount(studentIdValue, `${student.firstName} ${student.lastName}`);
+                    }
                 }
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             
@@ -2017,20 +2035,15 @@ class RentalAccrualService {
             let arAccountCode = accountsReceivable.code;
             if (typeof arAccountCode !== 'string') {
                 console.error(`❌ CRITICAL: accountsReceivable.code is not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
-                // Try to extract debtor ID from the object
-                if (typeof arAccountCode === 'object' && arAccountCode !== null) {
-                    const Debtor = require('../models/Debtor');
-                    // 🆕 FIX: Use studentIdValue instead of student.student (might be null)
-                    const debtor = await Debtor.findOne({ user: studentIdValue }).select('_id').lean();
-                    if (debtor?._id) {
-                        arAccountCode = `1100-${debtor._id.toString()}`;
-                        console.log(`   ✅ Fixed: Extracted debtor ID and created account code: ${arAccountCode}`);
-                    } else {
-                        arAccountCode = `1100-${studentIdString}`;
-                        console.log(`   ✅ Fixed: Using student ID as account code: ${arAccountCode}`);
-                    }
+                const Debtor = require('../models/Debtor');
+                let debtor = await Debtor.findOne({ user: studentIdValue }).select('_id').lean();
+                if (!debtor && studentIdValue && mongoose.Types.ObjectId.isValid(studentIdValue)) {
+                    debtor = await Debtor.findOne({ application: studentIdValue }).select('_id').lean();
+                }
+                if (debtor?._id) {
+                    arAccountCode = `1100-${debtor._id.toString()}`;
+                    console.log(`   ✅ Fixed: Using debtor ID as account code: ${arAccountCode}`);
                 } else {
-                    // 🆕 FIX: Use studentIdString instead of student.student (might be null)
                     arAccountCode = `1100-${studentIdString}`;
                     console.log(`   ✅ Fixed: Using student ID as account code: ${arAccountCode}`);
                 }
@@ -2136,7 +2149,8 @@ class RentalAccrualService {
                     accrualYear: year,
                     type: 'monthly_rent_accrual',
                     rentAmount,
-                    totalAmount: rentAmount
+                    totalAmount: rentAmount,
+                    ...(debtorIdForCheck ? { debtorId: debtorIdForCheck } : {})
                 }
             });
             
@@ -2154,7 +2168,7 @@ class RentalAccrualService {
                         'metadata.type': 'monthly_rent_accrual',
                         'metadata.accrualMonth': month,
                         'metadata.accrualYear': year,
-                        'metadata.studentId': student.student.toString(),
+                        'metadata.studentId': studentIdString,
                         status: { $ne: 'deleted' }
                     });
                     
@@ -2192,14 +2206,15 @@ class RentalAccrualService {
             // 🆕 CRITICAL: Check for advance payments (deferred income) for this month and apply them automatically
             // monthKey is already declared at the top of the function
             try {
-                // Get Debtor to use correct AR code (Debtor ID format)
+                // Use same resolution as accrual: debtor by user or application (studentIdValue), and safe studentIdString
                 const Debtor = require('../models/Debtor');
-                const debtor = await Debtor.findOne({ user: student.student }).lean();
-                const debtorId = debtor?._id?.toString();
-                const arAccountCode = debtor?.accountCode || (debtorId ? `1100-${debtorId}` : `1100-${student.student.toString()}`);
-                const studentIdStr = student.student.toString();
-                
-                console.log(`🔍 Checking for advance payments for ${monthKey} (student: ${studentIdStr}, AR: ${arAccountCode})`);
+                const debtorForAdvance = await Debtor.findOne({ user: studentIdValue }).lean() ||
+                    await Debtor.findOne({ application: studentIdValue }).lean();
+                const debtorId = debtorForAdvance?._id?.toString();
+                const arAccountCodeForAdvance = debtorForAdvance?.accountCode || (debtorId ? `1100-${debtorId}` : arAccountCode);
+                const studentIdStr = studentIdString;
+
+                console.log(`🔍 Checking for advance payments for ${monthKey} (student: ${studentIdStr}, AR: ${arAccountCodeForAdvance})`);
                 
                 // Strategy 1: Find advance payment transactions with monthSettled matching this month
                 // OR paymentMonth/intendedLeaseStartMonth matching this month (for payments made before lease start)
@@ -2209,7 +2224,7 @@ class RentalAccrualService {
                     $or: [
                         { 'metadata.studentId': studentIdStr },
                         { 'metadata.debtorId': debtorId },
-                        { 'entries.accountCode': arAccountCode }
+                        { 'entries.accountCode': arAccountCodeForAdvance }
                     ],
                     $or: [
                         { 'metadata.monthSettled': monthKey },
@@ -2228,7 +2243,7 @@ class RentalAccrualService {
                         $or: [
                             { 'metadata.studentId': studentIdStr },
                             { 'metadata.debtorId': debtorId },
-                            { 'entries.accountCode': arAccountCode }
+                            { 'entries.accountCode': arAccountCodeForAdvance }
                         ],
                         $or: [
                             { 'metadata.monthSettled': null },
@@ -2249,7 +2264,7 @@ class RentalAccrualService {
                         $or: [
                             { 'metadata.studentId': studentIdStr },
                             { 'metadata.debtorId': debtorId },
-                            { 'entries.accountCode': arAccountCode },
+                            { 'entries.accountCode': arAccountCodeForAdvance },
                             { 'entries.accountCode': `1100-${studentIdStr}` } // Fallback for old format
                         ],
                         $or: [
@@ -2282,7 +2297,7 @@ class RentalAccrualService {
                         $or: [
                             { 'metadata.studentId': studentIdStr },
                             { 'metadata.debtorId': debtorId },
-                            { 'entries.accountCode': arAccountCode },
+                            { 'entries.accountCode': arAccountCodeForAdvance },
                             { 'entries.accountCode': `1100-${studentIdStr}` } // Fallback for old format
                         ],
                         status: 'posted',
@@ -2325,7 +2340,7 @@ class RentalAccrualService {
                         let advanceAmount = 0;
                         const deferredEntry = advancePayment.entries.find(e => e.accountCode === '2200');
                         const studentAREntry = advancePayment.entries.find(e => 
-                            (e.accountCode === arAccountCode || e.accountCode === `1100-${studentIdStr}`) && e.credit > 0
+                            (e.accountCode === arAccountCodeForAdvance || e.accountCode === `1100-${studentIdStr}`) && e.credit > 0
                         );
                         
                         if (deferredEntry) {
