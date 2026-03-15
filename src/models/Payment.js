@@ -288,71 +288,17 @@ paymentSchema.methods.validateMapping = async function() {
 // BUT: We must be careful not to create duplicates if smartFIFOAllocation already created a transaction
 paymentSchema.post('save', async function(doc) {
     try {
-        // 🆕 CRITICAL FIX: Check if smartFIFOAllocation will be used BEFORE doing anything
-        // This prevents duplicate transactions that would overstate cash received
         const Payment = require('./Payment');
         const TransactionEntry = require('./TransactionEntry');
-        
-        // Check both the doc passed to hook AND reload from database
-        const hasPaymentsInDoc = doc.payments && Array.isArray(doc.payments) && doc.payments.length > 0;
-        const hasAllocationFlagInDoc = doc.metadata?.smartFIFOAllocationCalled === true;
-        const hasAllocationDataInDoc = doc.allocation && Object.keys(doc.allocation || {}).length > 0;
-        
-        // Check if ANY transaction already exists (advance_payment OR payment)
         const paymentIdObj = doc._id;
         const paymentIdStr = doc._id.toString();
-        const existingTx = await TransactionEntry.findOne({
-            $or: [
-                { sourceId: paymentIdObj },
-                { sourceId: paymentIdStr },
-                { 'metadata.paymentId': paymentIdStr },
-                { 'metadata.paymentId': doc.paymentId },
-                { reference: paymentIdStr },
-                { reference: doc.paymentId }
-            ],
-            status: { $ne: 'reversed' }
-        });
-        
-        // Reload payment to get latest data
-        let latestPayment = doc;
-        try {
-            const reloaded = await Payment.findById(doc._id).select('payments metadata allocation').lean();
-            if (reloaded) {
-                latestPayment = { ...doc, ...reloaded };
-            }
-        } catch (reloadError) {
-            console.warn(`⚠️ Could not reload payment in hook: ${reloadError.message}`);
-        }
-        
-        const hasPaymentsArray = latestPayment.payments && Array.isArray(latestPayment.payments) && latestPayment.payments.length > 0;
-        const hasAllocationFlag = latestPayment.metadata?.smartFIFOAllocationCalled === true;
-        const hasAllocationData = latestPayment.allocation && Object.keys(latestPayment.allocation || {}).length > 0;
-        
-        // 🆕 CRITICAL: If transaction already exists, skip hook entirely
-        if (existingTx) {
-            console.log(`✅ Payment ${doc.paymentId} already has transaction: ${existingTx.transactionId} (${existingTx.source})`);
-            console.log(`   ✅ NOT creating fallback transaction - transaction already exists`);
-            return; // Skip hook entirely if transaction exists
-        }
-        
-        // 🆕 CRITICAL: If smartFIFOAllocation was called AND succeeded (has allocation data), skip hook
-        // But if it was called but failed (no transaction, no allocation data), we need to create fallback
-        if (hasAllocationFlag && hasAllocationData) {
-            console.log(`✅ Payment ${doc.paymentId} - smartFIFOAllocation completed successfully`);
-            console.log(`   ✅ NOT creating fallback transaction - smartFIFOAllocation handled it`);
-            return; // Skip hook if allocation completed successfully
-        }
-        
-        // 🆕 CRITICAL: If payments array exists but smartFIFOAllocation hasn't been called yet,
-        // we need to wait for it to run, then check if transaction was created
-        // If it fails, we'll create a fallback
-        if (hasPaymentsInDoc || hasPaymentsArray) {
-            console.log(`⏳ Payment ${doc.paymentId} has payments array - smartFIFOAllocation will be called`);
-            console.log(`   ⏳ Waiting for smartFIFOAllocation to complete, then checking if transaction exists...`);
-            
-            // For new payments with payments array, wait for smartFIFOAllocation to complete
-            if (this.isNew) {
-                setImmediate(async () => {
+        const hasPaymentsInDoc = doc.payments && Array.isArray(doc.payments) && doc.payments.length > 0;
+
+        // 🆕 FAST PATH: New payment with payments array – don't block save() on any DB calls.
+        // Controller will run smartFIFOAllocation after sending 201; we'll check and create fallback in background.
+        if (this.isNew && hasPaymentsInDoc) {
+            console.log(`⏳ Payment ${doc.paymentId} has payments array – scheduling background check (non-blocking)`);
+            setImmediate(async () => {
                     // Wait longer for smartFIFOAllocation to complete (it can take time)
                     const initialWait = 15000; // 15 seconds
                     
@@ -384,12 +330,38 @@ paymentSchema.post('save', async function(doc) {
                     console.log(`   🔄 Creating fallback transaction...`);
                     await ensurePaymentTransaction(doc);
                 });
-                return;
-            }
+            return;
         }
-        
+
+        // For non-new or no payments array: run existingTx + reload checks (may block briefly)
+        const existingTx = await TransactionEntry.findOne({
+            $or: [
+                { sourceId: paymentIdObj },
+                { sourceId: paymentIdStr },
+                { 'metadata.paymentId': paymentIdStr },
+                { 'metadata.paymentId': doc.paymentId },
+                { reference: paymentIdStr },
+                { reference: doc.paymentId }
+            ],
+            status: { $ne: 'reversed' }
+        });
+        if (existingTx) {
+            console.log(`✅ Payment ${doc.paymentId} already has transaction: ${existingTx.transactionId}`);
+            return;
+        }
+        let latestPayment = doc;
+        try {
+            const reloaded = await Payment.findById(doc._id).select('payments metadata allocation').lean();
+            if (reloaded) latestPayment = { ...doc, ...reloaded };
+        } catch (e) { /* ignore */ }
+        const hasAllocationFlag = latestPayment.metadata?.smartFIFOAllocationCalled === true;
+        const hasAllocationData = latestPayment.allocation && Object.keys(latestPayment.allocation || {}).length > 0;
+        if (hasAllocationFlag && hasAllocationData) {
+            console.log(`✅ Payment ${doc.paymentId} - smartFIFOAllocation completed`);
+            return;
+        }
+
         // Only run hook for payments that DON'T use smartFIFOAllocation
-        // Always check if transaction exists, but for new documents, wait longer to let controller's allocation run first
         if (this.isNew) {
             // For new payments, wait longer to let the controller's smartFIFOAllocation run first
             // Use setImmediate to run after current execution completes, then setTimeout for additional delay
