@@ -285,25 +285,41 @@ exports.getDebtorById = async (req, res) => {
         const { id } = req.params;
 
         // First get the debtor without population to preserve the original user ObjectId
-        const debtorRaw = await Debtor.findById(id).lean();
-        
+        let debtorRaw = await Debtor.findById(id).lean();
+
+        // 🆕 If id is not a Debtor _id (e.g. User ID or Application ID), resolve to actual debtor
+        if (!debtorRaw) {
+            debtorRaw = await Debtor.findOne({ user: id }).lean();
+            if (!debtorRaw) {
+                debtorRaw = await Debtor.findOne({ application: id }).lean();
+            }
+            if (!debtorRaw) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Debtor not found'
+                });
+            }
+        }
+
+        const debtorId = debtorRaw._id.toString();
+
         // 🆕 CRITICAL FIX: If user is null, try to fix it from application
         if (!debtorRaw.user && debtorRaw.application) {
-            console.log(`⚠️ Debtor ${id} has null user field, attempting to fix from application...`);
+            console.log(`⚠️ Debtor ${debtorId} has null user field, attempting to fix from application...`);
             const Application = require('../../models/Application');
             const application = await Application.findById(debtorRaw.application).lean();
             if (application && application.student) {
                 console.log(`   Found student ID in application: ${application.student}`);
                 // Update debtor to link to user
-                await Debtor.findByIdAndUpdate(id, { user: application.student });
+                await Debtor.findByIdAndUpdate(debtorId, { user: application.student });
                 console.log(`   ✅ Updated debtor to link to user ${application.student}`);
                 // Reload debtorRaw with updated user
-                Object.assign(debtorRaw, await Debtor.findById(id).lean());
+                Object.assign(debtorRaw, await Debtor.findById(debtorId).lean());
             }
         }
         
-        // Optimize: Use lean() and select only needed fields
-        const debtor = await Debtor.findById(id)
+        // Optimize: Use lean() and select only needed fields (use resolved debtor _id)
+        const debtor = await Debtor.findById(debtorId)
             .select('user residence application payments createdBy updatedBy accountCode debtorCode status currentBalance')
             .populate('user', 'firstName lastName email phone')
             .populate('residence', 'name address roomPrice')
@@ -424,9 +440,9 @@ exports.getDebtorById = async (req, res) => {
             console.log(`🔍 Student ID for ledger calculation: ${studentId}`);
             
             if (studentId) {
-                console.log(`🔍 Getting transaction-based ledger for debtor ${id}, student ${studentId}`);
-                ledgerData = await DebtorLedgerService.getDebtorLedger(id, studentId);
-                transactionBasedTotals = await DebtorLedgerService.getDebtorMonthlyBreakdown(id, studentId);
+                console.log(`🔍 Getting transaction-based ledger for debtor ${debtorId}, student ${studentId}`);
+                ledgerData = await DebtorLedgerService.getDebtorLedger(debtorId, studentId);
+                transactionBasedTotals = await DebtorLedgerService.getDebtorMonthlyBreakdown(debtorId, studentId);
                 console.log(`✅ Transaction-based ledger retrieved:`, {
                     hasLedgerData: !!ledgerData,
                     hasMonthlyBreakdown: !!transactionBasedTotals,
@@ -439,7 +455,7 @@ exports.getDebtorById = async (req, res) => {
                 // This ensures debtor totals are always calculated from actual transactions
                 if (transactionBasedTotals && studentId) {
                     const DebtorTransactionSyncService = require('../../services/debtorTransactionSyncService');
-                    const fullDebtor = await Debtor.findById(id);
+                    const fullDebtor = await Debtor.findById(debtorId);
                     
                     if (fullDebtor) {
                         const ledgerTotalOwed = transactionBasedTotals.totalExpected || 0;
@@ -473,7 +489,7 @@ exports.getDebtorById = async (req, res) => {
                             console.log(`✅ Debtor totals synced and saved successfully`);
                             
                             // Reload debtor with ALL fields to ensure complete update
-                            const updatedDebtor = await Debtor.findById(id)
+                            const updatedDebtor = await Debtor.findById(debtorId)
                                 .populate('user', 'firstName lastName email phone')
                                 .populate('residence', 'name address roomPrice')
                                 .populate('application', 'startDate endDate roomNumber status')
@@ -817,14 +833,33 @@ exports.getDebtorBalance = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const debtor = await Debtor.findById(id)
+        let debtor = await Debtor.findById(id)
             .populate('user', 'firstName lastName email phone')
             .populate('residence', 'name address');
+
+        if (!debtor) {
+            debtor = await Debtor.findOne({ user: id })
+                .populate('user', 'firstName lastName email phone')
+                .populate('residence', 'name address');
+            if (!debtor) {
+                debtor = await Debtor.findOne({ application: id })
+                    .populate('user', 'firstName lastName email phone')
+                    .populate('residence', 'name address');
+            }
+        }
 
         if (!debtor) {
             return res.status(404).json({
                 success: false,
                 message: 'Debtor not found'
+            });
+        }
+
+        const studentId = debtor.user?._id || debtor.user;
+        if (!studentId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Debtor has no linked user; cannot load balance history'
             });
         }
 
@@ -840,13 +875,13 @@ exports.getDebtorBalance = async (req, res) => {
 
         // Get invoice history
         const invoices = await Invoice.find({
-            student: debtor.user._id
+            student: studentId
         })
         .sort({ createdAt: -1 });
 
         // Get payment history
         const payments = await Payment.find({
-            student: debtor.user._id
+            student: studentId
         })
         .sort({ paymentDate: -1 });
 
@@ -855,7 +890,7 @@ exports.getDebtorBalance = async (req, res) => {
         const refunds = await Refund.find({
             $or: [
                 { debtor: debtor._id },
-                { student: debtor.user._id }
+                { student: studentId }
             ]
         })
         .populate('payment', 'paymentId totalAmount date method status')
@@ -2016,21 +2051,37 @@ exports.getDebtorDetails = async (req, res) => {
   try {
     const { debtorId } = req.params;
     
-    // Find the debtor
-    const debtor = await Debtor.findById(debtorId);
+    // Find the debtor (by _id, user, or application)
+    let debtor = await Debtor.findById(debtorId);
+    if (!debtor) {
+      debtor = await Debtor.findOne({ user: debtorId });
+      if (!debtor) debtor = await Debtor.findOne({ application: debtorId });
+    }
     if (!debtor) {
       return res.status(404).json({ success: false, error: 'Debtor not found' });
     }
     
-    // Get enhanced months tracking breakdown
-    const studentId = debtor.user.toString();
-    const monthsBreakdown = await DebtorTransactionSyncService.getDetailedMonthsBreakdown(studentId);
+    let resolvedStudentId = null;
+    if (debtor.user) {
+      resolvedStudentId = typeof debtor.user === 'object' && debtor.user._id
+        ? debtor.user._id.toString() : debtor.user.toString();
+    }
+    if (!resolvedStudentId && debtor.application?.student) {
+      resolvedStudentId = debtor.application.student.toString?.() || String(debtor.application.student);
+    }
+    if (!resolvedStudentId && debtor.accountCode && debtor.accountCode.startsWith('1100-')) {
+      resolvedStudentId = debtor.accountCode.replace('1100-', '');
+    }
+    if (!resolvedStudentId) {
+      return res.status(400).json({ success: false, error: 'Debtor has no linked user or account' });
+    }
+    const monthsBreakdown = await DebtorTransactionSyncService.getDetailedMonthsBreakdown(resolvedStudentId);
     
     // 🆕 CRITICAL: Get ledger totals and sync debtor record
     let ledgerTotals = null;
     try {
         const DebtorLedgerService = require('../../services/debtorLedgerService');
-        const ledgerData = await DebtorLedgerService.getDebtorLedger(debtorId, studentId);
+        const ledgerData = await DebtorLedgerService.getDebtorLedger(debtor._id.toString(), resolvedStudentId);
         ledgerTotals = {
             totalExpected: ledgerData.totalExpected || 0,
             totalPaid: ledgerData.totalPaid || 0,
@@ -2040,7 +2091,7 @@ exports.getDebtorDetails = async (req, res) => {
         // Sync debtor totals with ledger
         const syncResult = await DebtorTransactionSyncService.recalculateDebtorTotalsFromTransactionEntries(
             debtor,
-            studentId
+            resolvedStudentId
         );
         await debtor.save();
         
@@ -2050,14 +2101,14 @@ exports.getDebtorDetails = async (req, res) => {
     }
     
     // Get payments and transactions
-    const payments = await Payment.find({ student: studentId }).sort({ date: -1 });
+    const payments = await Payment.find({ student: resolvedStudentId }).sort({ date: -1 });
     
     // Get refunds for this debtor
     const Refund = require('../../models/Refund');
     const refunds = await Refund.find({ 
       $or: [
         { debtor: debtor._id },
-        { student: studentId }
+        { student: resolvedStudentId }
       ]
     })
     .populate('payment', 'paymentId totalAmount date method status')
@@ -2069,7 +2120,7 @@ exports.getDebtorDetails = async (req, res) => {
       $or: [
         { 'entries.accountCode': debtor.accountCode },
         { sourceId: debtor._id },
-        { 'metadata.studentId': studentId },
+        { 'metadata.studentId': resolvedStudentId },
         { 'metadata.debtorId': debtor._id }
       ]
     }).sort({ date: -1 });

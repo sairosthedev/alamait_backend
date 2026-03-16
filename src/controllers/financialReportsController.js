@@ -1813,10 +1813,13 @@ class FinancialReportsController {
             const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
             const cashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
-            // Cache the result for 5 minutes (300000ms)
-            cache.set(cacheKey, cashFlowStatement, 300000);
+            // Cache the result for a short time so new transactions
+            // (payments, manual expenses, etc.) show up quickly while
+            // still avoiding recomputing on every request.
+            // Reduced from 5 minutes to 10 seconds.
+            cache.set(cacheKey, cashFlowStatement, 10_000);
             if (isDebugMode) {
-                console.log('✅ Residence-filtered cash flow statement data cached for 5 minutes');
+                console.log('✅ Residence-filtered cash flow statement data cached for 10 seconds');
             }
             
             res.json({

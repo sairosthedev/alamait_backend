@@ -2012,20 +2012,43 @@ class RentalAccrualService {
                     // No debtor info provided: use same resolution as lease start (user then application) so AR is 1100-debtorId
                     const Debtor = require('../models/Debtor');
                     const Account = require('../models/Account');
+                    const Application = require('../models/Application');
                     let debtorDoc = await Debtor.findOne({ user: studentIdValue }).select('_id accountCode').lean();
                     if (!debtorDoc && studentIdValue && mongoose.Types.ObjectId.isValid(studentIdValue)) {
                         debtorDoc = await Debtor.findOne({ application: studentIdValue }).select('_id accountCode').lean();
+                    }
+                    if (!debtorDoc && studentIdValue && mongoose.Types.ObjectId.isValid(studentIdValue)) {
+                        const app = await Application.findById(studentIdValue).select('student').lean();
+                        if (app && app.student) {
+                            const actualUserId = app.student.toString ? app.student.toString() : String(app.student);
+                            debtorDoc = await Debtor.findOne({ user: actualUserId }).select('_id accountCode').lean();
+                        }
                     }
                     if (debtorDoc) {
                         debtorIdForCheck = debtorDoc._id.toString();
                         const code = typeof debtorDoc.accountCode === 'string' ? debtorDoc.accountCode : `1100-${debtorDoc._id.toString()}`;
                         accountsReceivable = await Account.findOne({ code });
                         if (!accountsReceivable) {
-                            // ensureStudentARAccount now tries application too; will resolve same debtor and create/find account
-                            accountsReceivable = await this.ensureStudentARAccount(studentIdValue, `${student.firstName} ${student.lastName}`);
-                            const correctCode = typeof debtorDoc.accountCode === 'string' ? debtorDoc.accountCode : `1100-${debtorDoc._id.toString()}`;
-                            const byCode = await Account.findOne({ code: correctCode });
-                            if (byCode) accountsReceivable = byCode;
+                            const mainAR = await Account.findOne({ code: '1100' });
+                            if (mainAR) {
+                                accountsReceivable = new Account({
+                                    code,
+                                    name: `Accounts Receivable - ${student.firstName} ${student.lastName}`,
+                                    type: 'Asset',
+                                    category: 'Current Assets',
+                                    subcategory: 'Accounts Receivable',
+                                    description: 'Student-specific AR (1100-debtorId for monthly accrual)',
+                                    isActive: true,
+                                    parentAccount: mainAR._id,
+                                    level: 2,
+                                    sortOrder: 0
+                                });
+                                await accountsReceivable.save();
+                            } else {
+                                accountsReceivable = await this.ensureStudentARAccount(studentIdValue, `${student.firstName} ${student.lastName}`);
+                                const byCode = await Account.findOne({ code });
+                                if (byCode) accountsReceivable = byCode;
+                            }
                         }
                     } else {
                         accountsReceivable = await this.ensureStudentARAccount(studentIdValue, `${student.firstName} ${student.lastName}`);
@@ -2048,10 +2071,42 @@ class RentalAccrualService {
                 }
                 if (debtor?._id) {
                     arAccountCode = `1100-${debtor._id.toString()}`;
+                    debtorIdForCheck = debtor._id.toString();
                     console.log(`   ✅ Fixed: Using debtor ID as account code: ${arAccountCode}`);
                 } else {
                     arAccountCode = `1100-${studentIdString}`;
                     console.log(`   ✅ Fixed: Using student ID as account code: ${arAccountCode}`);
+                }
+            }
+            // 🆕 CRITICAL: Monthly accrual must use same AR as lease start (1100-debtorId). Force it when we know the debtor.
+            if (debtorIdForCheck) {
+                const correctCode = `1100-${debtorIdForCheck}`;
+                if (arAccountCode !== correctCode) {
+                    console.log(`   🔧 Forcing monthly accrual AR to match lease start: ${arAccountCode} → ${correctCode}`);
+                    arAccountCode = correctCode;
+                    const Account = require('../models/Account');
+                    let arAccount = await Account.findOne({ code: correctCode });
+                    if (!arAccount) {
+                        const mainAR = await Account.findOne({ code: '1100' });
+                        if (mainAR) {
+                            arAccount = new Account({
+                                code: correctCode,
+                                name: accountsReceivable?.name || `Accounts Receivable - ${student.firstName} ${student.lastName}`,
+                                type: 'Asset',
+                                category: 'Current Assets',
+                                subcategory: 'Accounts Receivable',
+                                description: 'Student-specific AR (1100-debtorId)',
+                                isActive: true,
+                                parentAccount: mainAR._id,
+                                level: 2,
+                                sortOrder: 0
+                            });
+                            await arAccount.save();
+                        }
+                    }
+                    if (arAccount) {
+                        accountsReceivable = arAccount;
+                    }
                 }
             }
             
