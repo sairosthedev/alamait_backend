@@ -87,41 +87,27 @@ const getPayments = async (req, res) => {
 
         const payments = await Payment.find(query)
             .populate('residence', 'name')
-            .sort({ date: -1, paymentDate: -1 })
-            .lean();
+            .sort({ paymentDate: -1 });
 
-        // Batch-fetch student info to avoid N+1 (one lookup per payment)
-        const rawIds = payments.map(p => p.student || p.user).filter(Boolean);
-        const studentIdStrs = [...new Set(rawIds.map(id => (typeof id === 'object' && id && id.toString) ? id.toString() : String(id)))];
-        const uniqueIds = studentIdStrs.filter(s => mongoose.Types.ObjectId.isValid(s)).map(s => new mongoose.Types.ObjectId(s));
-
-        let studentMap = new Map();
-        if (uniqueIds.length > 0) {
-            const [users, applications] = await Promise.all([
-                User.find({ _id: { $in: uniqueIds } }).select('firstName lastName email phone').lean(),
-                Application.find({ _id: { $in: uniqueIds } }).select('firstName lastName email phone').lean()
-            ]);
-            users.forEach(u => {
-                studentMap.set(u._id.toString(), { _id: u._id, firstName: u.firstName, lastName: u.lastName, email: u.email, phone: u.phone });
-            });
-            applications.forEach(a => {
-                const key = a._id.toString();
-                if (!studentMap.has(key)) {
-                    studentMap.set(key, { _id: a._id, firstName: a.firstName, lastName: a.lastName, email: a.email, phone: a.phone || '' });
+        // Transform payments to handle expired students
+        const { findStudentById } = require('../finance/paymentController');
+        const transformedPayments = await Promise.all(payments.map(async (payment) => {
+            // Get student information (including expired students)
+            let studentInfo = null;
+            if (payment.student || payment.user) {
+                const studentId = payment.student || payment.user;
+                const studentResult = await findStudentById(studentId);
+                if (studentResult) {
+                    studentInfo = studentResult.student;
                 }
-            });
-        }
+            }
 
-        const transformedPayments = payments.map((payment) => {
-            const studentId = payment.student || payment.user;
-            const idStr = studentId && (typeof studentId === 'object' ? studentId.toString() : String(studentId));
-            const studentInfo = idStr ? studentMap.get(idStr) || null : null;
             return {
-                ...payment,
+                ...payment.toObject(),
                 student: studentInfo,
-                studentInfo: studentInfo
+                studentInfo: studentInfo // Include full student info for expired students
             };
-        });
+        }));
 
         res.status(200).json(transformedPayments);
     } catch (error) {

@@ -775,7 +775,8 @@ const getARInvoices = async (req, res) => {
 const getStudentsWithOutstandingBalances = async (req, res) => {
     try {
         const { residence, limit = 20, sortBy = 'totalBalance', sortOrder = 'desc' } = req.query;
-        const limitNum = Math.min(parseInt(limit, 10) || 20, 100);
+
+        console.log(`👥 Getting students with outstanding balances (OPTIMIZED method)`);
 
         // Validate residence ID if provided
         let residenceFilter = {};
@@ -789,10 +790,6 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
             }
             residenceFilter = { residence: new mongoose.Types.ObjectId(residence) };
         }
-
-        const cacheKey = `ar-outstanding-students-${residence || 'all'}-${limitNum}-${sortBy}-${sortOrder}`;
-        const cached = await cacheService.getOrSet(cacheKey, 60, async () => {
-        console.log(`👥 Getting students with outstanding balances (OPTIMIZED method)`);
 
         // Use aggregation pipeline for much faster processing
         const pipeline = [
@@ -845,7 +842,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
             // Sort by total balance
             { $sort: { totalBalance: -1 } },
             // Limit results
-            { $limit: limitNum }
+            { $limit: parseInt(limit) || 20 }
         ];
 
         console.log(`🔍 Running optimized aggregation pipeline...`);
@@ -867,7 +864,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
                 { user: { $in: validStudentObjectIds } },
                 { accountCode: { $in: studentIds.filter(id => id).map(id => `1100-${id}`) } }
             ]
-        }).lean();
+        });
 
         // Create a map for quick lookup
         const debtorMap = new Map();
@@ -911,56 +908,46 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
         });
 
         // Apply limit
-        const limitedStudents = studentsWithOutstanding.slice(0, limitNum);
+        const limitedStudents = studentsWithOutstanding.slice(0, parseInt(limit));
 
-        // Batch-fetch student details (User + Application) to avoid N+1
-        const Application = require('../../models/Application');
-        const idsForLookup = limitedStudents
-            .map(s => s.studentId)
-            .filter(id => id && mongoose.Types.ObjectId.isValid(id));
-        const uniqueIds = [...new Set(idsForLookup)].map(id => new mongoose.Types.ObjectId(id));
-        let detailMap = new Map();
-        if (uniqueIds.length > 0) {
-            const [users, applications] = await Promise.all([
-                User.find({ _id: { $in: uniqueIds } }).select('firstName lastName email phone').lean(),
-                Application.find({ _id: { $in: uniqueIds } }).select('firstName lastName email').lean()
-            ]);
-            users.forEach(u => {
-                detailMap.set(u._id.toString(), {
-                    firstName: u.firstName,
-                    lastName: u.lastName,
-                    email: u.email,
-                    phone: u.phone,
-                    isExpired: false
-                });
-            });
-            applications.forEach(a => {
-                const key = a._id.toString();
-                if (!detailMap.has(key)) {
-                    detailMap.set(key, {
-                        firstName: a.firstName,
-                        lastName: a.lastName,
-                        email: a.email,
-                        phone: '',
-                        isExpired: false
-                    });
+        // Get student details for the results (including expired students)
+        const finalStudentIds = limitedStudents.map(s => s.studentId);
+        const { getStudentInfo } = require('../../utils/studentUtils');
+        
+        // Get student details for all students (active and expired)
+        const studentsWithDetails = await Promise.all(
+            limitedStudents.map(async (student) => {
+                // Validate studentId before calling getStudentInfo
+                if (!student.studentId || !mongoose.Types.ObjectId.isValid(student.studentId)) {
+                    console.warn(`⚠️ Invalid studentId: ${student.studentId}`);
+                    return {
+                        ...student,
+                        studentDetails: null
+                    };
                 }
-            });
-        }
-        const studentsWithDetails = limitedStudents.map(student => {
-            const idStr = student.studentId && student.studentId.toString();
-            const studentDetails = idStr ? detailMap.get(idStr) : null;
-            return {
-                ...student,
-                studentDetails: studentDetails ? {
-                    firstName: studentDetails.firstName,
-                    lastName: studentDetails.lastName,
-                    email: studentDetails.email,
-                    phone: studentDetails.phone,
-                    isExpired: studentDetails.isExpired
-                } : null
-            };
-        });
+                
+                const studentInfo = await getStudentInfo(student.studentId);
+                console.log(`🔍 Student ${student.studentId}:`, {
+                    found: !!studentInfo,
+                    isExpired: studentInfo?.isExpired,
+                    name: studentInfo ? `${studentInfo.firstName} ${studentInfo.lastName}` : 'Unknown',
+                    email: studentInfo?.email,
+                    balance: student.totalBalance
+                });
+                return {
+                    ...student,
+                    studentDetails: studentInfo ? {
+                        firstName: studentInfo.firstName,
+                        lastName: studentInfo.lastName,
+                        email: studentInfo.email,
+                        phone: studentInfo.phone,
+                        isExpired: studentInfo.isExpired,
+                        expiredAt: studentInfo.expiredAt,
+                        expirationReason: studentInfo.expirationReason
+                    } : null
+                };
+            })
+        );
 
         // Add debug logging to see what we're returning
         const expiredCount = studentsWithDetails.filter(s => s.studentDetails?.isExpired).length;
@@ -968,23 +955,22 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
         
         console.log(`📊 Outstanding balances summary: ${studentsWithDetails.length} total students (${activeCount} active, ${expiredCount} expired)`);
         
-        return {
+        res.status(200).json({
             success: true,
             message: 'Students with outstanding balances retrieved successfully',
             data: {
                 totalStudents: studentsWithDetails.length,
                 totalOutstanding: studentsWithDetails.reduce((sum, s) => sum + s.totalBalance, 0),
                 students: studentsWithDetails,
+                // Add summary for debugging
                 summary: {
                     activeStudents: activeCount,
                     expiredStudents: expiredCount,
                     totalStudents: studentsWithDetails.length
                 }
             }
-        };
         });
 
-        res.status(200).json(cached);
     } catch (error) {
         console.error('❌ Error getting students with outstanding balances:', error);
         res.status(500).json({
@@ -1010,143 +996,215 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
             sortOrder
         })}`;
 
-        if (residence && !mongoose.Types.ObjectId.isValid(residence)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid residence ID format',
-                error: 'Residence ID must be a valid MongoDB ObjectId'
-            });
-        }
-        const residenceId = residence ? new mongoose.Types.ObjectId(residence) : null;
-
         const result = await cacheService.getOrSet(cacheKey, 60, async () => {
-            const twoYearsAgo = new Date();
-            twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-
-            // Aggregation: group by student + month in DB so we don't load all transactions
-            const matchStage = {
-                status: 'posted',
-                date: { $gte: twoYearsAgo },
-                'entries.accountCode': { $regex: '^1100-' },
-                'entries.accountType': 'Asset'
-            };
-            if (residenceId) {
-                matchStage.$or = [
-                    { residence: residenceId },
-                    { 'metadata.residenceId': residence },
-                    { 'metadata.residence': residenceId }
-                ];
-            }
-            const pipeline = [
-                { $match: matchStage },
-                { $unwind: '$entries' },
-                { $match: {
-                    'entries.accountCode': { $regex: '^1100-' },
-                    'entries.accountType': 'Asset'
-                }},
-                { $addFields: {
-                    studentId: { $arrayElemAt: [{ $split: ['$entries.accountCode', '-'] }, 1] },
-                    monthKey: { $dateToString: { format: '%Y-%m', date: '$date' } }
-                }},
-                { $group: {
-                    _id: { studentId: '$studentId', monthKey: '$monthKey' },
-                    residence: { $first: '$residence' },
-                    residenceMeta: { $first: '$metadata.residenceId' },
-                    accruals: { $sum: { $cond: [
-                        { $in: ['$source', ['rental_accrual', 'lease_start']] },
-                        { $ifNull: ['$entries.debit', 0] },
-                        0
-                    ]}},
-                    payments: { $sum: { $cond: [
-                        { $in: ['$source', ['payment', 'advance_payment', 'advance_payment_application', 'accounts_receivable_collection']] },
-                        { $ifNull: ['$entries.credit', 0] },
-                        0
-                    ]}},
-                    manualAdj: { $sum: { $cond: [
-                        { $eq: ['$source', 'manual'] },
-                        { $subtract: [{ $ifNull: ['$entries.debit', 0] }, { $ifNull: ['$entries.credit', 0] }] },
-                        0
-                    ]}},
-                    count: { $sum: 1 },
-                    latestDate: { $max: '$date' }
-                }},
-                { $group: {
-                    _id: '$_id.studentId',
-                    months: { $push: {
-                        monthKey: '$_id.monthKey',
-                        accruals: '$accruals',
-                        payments: '$payments',
-                        manualAdj: '$manualAdj',
-                        count: '$count',
-                        latestDate: '$latestDate'
-                    }},
-                    residence: { $first: '$residence' },
-                    residenceMeta: { $first: '$residenceMeta' }
-                }}
-            ];
-            const grouped = await TransactionEntry.aggregate(pipeline);
-
-            const studentResidenceMap = new Map();
-            const monthlyData = {};
-            grouped.forEach(row => {
-                const studentId = row._id;
-                if (!studentId) return;
-                const res = row.residence || row.residenceMeta;
-                if (res) studentResidenceMap.set(studentId, res);
-                if (residence && res && res.toString() !== residence) return;
-                monthlyData[studentId] = {};
-                const sortedMonths = row.months.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
-                let cumAccruals = 0;
-                let cumPayments = 0;
-                sortedMonths.forEach(m => {
-                    cumAccruals += (m.accruals || 0) + (m.manualAdj || 0);
-                    cumPayments += m.payments || 0;
-                    const [y, mo] = m.monthKey.split('-').map(Number);
-                    monthlyData[studentId][m.monthKey] = {
-                        monthKey: m.monthKey,
-                        year: y,
-                        month: mo,
-                        accruals: cumAccruals,
-                        payments: cumPayments,
-                        outstanding: Math.max(0, cumAccruals - cumPayments),
-                        transactionCount: m.count || 0,
-                        latestTransaction: m.latestDate
-                    };
+            // Get all AR transactions for all students
+        // Use same calculation logic as balance sheet: cumulative balances by transaction date up to month end
+        const transactionQuery = {
+            'entries.accountCode': { $regex: '^1100-' },
+            'entries.accountType': 'Asset',
+            status: 'posted'
+        };
+        
+        // Apply residence filter if provided (check both top-level residence and metadata)
+        if (residence) {
+            // Validate residence ID before using it
+            if (!mongoose.Types.ObjectId.isValid(residence)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid residence ID format',
+                    error: 'Residence ID must be a valid MongoDB ObjectId'
                 });
+            }
+            
+            const residenceId = new mongoose.Types.ObjectId(residence);
+            // Use $and to combine residence filter with other conditions
+            transactionQuery.$and = [
+                { 'entries.accountCode': { $regex: '^1100-' } },
+                { 'entries.accountType': 'Asset' },
+                { status: 'posted' },
+                {
+                    $or: [
+                        { residence: residenceId },
+                        { residence: residence }, // Also try as string
+                        { 'metadata.residenceId': residence },
+                        { 'metadata.residence': residenceId },
+                        { 'metadata.residence': residence } // Also try as string
+                    ]
+                }
+            ];
+        }
+        
+        const allARTransactions = await TransactionEntry.find(transactionQuery).sort({ date: 1 }).lean();
+
+        console.log(`📊 Found ${allARTransactions.length} AR transactions${residence ? ` for residence ${residence}` : ''}`);
+
+        // Track residence per student from transactions
+        const studentResidenceMap = new Map();
+
+        // Process transactions to calculate cumulative balances by month (like balance sheet)
+        // For each month, calculate cumulative balance up to the end of that month
+        // This matches balance sheet logic: cumulative debits - cumulative credits up to month end
+        const monthlyData = {}; // { studentId: { monthKey: { accruals, payments, outstanding } } }
+        const allMonthKeysSet = new Set(); // Track all months we've seen
+        
+        // First pass: collect all unique months from transactions and track residence per student
+        allARTransactions.forEach(transaction => {
+            const txDate = new Date(transaction.date);
+            const monthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+            allMonthKeysSet.add(monthKey);
+            
+            // Track residence from transaction
+            const txResidence = transaction.residence || 
+                              transaction.metadata?.residenceId || 
+                              transaction.metadata?.residence;
+            
+            transaction.entries.forEach(entry => {
+                if (entry.accountCode && entry.accountCode.startsWith('1100-') && 
+                    entry.accountType === 'Asset') {
+                    const studentId = entry.accountCode.split('-')[1];
+                    if (studentId && txResidence && !studentResidenceMap.has(studentId)) {
+                        studentResidenceMap.set(studentId, txResidence);
+                    }
+                }
             });
+        });
+        
+        const allMonthKeys = Array.from(allMonthKeysSet).sort();
+        
+        // Second pass: for each student, calculate cumulative balance at end of each month
+        allARTransactions.forEach(transaction => {
+            transaction.entries.forEach(entry => {
+                if (entry.accountCode && entry.accountCode.startsWith('1100-') && 
+                    entry.accountType === 'Asset') {
+                    const studentId = entry.accountCode.split('-')[1];
+                    
+                    if (!studentId) return;
+                    
+                    // Apply residence filter if provided (check student's residence matches)
+                    if (residence) {
+                        const studentResidence = studentResidenceMap.get(studentId);
+                        if (studentResidence && studentResidence.toString() !== residence) {
+                            return; // Skip if student's residence doesn't match filter
+                        }
+                    }
+                    
+                    if (!monthlyData[studentId]) {
+                        monthlyData[studentId] = {};
+                    }
+                    
+                    // For each month, calculate cumulative balance up to that month end
+                    // This matches balance sheet logic: only include transactions dated <= month end
+                    const txDate = new Date(transaction.date);
+                    const txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+                    
+                    allMonthKeys.forEach(monthKey => {
+                        // Calculate month end date for comparison
+                        // JavaScript Date months are 0-indexed, so month 10 = November, month 10 day 0 = last day of October
+                        const [year, month] = monthKey.split('-').map(Number);
+                        const monthEndDate = new Date(year, month, 0, 23, 59, 59, 999); // Last day of the month (month is 1-based, Date uses 0-based)
+                        
+                        // Only include transactions dated <= month end (like balance sheet)
+                        if (txDate <= monthEndDate) {
+                            if (!monthlyData[studentId][monthKey]) {
+                                monthlyData[studentId][monthKey] = {
+                                    monthKey,
+                                    year,
+                                    month,
+                                    accruals: 0,
+                                    payments: 0,
+                                    outstanding: 0,
+                                    transactionCount: 0,
+                                    latestTransaction: null
+                                };
+                            }
+                            
+                            const monthData = monthlyData[studentId][monthKey];
+                            
+                            // Process based on transaction source (same as balance sheet)
+                            if (transaction.source === 'rental_accrual' || transaction.source === 'lease_start') {
+                                // Accrual: increases what's owed
+                                monthData.accruals += entry.debit || 0;
+                            } else if (transaction.source === 'payment' || transaction.source === 'accounts_receivable_collection') {
+                                // Payment: increases what's paid
+                                monthData.payments += entry.credit || 0;
+                            } else if (transaction.source === 'manual') {
+                                // Manual transactions: handle based on type
+                                if (transaction.metadata?.type === 'negotiated_payment_adjustment' || 
+                                    transaction.metadata?.type === 'security_deposit_reversal') {
+                                    // Reduces what's owed
+                                    monthData.accruals -= entry.credit || 0;
+                                } else {
+                                    // Other manual: debits increase, credits decrease
+                                    monthData.accruals += (entry.debit || 0) - (entry.credit || 0);
+                                }
+                            }
+                            
+                            // Update transaction count and latest transaction for this month
+                            if (txMonthKey === monthKey) {
+                                monthData.transactionCount++;
+                                if (!monthData.latestTransaction || txDate > new Date(monthData.latestTransaction)) {
+                                    monthData.latestTransaction = transaction.date;
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        });
 
-            const studentBalances = Object.keys(monthlyData)
-                .map(studentId => {
-                    const studentMonths = monthlyData[studentId];
-                    const monthlyBalances = Object.values(studentMonths)
-                        .filter(m => m.outstanding > 0)
-                        .map(m => ({
-                            monthKey: m.monthKey,
-                            year: m.year,
-                            month: m.month,
-                            balance: m.outstanding,
-                            debits: m.accruals,
-                            credits: m.payments,
-                            transactionCount: m.transactionCount,
-                            latestTransaction: m.latestTransaction
-                        }))
-                        .sort((a, b) => (a.year !== b.year) ? b.year - a.year : b.month - a.month);
-                    const totalBalance = monthlyBalances.reduce((sum, m) => sum + m.balance, 0);
-                    const totalTransactions = monthlyBalances.reduce((sum, m) => sum + m.transactionCount, 0);
-                    const latestTransaction = monthlyBalances[0]?.latestTransaction || null;
-                    return {
-                        _id: studentId,
-                        monthlyBalances,
-                        totalBalance,
-                        totalTransactions,
-                        latestTransaction,
-                        residence: studentResidenceMap.get(studentId) || null
-                    };
-                })
-                .filter(s => s.totalBalance > 0)
-                .sort((a, b) => b.totalBalance - a.totalBalance);
+        // Calculate outstanding for each month (like balance sheet: cumulative debits - cumulative credits)
+        Object.keys(monthlyData).forEach(studentId => {
+            Object.keys(monthlyData[studentId]).forEach(monthKey => {
+                const monthData = monthlyData[studentId][monthKey];
+                monthData.outstanding = Math.max(0, monthData.accruals - monthData.payments);
+            });
+        });
 
-            console.log(`📊 Processed ${studentBalances.length} students (aggregation)`);
+        // Convert to array format similar to aggregation result
+        const studentBalances = Object.keys(monthlyData).map(studentId => {
+            const studentMonths = monthlyData[studentId];
+            const monthlyBalances = Object.values(studentMonths)
+                .filter(m => m.outstanding > 0) // Only include months with outstanding > 0
+                .map(m => ({
+                    monthKey: m.monthKey,
+                    year: m.year,
+                    month: m.month,
+                    balance: m.outstanding,
+                    debits: m.accruals,
+                    credits: m.payments,
+                    transactionCount: m.transactionCount,
+                    latestTransaction: m.latestTransaction
+                }))
+                .sort((a, b) => {
+                    if (a.year !== b.year) return b.year - a.year;
+                    return b.month - a.month;
+                });
+
+            const totalBalance = monthlyBalances.reduce((sum, m) => sum + m.balance, 0);
+            const totalTransactions = monthlyBalances.reduce((sum, m) => sum + m.transactionCount, 0);
+            const latestTransaction = monthlyBalances.length > 0 ? monthlyBalances[0].latestTransaction : null;
+
+            return {
+                _id: studentId,
+                monthlyBalances,
+                totalBalance,
+                totalTransactions,
+                latestTransaction,
+                residence: studentResidenceMap.get(studentId) || null
+            };
+        }).filter(s => {
+            // Filter by residence if provided
+            if (residence) {
+                const studentResidence = s.residence;
+                if (!studentResidence || studentResidence.toString() !== residence) {
+                    return false; // Exclude if residence doesn't match
+                }
+            }
+            // Only include students with outstanding balance
+            return s.totalBalance > 0;
+        }).sort((a, b) => b.totalBalance - a.totalBalance);
+
+        console.log(`📊 Processed ${studentBalances.length} students with outstanding balances`);
 
         console.log(`🔍 Found ${studentBalances.length} students with outstanding balances`);
         
@@ -1175,7 +1233,7 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
                 { user: { $in: validStudentObjectIds } },
                 { accountCode: { $in: studentIds.filter(id => id).map(id => `1100-${id}`) } }
             ]
-        }).lean();
+        });
 
         // Create a map for quick lookup
         const debtorMap = new Map();

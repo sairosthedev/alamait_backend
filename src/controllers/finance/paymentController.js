@@ -729,151 +729,322 @@ module.exports.findStudentById = findStudentById;
  */
 exports.processPayment = async (req, res) => {
     try {
-        console.log('💰 Finance payment processing - create first, process in background');
+        console.log('💰 Finance payment processing - delegating to admin payment system');
 
+        // Handle student data - support both object and ID formats
+        const { student, studentData } = req.body;
+        if (student) {
+            const User = require('../../models/User');
+            const Application = require('../../models/Application');
+            
+            let studentId = student;
+            let studentInfo = studentData;
+            
+            // If student is an object, extract ID and use object as studentInfo
+            if (typeof student === 'object' && student._id) {
+                studentId = student._id;
+                studentInfo = student;
+            }
+            
+            // Check if student exists in User collection with role 'student'
+            let studentExists = await User.findOne({ _id: studentId, role: 'student' });
+            
+            if (!studentExists) {
+                console.log('🔍 Student not found in User collection, creating/updating User record...');
+                
+                // If we have student info from frontend, use it
+                if (studentInfo) {
+                    console.log('✅ Using student data from frontend request...');
+                    
+                    const newUser = new User({
+                        _id: studentId,
+                        firstName: studentInfo.firstName,
+                        lastName: studentInfo.lastName,
+                        email: studentInfo.email,
+                        phone: studentInfo.phone,
+                        role: 'student',
+                        isActive: true,
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    });
+                    
+                    try {
+                        await newUser.save();
+                        console.log('✅ Created User record from frontend data');
+                        studentExists = newUser;
+                    } catch (userError) {
+                        console.log('⚠️ Could not create User record, trying Application collection...');
+                    }
+                }
+                
+                // If still not found and no frontend data, try Application collection
+                if (!studentExists) {
+                    console.log('🔍 Checking Application collection...');
+                    const application = await Application.findById(studentId);
+                    if (application) {
+                        console.log('✅ Found student in Application collection, creating User record...');
+                        
+                        const newUser = new User({
+                            _id: application._id,
+                            firstName: application.firstName,
+                            lastName: application.lastName,
+                            email: application.email,
+                            phone: application.phone,
+                            role: 'student',
+                            isActive: true,
+                            createdAt: new Date(),
+                            updatedAt: new Date()
+                        });
+                        
+                        try {
+                            await newUser.save();
+                            console.log('✅ Created User record from Application');
+                            studentExists = newUser;
+                        } catch (userError) {
+                            console.log('⚠️ Could not create User record, but continuing with payment...');
+                        }
+                    } else {
+                        console.log('⚠️ Student not found in Application collection either');
+                    }
+                }
+            }
+            
+            // Update req.body to ensure student is just the ID for admin payment system
+            req.body.student = studentId;
+        }
+
+        // Ensure student has proper debtor setup before delegating to admin system
+        const { student: studentIdForDebtor, residence, room, date, totalAmount } = req.body;
+        
+        // 🆕 CRITICAL FIX: Declare debtor outside if block to prevent "debtor is not defined" error
+        let debtor = null;
+        
+        if (studentIdForDebtor) {
+            const Debtor = require('../../models/Debtor');
+            const User = require('../../models/User');
+            
+            // Check if student has a debtor record
+            debtor = await Debtor.findOne({ user: studentIdForDebtor });
+            
+            if (!debtor) {
+                console.log('🏗️ No debtor record found - creating one like admin system does...');
+                
+                try {
+                    // Get student info (could be from User or Application)
+                    let studentInfo = await User.findById(studentIdForDebtor);
+                    if (!studentInfo) {
+                        const Application = require('../../models/Application');
+                        studentInfo = await Application.findById(studentIdForDebtor);
+                    }
+                    
+                    if (studentInfo) {
+                        // Create debtor using the same service as admin system
+                        const { createDebtorForStudent } = require('../../services/debtorService');
+                        
+                        // Ensure we have the right user object format
+                        const userForDebtor = {
+                            _id: studentInfo._id,
+                            firstName: studentInfo.firstName,
+                            lastName: studentInfo.lastName,
+                            email: studentInfo.email,
+                            phone: studentInfo.phone || '',
+                            role: 'student'
+                        };
+                        
+                        console.log('📝 Creating debtor with user object:', userForDebtor);
+                        
+                        debtor = await createDebtorForStudent(userForDebtor, {
+                            residenceId: residence,
+                            roomNumber: room,
+                            createdBy: req.user._id,
+                            startDate: date || new Date(),
+                            roomPrice: totalAmount, // Use payment amount as room price reference
+                            application: studentInfo._id // Pass application ID if it's an Application object
+                        });
+                        
+                        console.log('✅ Created debtor account for student');
+                        console.log(`   Debtor ID: ${debtor._id}`);
+                        console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                        console.log(`   Account Code: ${debtor.accountCode}`);
+                    } else {
+                        console.log('⚠️ Could not find student info for debtor creation');
+                    }
+                } catch (debtorError) {
+                    console.log('⚠️ Could not create debtor record, but continuing with payment...');
+                    console.log('   Error:', debtorError.message);
+                }
+            } else {
+                console.log('✅ Found existing debtor record');
+                console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                console.log(`   Account Code: ${debtor.accountCode}`);
+            }
+        }
+
+        // Create payment directly in finance endpoint to ensure proper allocation
+        console.log('🏗️ Creating payment directly in finance endpoint...');
+        
         const Payment = require('../../models/Payment');
-        const { paymentId: requestedPaymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit, studentData } = req.body;
-
-        // Normalize student ID (object or id)
-        const studentId = (studentIdForPayment && typeof studentIdForPayment === 'object' && studentIdForPayment._id)
-            ? studentIdForPayment._id
-            : studentIdForPayment;
-        if (!studentId || !residenceForPayment || !totalAmountForPayment || !payments?.length) {
-            return res.status(400).json({
-                success: false,
-                message: 'Missing required fields: student, residence, totalAmount, payments'
-            });
+        const { paymentId: requestedPaymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit } = req.body;
+        
+        // 🆕 DUPLICATE PREVENTION: Check if paymentId already exists
+        let finalPaymentId = requestedPaymentId;
+        if (finalPaymentId) {
+            const existingPayment = await Payment.findOne({ paymentId: finalPaymentId });
+            if (existingPayment) {
+                console.log(`⚠️ Payment with ID ${finalPaymentId} already exists. Returning existing payment.`);
+                return res.json({
+                    success: true,
+                    message: 'Payment already exists',
+                    payment: existingPayment,
+                    isDuplicate: true
+                });
+            }
+        } else {
+            // Generate unique paymentId if not provided
+            finalPaymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+            console.log(`📝 Generated paymentId: ${finalPaymentId}`);
         }
-
-        // Duplicate check only (fast) – then create and respond
-        let finalPaymentId = requestedPaymentId || `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
-        const existingPayment = await Payment.findOne({ paymentId: finalPaymentId }).lean();
-        if (existingPayment) {
-            return res.status(200).json({
-                success: true,
-                message: 'Payment already exists',
-                payment: existingPayment,
-                isDuplicate: true
-            });
+        
+        // 🆕 CRITICAL FIX: Ensure payment uses debtor's user ID if debtor exists
+        let finalUserId = studentIdForPayment;
+        if (debtor && debtor.user) {
+            finalUserId = debtor.user;
+            if (debtor.user.toString() !== studentIdForPayment.toString()) {
+                console.log(`⚠️  Debtor user ID (${debtor.user}) differs from requested student ID (${studentIdForPayment})`);
+                console.log(`   Using debtor's user ID to ensure consistency`);
+            }
         }
-
+        
+        // Create payment record
+        // Finance/Admin created payments should have status 'Confirmed', not 'Pending'
         const paymentStatus = (status && status !== 'Pending') ? status : 'Confirmed';
+        
         const payment = new Payment({
             paymentId: finalPaymentId,
-            user: studentId,
-            student: studentId,
+            user: finalUserId,              // 🆕 CRITICAL: Use debtor's user ID if available
+            student: finalUserId,           // 🆕 CRITICAL: Use same ID as user to prevent mismatches
             residence: residenceForPayment,
             room: roomForPayment,
-            roomType: roomType || '',
+            roomType,
             payments: payments || [],
             totalAmount: totalAmountForPayment,
             paymentMonth,
-            date: dateForPayment || new Date(),
-            method: method || 'Cash',
-            status: paymentStatus,
-            description: description || '',
+            date: dateForPayment,
+            method,
+            status: paymentStatus,           // ← Always 'Confirmed' for finance/admin created payments
+            description,
             rentAmount: rentAmount || 0,
             adminFee: adminFee || 0,
             deposit: deposit || 0,
             createdBy: req.user._id
         });
-
+        
         try {
             await payment.save();
+            console.log(`✅ Payment created: ${payment.paymentId}`);
+            console.log(`   Payment.user: ${payment.user}`);
+            console.log(`   Payment.student: ${payment.student}`);
         } catch (saveError) {
+            // Handle duplicate key error (race condition)
             if (saveError.code === 11000 && saveError.keyPattern?.paymentId) {
-                const existing = await Payment.findOne({ paymentId: finalPaymentId }).lean();
-                if (existing) {
-                    return res.status(200).json({ success: true, message: 'Payment already exists', payment: existing, isDuplicate: true });
+                console.log(`⚠️ Duplicate paymentId detected (race condition). Checking for existing payment...`);
+                const existingPayment = await Payment.findOne({ paymentId: finalPaymentId });
+                if (existingPayment) {
+                    console.log(`✅ Found existing payment with ID ${finalPaymentId}`);
+                    return res.json({
+                        success: true,
+                        message: 'Payment already exists (duplicate request detected)',
+                        payment: existingPayment,
+                        isDuplicate: true
+                    });
                 }
-                payment.paymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+                // If payment doesn't exist, generate a new unique ID and retry
+                finalPaymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+                payment.paymentId = finalPaymentId;
                 await payment.save();
+                console.log(`✅ Payment created with new ID after retry: ${payment.paymentId}`);
             } else {
-                throw saveError;
+                throw saveError; // Re-throw if it's a different error
             }
         }
-
-        // Respond immediately (target < 5s)
+        
+        // 🆕 CRITICAL FIX: Final validation - ensure payment matches debtor after save
+        if (debtor && debtor.user) {
+            const debtorUserId = debtor.user.toString();
+            const paymentNeedsUpdate = (
+                payment.user?.toString() !== debtorUserId ||
+                payment.student?.toString() !== debtorUserId
+            );
+            
+            if (paymentNeedsUpdate) {
+                console.log(`🔄 Final sync: Updating payment to match debtor user ID`);
+                payment.user = debtor.user;
+                payment.student = debtor.user;
+                await payment.save();
+                console.log(`✅ Payment synchronized with debtor`);
+            }
+        }
+        
+        // Send immediate success response; heavy processing continues in background
         res.status(201).json({
             success: true,
-            message: 'Payment created. Allocation and debtor setup run in background.',
+            message: "Payment created successfully with double-entry accounting (processing allocation in background)",
             payment
         });
-
-        // Background: student/user, debtor, sync payment user, allocation, emails
+        
+        // Run Smart FIFO allocation, transaction verification, and emails in the background (non-blocking)
         (async () => {
+        
+        // Always trigger Smart FIFO allocation
         try {
-            const User = require('../../models/User');
-            const Application = require('../../models/Application');
-            const Debtor = require('../../models/Debtor');
-            const { createDebtorForStudent } = require('../../services/debtorService');
-            let currentStudentId = payment.student?.toString ? payment.student.toString() : String(payment.student);
-
-            if (req.body.studentData) {
-                try {
-                    await User.findOneAndUpdate(
-                        { _id: currentStudentId },
-                        { $setOnInsert: { firstName: req.body.studentData.firstName, lastName: req.body.studentData.lastName, email: req.body.studentData.email, phone: req.body.studentData.phone || '', role: 'student', isActive: true } },
-                        { upsert: true }
-                    );
-                } catch (e) { /* ignore */ }
-            }
-            let debtor = await Debtor.findOne({ user: currentStudentId }).lean();
-            if (!debtor) debtor = await Debtor.findOne({ application: currentStudentId }).lean();
-            if (!debtor) {
-                const userDoc = await User.findById(currentStudentId).lean() || await Application.findById(currentStudentId).lean();
-                if (userDoc) {
-                    try {
-                        debtor = await createDebtorForStudent(userDoc, {
-                            residenceId: payment.residence,
-                            roomNumber: payment.room,
-                            createdBy: req.user._id,
-                            startDate: payment.date || new Date(),
-                            roomPrice: payment.totalAmount,
-                            application: currentStudentId
-                        });
-                    } catch (e) { console.warn('Background debtor create:', e.message); }
-                }
-            }
-            if (debtor?.user) {
-                const pay = await Payment.findById(payment._id);
-                if (pay && pay.student?.toString() !== debtor.user.toString()) {
-                    pay.user = debtor.user;
-                    pay.student = debtor.user;
-                    await pay.save();
-                }
-            }
-
-            const paymentForAllocation = await Payment.findById(payment._id);
+            console.log('🎯 Starting Smart FIFO allocation...');
+            
             const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
+            
             const allocationData = {
-                paymentId: paymentForAllocation._id.toString(),
-                studentId: paymentForAllocation.student,
-                totalAmount: paymentForAllocation.totalAmount,
-                payments: paymentForAllocation.payments || [],
-                residence: paymentForAllocation.residence,
-                paymentMonth: paymentForAllocation.paymentMonth,
-                rentAmount: paymentForAllocation.rentAmount || 0,
-                adminFee: paymentForAllocation.adminFee || 0,
-                deposit: paymentForAllocation.deposit || 0,
-                method: paymentForAllocation.method,
-                date: paymentForAllocation.date,
-                accountCode: debtor?.accountCode || undefined
+                paymentId: payment._id.toString(),
+                studentId: payment.student,
+                totalAmount: payment.totalAmount,
+                payments: payment.payments || [],
+                residence: payment.residence,
+                paymentMonth: payment.paymentMonth,
+                rentAmount: payment.rentAmount || 0,
+                adminFee: payment.adminFee || 0,
+                deposit: payment.deposit || 0,
+                method: payment.method,
+                date: payment.date
             };
-            console.log('🎯 Starting Smart FIFO allocation (background)...');
+            
+            console.log('📝 Allocation data:', allocationData);
+            
             const allocationResult = await EnhancedPaymentAllocationService.smartFIFOAllocation(allocationData);
-
-            if (allocationResult.success) {
-                console.log('✅ Smart FIFO allocation completed successfully');
-                paymentForAllocation.metadata = paymentForAllocation.metadata || {};
-                paymentForAllocation.metadata.smartFIFOAllocationCalled = true;
-                paymentForAllocation.metadata.smartFIFOAllocationCalledAt = new Date();
-                paymentForAllocation.allocation = allocationResult.allocation;
-                await paymentForAllocation.save();
-                console.log('✅ Payment updated with allocation breakdown');
-            } else {
-                console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
-            }
+            
+                        if (allocationResult.success) {
+                            console.log('✅ Smart FIFO allocation completed successfully');
+                            console.log('📊 Allocation summary:', allocationResult.allocation.summary);
+                            
+                            // 🆕 CRITICAL FIX: Only set flag AFTER successful allocation
+                            // This prevents the post-save hook from skipping fallback if allocation fails
+                            payment.metadata = payment.metadata || {};
+                            payment.metadata.smartFIFOAllocationCalled = true;
+                            payment.metadata.smartFIFOAllocationCalledAt = new Date();
+                            
+                            // Update payment with allocation results
+                            payment.allocation = allocationResult.allocation;
+                            await payment.save();
+                            
+                            console.log('✅ Payment updated with allocation breakdown');
+                            console.log(`   ✅ Flagged payment to prevent duplicate transaction creation`);
+                            
+                            // Update the response with the new allocation data
+                            if (res.locals && res.locals.payment) {
+                                res.locals.payment.allocation = allocationResult.allocation;
+                            }
+                        } else {
+                            console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
+                            console.error('   The Payment post-save hook will create a fallback transaction if needed');
+                            // Don't set flag if allocation failed - let hook create fallback
+                        }
         } catch (allocationError) {
             console.error('❌ Error in Smart FIFO allocation:', allocationError.message);
             console.error('   Stack:', allocationError.stack);

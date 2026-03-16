@@ -24,6 +24,10 @@ class EnhancedPaymentAllocationService {
       
       const { studentId: userId, totalAmount, payments, accountCode } = paymentData;
       
+      // 🆕 FIX: Clear any potential caching issues by adding a small delay
+      // This ensures we get the latest data from the database
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       if (!userId || !totalAmount || !payments || !payments.length) {
         throw new Error('Missing required payment data: userId, totalAmount, or payments array');
       }
@@ -991,15 +995,55 @@ class EnhancedPaymentAllocationService {
       const userIdString = String(userId);
       console.log(`🔍 Processing user ID: ${userIdString} (type: ${typeof userId})`);
       
-      // Resolve debtor: user first, then application (fast path; avoids loading all debtors)
+      // Resolve debtor to get exact AR account code - use User ID consistently
       const Debtor = require('../models/Debtor');
-      let debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id user').lean();
-      if (!debtorDoc && mongoose.Types.ObjectId.isValid(userIdString)) {
-        debtorDoc = await Debtor.findOne({ application: userIdString }).select('accountCode _id user').lean();
-        if (debtorDoc) console.log(`✅ Debtor found by application ID: ${debtorDoc._id}`);
-      }
+      let debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id user');
+      
+      // 🆕 CRITICAL FIX: If not found by exact match, try fuzzy matching for common ID typos
       if (!debtorDoc) {
-        console.log(`⚠️ Debtor not found by user or application, trying transaction lookup...`);
+        console.log(`⚠️ Debtor not found by exact user ID match, trying fuzzy match...`);
+        
+        // Try finding debtors with similar user IDs using similarity percentage
+        const allDebtors = await Debtor.find({}).select('accountCode _id user debtorCode').lean();
+        let bestMatch = null;
+        let bestSimilarity = 0;
+        
+        for (const d of allDebtors) {
+          if (d.user) {
+            const dUserId = d.user.toString();
+            // Check if IDs are same length
+            if (dUserId.length === userIdString.length) {
+              // Calculate similarity percentage
+              let matches = 0;
+              for (let i = 0; i < dUserId.length; i++) {
+                if (dUserId[i] === userIdString[i]) matches++;
+              }
+              const similarity = matches / dUserId.length;
+              
+              // If similarity is high enough (90%+), consider it a match
+              if (similarity > 0.9 && similarity > bestSimilarity) {
+                bestMatch = d;
+                bestSimilarity = similarity;
+              }
+            }
+          }
+        }
+        
+        if (bestMatch) {
+          console.log(`✅ Found debtor via fuzzy user ID match (${(bestSimilarity * 100).toFixed(1)}% similar):`);
+          console.log(`   Query ID: ${userIdString}`);
+          console.log(`   Debtor User ID: ${bestMatch.user.toString()}`);
+          console.log(`   Debtor Code: ${bestMatch.debtorCode || bestMatch._id}`);
+          console.log(`   Account Code: ${bestMatch.accountCode}`);
+          debtorDoc = bestMatch;
+        } else {
+          console.log(`⚠️ No debtor found via fuzzy matching (tried ${allDebtors.length} debtors)`);
+        }
+      }
+      
+      // 🆕 CRITICAL: If debtor not found by user ID, try to find by transactions' sourceId or metadata.debtorId
+      if (!debtorDoc) {
+        console.log(`⚠️ Debtor not found by user ID, trying to find via transactions...`);
         
         // Try multiple approaches to find the debtor
         // 1. Try to find a transaction with this studentId in metadata
@@ -1023,48 +1067,60 @@ class EnhancedPaymentAllocationService {
         // 2b. If still not found, try to find transactions with AR account codes and extract debtor IDs
         // Then check if any of those debtors have a user that matches (with similarity matching)
         if (!sampleTx) {
-          // Fallback: sample up to 10 accruals with AR codes, batch-fetch debtors (avoid N+1)
+          // Find transactions with AR account codes (debtor ID format: 1100-{debtorId})
           const arTransactions = await TransactionEntry.find({
             'entries.accountCode': { $regex: /^1100-[a-f0-9]{24}$/i },
             source: 'rental_accrual',
             status: { $ne: 'reversed' }
           })
           .select('sourceId metadata.debtorId entries.accountCode description')
-          .limit(10)
+          .limit(100)
           .lean();
-          const debtorIds = [];
+          
+          console.log(`🔍 Checking ${arTransactions.length} accrual transactions for matching debtor...`);
+          
+          // Check each transaction's debtor to see if user matches (with similarity matching)
+          let bestTxMatch = null;
+          let bestTxSimilarity = 0;
+          
           for (const tx of arTransactions) {
+            // Extract debtor ID from account code
             const arCode = tx.entries?.find(e => e.accountCode?.startsWith('1100-'))?.accountCode;
             if (!arCode) continue;
-            const id = arCode.replace('1100-', '');
-            if (mongoose.Types.ObjectId.isValid(id)) debtorIds.push(new mongoose.Types.ObjectId(id));
-          }
-          if (debtorIds.length > 0) {
-            const debtors = await Debtor.find({ _id: { $in: debtorIds } }).select('user accountCode _id').lean();
-            let bestTxMatch = null;
-            let bestSimilarity = 0;
-            for (const tx of arTransactions) {
-              const arCode = tx.entries?.find(e => e.accountCode?.startsWith('1100-'))?.accountCode;
-              if (!arCode) continue;
-              const txDebtorId = arCode.replace('1100-', '');
-              const txDebtor = debtors.find(d => d._id.toString() === txDebtorId);
-              if (!txDebtor?.user) continue;
+            
+            const txDebtorId = arCode.replace('1100-', '');
+            if (!mongoose.Types.ObjectId.isValid(txDebtorId)) continue;
+            
+            const txDebtor = await Debtor.findById(txDebtorId).select('user accountCode').lean();
+            if (txDebtor && txDebtor.user) {
               const txUserId = txDebtor.user.toString();
-              if (txUserId.length !== userIdString.length) continue;
-              let matches = 0;
-              for (let i = 0; i < txUserId.length; i++) {
-                if (txUserId[i] === userIdString[i]) matches++;
-              }
-              const similarity = matches / txUserId.length;
-              if (similarity > 0.9 && similarity > bestSimilarity) {
-                bestTxMatch = { tx, debtor: txDebtor, debtorId: txDebtorId };
-                bestSimilarity = similarity;
+              // Calculate similarity percentage
+              if (txUserId.length === userIdString.length) {
+                let matches = 0;
+                for (let i = 0; i < txUserId.length; i++) {
+                  if (txUserId[i] === userIdString[i]) matches++;
+                }
+                const similarity = matches / txUserId.length;
+                
+                if (similarity > 0.9 && similarity > bestTxSimilarity) {
+                  bestTxMatch = { tx, debtor: txDebtor, debtorId: txDebtorId };
+                  bestTxSimilarity = similarity;
+                }
               }
             }
-            if (bestTxMatch) {
-              console.log(`✅ Found debtor via transaction lookup (${(bestSimilarity * 100).toFixed(1)}% similar)`);
-              sampleTx = bestTxMatch.tx;
-              debtorDoc = await Debtor.findById(bestTxMatch.debtorId).select('accountCode _id user').lean();
+          }
+          
+          if (bestTxMatch) {
+            console.log(`✅ Found matching debtor via transaction lookup (${(bestTxSimilarity * 100).toFixed(1)}% similar):`);
+            console.log(`   Transaction: ${bestTxMatch.tx._id}`);
+            console.log(`   Description: ${bestTxMatch.tx.description}`);
+            console.log(`   Debtor ID: ${bestTxMatch.debtorId}`);
+            console.log(`   Account Code: ${bestTxMatch.debtor.accountCode}`);
+            sampleTx = bestTxMatch.tx;
+            // Also set debtorDoc directly from the match
+            debtorDoc = await Debtor.findById(bestTxMatch.debtorId).select('accountCode _id user').lean();
+            if (debtorDoc) {
+              console.log(`✅ Set debtorDoc from transaction match: ${debtorDoc.debtorCode || debtorDoc._id}`);
             }
           }
         }
