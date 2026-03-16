@@ -440,10 +440,27 @@ async function ensurePaymentTransaction(payment) {
         // Only skip fallback if smartFIFOAllocation was definitely called:
         // 1. Metadata flag set (smartFIFOAllocationCalled = true) - means controller called it
         // 2. Allocation field exists (smartFIFOAllocation completed successfully)
-        // DO NOT check for payments array - that's not reliable (allocation might fail or not be called)
+        // NOTE: For structured payments (payments array present), we now ALWAYS
+        // leave allocation + splitting to smartFIFOAllocation. The hook will not
+        // create its own full-amount rent entry for these to avoid misposting.
         const smartFIFOCalled = latestPayment.metadata?.smartFIFOAllocationCalled === true;
         const hasAllocation = latestPayment.allocation && Object.keys(latestPayment.allocation || {}).length > 0;
         const willCallSmartFIFO = smartFIFOCalled || hasAllocation; // Only if actually called, not just might be called
+
+        const hasStructuredPaymentsArray =
+          Array.isArray(latestPayment.payments) && latestPayment.payments.length > 0;
+
+        // 🆕 NEW: For structured payments (with payments array), NEVER create a
+        // fallback "full amount" payment transaction. These are processed by
+        // smartFIFOAllocation which already splits between owing and advance.
+        // If smartFIFOAllocation fails, we prefer to log and leave it to be
+        // fixed rather than misclassify the whole amount.
+        if (hasStructuredPaymentsArray && !hasAllocation && !smartFIFOCalled) {
+            console.log(`ℹ️ ensurePaymentTransaction: structured payment ${payment.paymentId} with payments array and no allocation flag.`);
+            console.log(`   ℹ️ Skipping fallback transaction creation to avoid posting full amount to a single month.`);
+            console.log(`   ℹ️ Please check smartFIFOAllocation logs for this payment and rerun if needed.`);
+            return;
+        }
         
         if (willCallSmartFIFO) {
             console.log(`✅ Payment ${payment.paymentId} has smartFIFOAllocation - will NOT create fallback transaction`);
@@ -560,7 +577,7 @@ async function ensurePaymentTransaction(payment) {
         }
         
         // 🆕 CRITICAL FIX: If smartFIFOAllocation will be called, DO NOT create fallback transaction
-        // smartFIFOAllocation handles transaction creation, and creating a fallback would cause duplicates
+        // smartFIFOAllocation handles transaction creation, and creating a fallback would cause duplicates.
         // This is CRITICAL: Creating both would overstate cash received (double-counting)
         if (willCallSmartFIFO) {
             console.log(`⚠️ No transaction found for payment ${payment.paymentId}, but smartFIFOAllocation will be called`);
@@ -570,8 +587,8 @@ async function ensurePaymentTransaction(payment) {
             return; // Don't create fallback if smartFIFOAllocation will be called
         }
         
-        // 🆕 CRITICAL: One more check for advance_payment before creating fallback
-        // This is the absolute last check - if advance_payment exists, NEVER create fallback
+        // 🆕 CRITICAL: One more check for advance_payment before creating fallback.
+        // This is the absolute last check - if advance_payment exists, NEVER create fallback.
         // Creating both would overstate cash received (both would debit cash)
         const absoluteFinalCheck = await TransactionEntry.findOne({
             $or: [
@@ -594,9 +611,9 @@ async function ensurePaymentTransaction(payment) {
             console.log(`   🚨 Only ONE transaction should exist (the advance_payment)`);
             return; // NEVER create fallback if advance_payment exists
         }
-        
-        // Only create fallback if NO transaction exists AND smartFIFOAllocation was NOT called
-        // AND no advance_payment exists (triple-checked)
+
+        // Only create fallback when NO transaction exists, smartFIFOAllocation was NOT called,
+        // and no advance_payment exists (triple-checked)
         console.warn(`   No advance_payment found after all checks - creating fallback transaction`);
         console.warn(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
         
@@ -728,55 +745,24 @@ async function ensurePaymentTransaction(payment) {
             monthSettled = `${year}-${month}`;
         }
         
-        // 🆕 CRITICAL: Check if payment date is before payment month - if so, treat as advance payment
-        // BUT FIRST: Check if an accrual exists for the payment month - if it does, this should be a regular payment
+        // 🆕 CRITICAL: Check if payment date is before payment month
+        // NOTE: For fallback safety we NO LONGER force "always advance" here.
+        // True advance vs normal allocation is decided by smartFIFOAllocation.
+        // The hook's fallback should create a simple payment transaction so we
+        // never incorrectly classify something as advance when balances exist.
         const paymentDate = new Date(payment.date || new Date());
         const paymentMonthDate = monthSettled ? new Date(monthSettled + '-01') : null;
         const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
         const isPaymentDateBeforeMonth = paymentMonthDate && paymentDateMonth < paymentMonthDate;
         
-        // 🆕 CRITICAL: Payment date BEFORE payment month = ALWAYS advance payment (regardless of accrual)
-        // This is because the payment is made before the month it's allocated to, so it's prepayment
         let hasAccrualForMonth = false;
         let shouldCreateAdvancePayment = false;
         
-        // 🆕 PRIORITY 1: If payment date is before payment month, it's ALWAYS an advance payment
-        if (isPaymentDateBeforeMonth) {
-            console.log(`✅ Payment date (${paymentDate.toISOString().split('T')[0]}) is BEFORE payment month (${monthSettled})`);
-            console.log(`   ✅ This is ALWAYS an advance payment, regardless of accrual status`);
-            shouldCreateAdvancePayment = true; // Always advance payment if date is before month
-            
-            // Still check for accrual for logging purposes
-            if (arAccountCode && monthSettled) {
-                try {
-                    const TransactionEntry = require('./TransactionEntry');
-                    const paymentMonthDateCheck = new Date(monthSettled + '-01');
-                    const paymentMonthStart = new Date(paymentMonthDateCheck.getFullYear(), paymentMonthDateCheck.getMonth(), 1);
-                    const paymentMonthEnd = new Date(paymentMonthDateCheck.getFullYear(), paymentMonthDateCheck.getMonth() + 1, 0, 23, 59, 59, 999);
-                    
-                    const accrualForMonth = await TransactionEntry.findOne({
-                        'entries.accountCode': arAccountCode,
-                        source: { $in: ['rental_accrual', 'lease_start'] },
-                        status: { $ne: 'reversed' },
-                        voided: { $ne: true },
-                        date: {
-                            $gte: paymentMonthStart,
-                            $lte: paymentMonthEnd
-                        }
-                    }).lean();
-                    
-                    if (accrualForMonth) {
-                        hasAccrualForMonth = true;
-                        console.log(`   ℹ️ Note: Accrual exists for ${monthSettled}, but payment is still advance (paid before month)`);
-                    } else {
-                        console.log(`   ℹ️ No accrual exists for ${monthSettled} - advance payment confirmed`);
-                    }
-                } catch (accrualCheckError) {
-                    console.error(`   ⚠️ Error checking accrual: ${accrualCheckError.message}`);
-                }
-            }
-        } else {
-            // 🆕 PRIORITY 2: Payment date is on/after payment month - check accrual to determine type
+        // 🆕 PRIORITY: Prefer to treat fallback as a normal payment when there is an accrual.
+        // If payment date is on/after payment month and accrual exists → regular payment.
+        // If no accrual or we can't check reliably → leave shouldCreateAdvancePayment=false
+        // so we create a simple payment transaction (DR Cash, CR AR).
+        if (!isPaymentDateBeforeMonth) {
             console.log(`ℹ️ Payment date (${paymentDate.toISOString().split('T')[0]}) is on/after payment month (${monthSettled})`);
             
             if (arAccountCode && monthSettled) {

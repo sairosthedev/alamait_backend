@@ -5,6 +5,12 @@ const Invoice = require('../models/Invoice');
 const mongoose = require('mongoose');
 const { logTransactionOperation, logSystemOperation } = require('../utils/auditLogger');
 
+// Toggle this to true only when you want verbose accrual logs
+const ACCRUAL_DEBUG = false;
+const accrualLog = (...args) => {
+    if (ACCRUAL_DEBUG) console.log(...args);
+};
+
 /**
  * Enhanced Rental Accrual Service
  * 
@@ -1494,8 +1500,8 @@ class RentalAccrualService {
                 dryRun = false 
             } = options;
 
-            console.log(`\n🔄 COMPREHENSIVE ACCRUAL ENSUREMENT PROCESS`);
-            console.log(`   Mode: ${dryRun ? 'DRY RUN (no changes)' : 'LIVE (will create missing accruals)'}`);
+            accrualLog(`\n🔄 COMPREHENSIVE ACCRUAL ENSUREMENT PROCESS`);
+            accrualLog(`   Mode: ${dryRun ? 'DRY RUN (no changes)' : 'LIVE (will create missing accruals)'}`);
             if (includeFutureMonths) {
                 console.log(`   ⚠️ Including future months (not recommended)`);
             }
@@ -1514,7 +1520,7 @@ class RentalAccrualService {
             .sort({ startDate: 1 })
             .lean();
 
-            console.log(`   Found ${activeStudents.length} active students to check`);
+            accrualLog(`   Found ${activeStudents.length} active students to check`);
 
             let leaseStartsCreated = 0;
             let leaseStartsSkipped = 0;
@@ -1555,7 +1561,7 @@ class RentalAccrualService {
                 const leaseEndYear = leaseEnd.getFullYear();
 
                 // STEP 1: Ensure lease start accrual exists
-                console.log(`\n   📋 Checking ${studentName} (Lease: ${leaseStartMonth}/${leaseStartYear} to ${leaseEndMonth}/${leaseEndYear})`);
+                accrualLog(`\n   📋 Checking ${studentName} (Lease: ${leaseStartMonth}/${leaseStartYear} to ${leaseEndMonth}/${leaseEndYear})`);
                 
                 // Define student IDs outside try block so they're available for monthly accrual checks
                 // 🆕 CRITICAL: Handle cases where student.student might be null

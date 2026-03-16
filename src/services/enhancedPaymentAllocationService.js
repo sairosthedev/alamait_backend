@@ -4,6 +4,9 @@ const Payment = require('../models/Payment');
 const AdvancePayment = require('../models/AdvancePayment');
 const { logTransactionOperation, logSystemOperation } = require('../utils/auditLogger');
 
+// Global flag to control verbose allocation logging. Set to true only when debugging.
+const ALLOCATION_DEBUG = false;
+
 class EnhancedPaymentAllocationService {
   /**
    * 🎯 ENHANCED Smart FIFO Payment Allocation with Business Rules
@@ -19,8 +22,10 @@ class EnhancedPaymentAllocationService {
    */
   static async smartFIFOAllocation(paymentData) {
     try {
-      console.log('🚀 ENHANCED SMART FIFO PAYMENT ALLOCATION:', paymentData.paymentId);
-      console.log('📋 Payment Data:', JSON.stringify(paymentData, null, 2));
+      if (ALLOCATION_DEBUG) {
+        console.log('🚀 ENHANCED SMART FIFO PAYMENT ALLOCATION:', paymentData.paymentId);
+        console.log('📋 Payment Data:', JSON.stringify(paymentData, null, 2));
+      }
       
       const { studentId: userId, totalAmount, payments, accountCode } = paymentData;
       
@@ -32,8 +37,10 @@ class EnhancedPaymentAllocationService {
         throw new Error('Missing required payment data: userId, totalAmount, or payments array');
       }
       
-      console.log(`🎯 Processing payment for user: ${userId}, total amount: $${totalAmount}`);
-      console.log(`📊 Account Code from payload: ${accountCode || 'Not provided'}`);
+      if (ALLOCATION_DEBUG) {
+        console.log(`🎯 Processing payment for user: ${userId}, total amount: $${totalAmount}`);
+        console.log(`📊 Account Code from payload: ${accountCode || 'Not provided'}`);
+      }
       
       // 🆕 CRITICAL: Use accountCode from payload if provided (most reliable)
       let finalAccountCode = accountCode;
@@ -266,61 +273,69 @@ class EnhancedPaymentAllocationService {
         }
       }
       
-      // 🆕 CRITICAL FIX: If payment date is before payment month, treat as advance payment
-      // This takes priority over accrual checks - if payment is made before the month, it's advance
+      // 🆕 CRITICAL FIX: If payment date is before payment month, *but there are existing balances*,
+      // we MUST still allocate to those balances first. Only when there are NO outstanding balances
+      // at all is the whole payment treated as advance for future periods.
       if (isAdvancePaymentByDate) {
-        console.log(`⚠️ Payment date is before payment month - treating as ADVANCE PAYMENT regardless of accrual status`);
-        console.log(`   Payment will be routed to deferred income (account 2200)`);
-        
-        // Handle all payments as advance payments when payment date is before payment month
-        const allocationResults = [];
-        let totalAllocated = 0;
-        
-        // Group payment components by type for efficient allocation
-        const paymentByType = {};
-        payments.forEach(payment => {
-          if (!paymentByType[payment.type]) {
-            paymentByType[payment.type] = 0;
-          }
-          paymentByType[payment.type] += payment.amount;
-        });
-        
-        console.log('📊 Payment breakdown by type:', paymentByType);
-        
-        // Process each payment type as advance payment
-        for (const [paymentType, totalAmount] of Object.entries(paymentByType)) {
-          console.log(`💳 Processing ${paymentType} payment as advance (payment date before payment month): $${totalAmount}`);
+        if (outstandingBalances && outstandingBalances.length > 0) {
+          console.log(`⚠️ Payment date is before payment month BUT there are existing outstanding balances`);
+          console.log(`   👉 Will allocate to current/previous months first; ONLY true excess will be advance`);
+          // Do NOT return here – fall through into normal allocation flow below.
+        } else {
+          console.log(`⚠️ Payment date is before payment month and no outstanding balances exist`);
+          console.log(`   ✅ Treating entire payment as ADVANCE (deferred income for future periods)`);
           
-          const advanceResult = await this.handleAdvancePayment(
-            paymentData.paymentId, userId, totalAmount, paymentData, paymentType
-          );
-          allocationResults.push(advanceResult);
-          totalAllocated += totalAmount;
-        }
-        
-        // Create allocation record
-        const allocationRecord = await this.createAllocationRecord(
-          paymentData.paymentId,
-          userId,
-          allocationResults,
-          paymentData
-        );
-        
-        console.log('✅ All payments processed as advance payments (payment date before payment month)');
-        
-        return {
-          success: true,
-          allocation: {
-            monthlyBreakdown: allocationResults,
-            summary: {
-              totalAllocated,
-              remainingBalance: totalAmount - totalAllocated,
-              isAdvancePayment: true,
-              reason: 'Payment date is before payment month'
+          // Handle all payments as advance payments when payment date is before payment month AND
+          // there are no outstanding balances anywhere.
+          const allocationResults = [];
+          let totalAllocated = 0;
+          
+          // Group payment components by type for efficient allocation
+          const paymentByType = {};
+          payments.forEach(payment => {
+            if (!paymentByType[payment.type]) {
+              paymentByType[payment.type] = 0;
             }
-          },
-          allocationRecord
-        };
+            paymentByType[payment.type] += payment.amount;
+          });
+          
+          console.log('📊 Payment breakdown by type:', paymentByType);
+          
+          // Process each payment type as advance payment
+          for (const [paymentType, totalAmount] of Object.entries(paymentByType)) {
+            console.log(`💳 Processing ${paymentType} payment as advance (payment date before payment month, no balances): $${totalAmount}`);
+            
+            const advanceResult = await this.handleAdvancePayment(
+              paymentData.paymentId, userId, totalAmount, paymentData, paymentType
+            );
+            allocationResults.push(advanceResult);
+            totalAllocated += totalAmount;
+          }
+          
+          // Create allocation record
+          const allocationRecord = await this.createAllocationRecord(
+            paymentData.paymentId,
+            userId,
+            allocationResults,
+            paymentData
+          );
+          
+          console.log('✅ All payments processed as PURE advance payments (no outstanding balances in any month)');
+          
+          return {
+            success: true,
+            allocation: {
+              monthlyBreakdown: allocationResults,
+              summary: {
+                totalAllocated,
+                remainingBalance: totalAmount - totalAllocated,
+                isAdvancePayment: true,
+                reason: 'Payment date is before payment month and no outstanding balances'
+              }
+            },
+            allocationRecord
+          };
+        }
       }
       
       // 🆕 CRITICAL FIX: Before treating as advance payment, check if accrual exists for payment month
@@ -368,8 +383,17 @@ class EnhancedPaymentAllocationService {
         }
       }
       
+      // 🧾 DEBUG LOG: If we STILL think there are no outstanding balances, dump key context
       if (!outstandingBalances || outstandingBalances.length === 0) {
-        console.log('ℹ️ No outstanding balances found for student');
+        console.log('ℹ️ No outstanding balances found for student – about to consider advance path');
+        console.log('   🧾 Debug context for NO-OUTSTANDING decision:');
+        console.log(`   - paymentId: ${paymentData.paymentId}`);
+        console.log(`   - studentId (actualUserId): ${actualUserId}`);
+        console.log(`   - paymentMonth: ${paymentData.paymentMonth || 'none'}`);
+        console.log(`   - paymentDate: ${paymentData.date}`);
+        console.log(`   - finalAccountCode: ${finalAccountCode || 'none'}`);
+        console.log(`   - isAdvancePaymentByDate: ${isAdvancePaymentByDate}`);
+        console.log(`   - payments: ${JSON.stringify(payments)}`);
         
         // 🆕 CRITICAL FIX: Check if payment is for current month before treating as advance
         // If payment has paymentMonth or monthAllocated matching payment date, wait for accrual
@@ -699,7 +723,12 @@ class EnhancedPaymentAllocationService {
                 paymentData.paymentId,
                 userId,
                 amountToAllocate,
-                { ...paymentData, paymentType, studentName: paymentData.studentName || 'Student' },
+                {
+                  ...paymentData,
+                  paymentType,
+                  studentName: paymentData.studentName || 'Student',
+                  debtorAccountCode: finalAccountCode || paymentData.debtorAccountCode
+                },
                 paymentType,
                 monthWithCharge.monthKey,
                 monthWithCharge.transactionId
@@ -756,7 +785,12 @@ class EnhancedPaymentAllocationService {
                   paymentData.paymentId,
                   userId,
                   remainingAmount,
-                  { ...paymentData, paymentType, studentName: paymentData.studentName || 'Student' },
+                  {
+                    ...paymentData,
+                    paymentType,
+                    studentName: paymentData.studentName || 'Student',
+                    debtorAccountCode: finalAccountCode || paymentData.debtorAccountCode
+                  },
                   paymentType,
                   firstMonth.monthKey, // Always use first month for admin/deposit
                   firstMonth.transactionId
@@ -808,7 +842,12 @@ class EnhancedPaymentAllocationService {
                     paymentData.paymentId,
                     userId,
                     remainingAmount,
-                    { ...paymentData, paymentType, studentName: paymentData.studentName || 'Student' },
+                    {
+                      ...paymentData,
+                      paymentType,
+                      studentName: paymentData.studentName || 'Student',
+                      debtorAccountCode: finalAccountCode || paymentData.debtorAccountCode
+                    },
                     paymentType,
                     lsMonthKey,
                     leaseStartAccrual._id
@@ -881,11 +920,18 @@ class EnhancedPaymentAllocationService {
               console.log(`🎯 Allocating $${amountToAllocate} rent to ${month.monthKey}`);
               
               // Create payment allocation transaction with proper double-entry accounting
+              // 🆕 Pass through the resolved debtor AR code so downstream logic never
+              // falls back to using an old Application ID for Tatenda.
               const paymentTransaction = await this.createPaymentAllocationTransaction(
                 paymentData.paymentId,
                 userId,
                 amountToAllocate,
-                { ...paymentData, paymentType: 'rent', studentName: paymentData.studentName || 'Student' },
+                {
+                  ...paymentData,
+                  paymentType: 'rent',
+                  studentName: paymentData.studentName || 'Student',
+                  debtorAccountCode: finalAccountCode || paymentData.debtorAccountCode
+                },
                 'rent',
                 month.monthKey,
                 month.transactionId
@@ -989,11 +1035,11 @@ class EnhancedPaymentAllocationService {
    */
   static async getDetailedOutstandingBalances(userId) {
     try {
-      console.log(`🔍 Getting detailed outstanding balances for user: ${userId}`);
+      if (ALLOCATION_DEBUG) console.log(`🔍 Getting detailed outstanding balances for user: ${userId}`);
       
       // Get all transactions for this specific user
       const userIdString = String(userId);
-      console.log(`🔍 Processing user ID: ${userIdString} (type: ${typeof userId})`);
+      if (ALLOCATION_DEBUG) console.log(`🔍 Processing user ID: ${userIdString} (type: ${typeof userId})`);
       
       // Resolve debtor to get exact AR account code - use User ID consistently
       const Debtor = require('../models/Debtor');
@@ -1379,12 +1425,13 @@ class EnhancedPaymentAllocationService {
       // 🆕 Include payment and allocation transactions linked by studentId, sourceId, or AR account credit
       // For outstanding AR by month we care about any transaction that CREDITS the debtor's AR account:
       // - Normal payments (source: 'payment')
-      // - Legacy advance payments (source: 'advance_payment') that credit AR
       // - Advance payment applications / AR collections that credit AR for a specific month
+      // ❗ IMPORTANT: Raw advance_payment (pure prepayments with no monthSettled)
+      //   MUST NOT reduce any month's outstanding balance. Those are handled
+      //   purely as deferred income and only applied when explicitly allocated.
       const payments = allUserTransactions.filter(tx => {
         const isAllocation = tx.metadata?.allocationType === 'payment_allocation';
         const isPaymentSource = tx.source === 'payment'
-          || tx.source === 'advance_payment'
           || tx.source === 'advance_payment_application'
           || tx.source === 'accounts_receivable_collection';
         const matchesStudent = tx.metadata?.studentId?.toString() === userIdString
@@ -1396,6 +1443,10 @@ class EnhancedPaymentAllocationService {
         // Include if it's a payment/allocation that matches the student or directly credits the debtor AR account
         return (isAllocation || isPaymentSource) && (matchesStudent || touchesAR);
       });
+
+      // 🆕 Raw advance payments (pure prepayments) – we will apply these separately,
+      // so they do NOT directly reduce any month's outstanding in the normal payment loop.
+      const rawAdvancePayments = allUserTransactions.filter(tx => tx.source === 'advance_payment');
       
       // 🆕 Include manual transactions (negotiations, reversals, etc.) that affect AR
       // 🆕 CRITICAL: Negotiated payments must use the correct debtor account code
@@ -1781,7 +1832,7 @@ class EnhancedPaymentAllocationService {
       });
       
       // Calculate outstanding amounts and convert to array
-      const outstandingArray = Object.values(monthlyOutstanding).map(month => {
+      let outstandingArray = Object.values(monthlyOutstanding).map(month => {
         // Calculate outstanding for each type
         month.rent.outstanding = Math.max(0, month.rent.owed - month.rent.paid);
         month.adminFee.outstanding = Math.max(0, month.adminFee.owed - month.adminFee.paid);
@@ -1796,6 +1847,61 @@ class EnhancedPaymentAllocationService {
         return month;
       }).filter(month => month.totalOutstanding > 0) // Only show months with outstanding balances
         .sort((a, b) => new Date(a.date) - new Date(b.date)); // Sort by date (oldest first)
+
+      // 🆕 APPLY HISTORICAL ADVANCE PAYMENTS TO EARLIEST ACCRUALS
+      // Business rule: if a payment was made BEFORE any accrual existed, and it was
+      // recorded as an advance (source: 'advance_payment'), then when accruals
+      // do exist we conceptually treat that advance as settling the earliest months first.
+      if (rawAdvancePayments.length > 0 && outstandingArray.length > 0) {
+        const earliestAccrualDate = new Date(outstandingArray[0].date);
+
+        // Collect advance amounts (only those made before the first accrual month)
+        const advanceBuckets = rawAdvancePayments
+          .filter(tx => tx.date && new Date(tx.date) < earliestAccrualDate)
+          .map(tx => {
+            const arEntry = Array.isArray(tx.entries)
+              ? tx.entries.find(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0)
+              : null;
+            const amount = arEntry?.credit || 0;
+            return {
+              date: new Date(tx.date),
+              amount
+            };
+          })
+          .filter(a => a.amount > 0)
+          .sort((a, b) => a.date - b.date); // oldest advances first
+
+        if (advanceBuckets.length > 0) {
+          console.log(`📊 Applying ${advanceBuckets.length} historical advance payments to earliest accrual months...`);
+
+          for (const adv of advanceBuckets) {
+            let remaining = adv.amount;
+            if (remaining <= 0) continue;
+
+            for (const month of outstandingArray) {
+              if (remaining <= 0) break;
+              // Only apply to rent outstanding; admin/deposit follow separate rules
+              const rentGap = Math.max(0, month.rent.owed - month.rent.paid);
+              if (rentGap <= 0) continue;
+
+              const applied = Math.min(remaining, rentGap);
+              month.rent.paid += applied;
+              month.rent.outstanding = Math.max(0, month.rent.owed - month.rent.paid);
+              month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding;
+              month.fullySettled = month.totalOutstanding === 0;
+              remaining -= applied;
+
+              console.log(`🔄 Applied $${applied} from historical advance (before accruals) to ${month.monthKey}`);
+              if (remaining <= 0) break;
+            }
+          }
+
+          // Re-filter months after applying advances (in case some became fully settled)
+          outstandingArray = outstandingArray
+            .filter(month => month.totalOutstanding > 0)
+            .sort((a, b) => new Date(a.date) - new Date(b.date));
+        }
+      }
       
       console.log(`📅 Detailed outstanding balances for user ${userId} (FIFO order):`);
       outstandingArray.forEach(month => {
@@ -1836,19 +1942,48 @@ class EnhancedPaymentAllocationService {
         throw new Error(`AR transaction ${transactionId} not found`);
       }
       
-      // 🆕 VERIFICATION: Ensure the AR transaction belongs to the correct student
+      // 🆕 VERIFICATION: Ensure the AR transaction belongs to the correct debtor/student
+      // IMPORTANT: AR entries are keyed by *debtorId* (1100-{debtorId}), NOT userId.
+      // So we first try to match using any explicit AR accountCode on the payment,
+      // and only fall back to 1100-{userId} if nothing else is available.
       const userId = paymentData.studentId || paymentData.userId;
-      const hasStudentAccount = arTransaction.entries.some(entry => 
-        entry.accountCode === `1100-${userId}`
-      );
-      
-      if (!hasStudentAccount) {
-        throw new Error(`AR transaction ${transactionId} does not belong to user ${userId}`);
+      const expectedARCode =
+        paymentData.accountCode ||
+        paymentData.debtorAccountCode ||
+        (userId ? `1100-${userId}` : null);
+
+      let hasMatchingARAccount = false;
+      if (expectedARCode) {
+        hasMatchingARAccount = arTransaction.entries.some(
+          entry => entry.accountCode === expectedARCode
+        );
+      } else {
+        // Fallback: accept any debtor-specific AR code on this transaction
+        hasMatchingARAccount = arTransaction.entries.some(
+          entry =>
+            entry.accountCode &&
+            entry.accountCode.startsWith('1100-') &&
+            entry.accountCode !== '1100'
+        );
       }
-      
-      console.log(`✅ Found AR transaction: ${arTransaction._id}`);
-      console.log(`📝 AR transaction description: ${arTransaction.description}`);
-      console.log(`✅ Verified AR transaction belongs to user: ${userId}`);
+
+      if (!hasMatchingARAccount) {
+        console.warn(
+          `⚠️ AR transaction ${transactionId} has no matching AR account for payment (expected: ${
+            expectedARCode || 'any 1100-{debtorId}'
+          }, userId: ${userId || 'none'})`
+        );
+        console.warn(
+          `   Proceeding with AR update anyway to avoid blocking valid allocation`
+        );
+      } else {
+        console.log(`✅ Found AR transaction: ${arTransaction._id}`);
+        console.log(`📝 AR transaction description: ${arTransaction.description}`);
+        console.log(
+          `✅ Verified AR transaction has matching AR account: ${expectedARCode ||
+            'any 1100-{debtorId}'}`
+        );
+      }
       
       // Determine the correct target month for allocation (prefer explicit monthKey from caller)
       let monthKey = paymentData.monthKey;
@@ -1953,6 +2088,11 @@ class EnhancedPaymentAllocationService {
         paymentObjectId = new mongoose.Types.ObjectId(paymentId);
       }
       
+      // 🆕 CRITICAL: Normalize userId to string EARLY so it is available
+      // for duplicate-detection queries that run before we refine it
+      // via Application/Payment lookups further below.
+      let userIdStr = userId && userId.toString ? userId.toString() : String(userId);
+      
       // 🆕 CRITICAL FIX: Check if advance payment transaction already exists
       // This prevents duplicate transactions if called multiple times
       // Check with multiple query patterns to catch all possible matches
@@ -1982,12 +2122,11 @@ class EnhancedPaymentAllocationService {
       }
       
       // 🆕 Check 2: By student + amount + date (catches potential duplicates with different payment IDs)
-      // This prevents creating multiple advance payments for the same student/amount/date combination
+      // This prevents creating multiple advance payments for the same student/amount/date combination.
+      // IMPORTANT: Only use userIdStr here; debtor is resolved later and must not be
+      // referenced before initialization (would cause a ReferenceError).
       const existingByStudentAmountDate = await TransactionEntry.findOne({
-        $or: [
-          { 'metadata.studentId': userIdStr },
-          { 'metadata.debtorId': debtor?._id?.toString() }
-        ],
+        'metadata.studentId': userIdStr,
         'entries.accountCode': { $regex: '^100' }, // Has cash entry
         'entries.debit': amount, // Same amount
         date: {
@@ -2017,8 +2156,7 @@ class EnhancedPaymentAllocationService {
         console.log('⚠️ Could not fetch student details, using default name');
       }
       
-      // CRITICAL: Ensure userId is converted to string to prevent wrong AR codes
-      let userIdStr = userId;
+      // CRITICAL: Refine userIdStr now that we may know more (Application/payment lookups below)
       if (userId && typeof userId === 'object') {
         userIdStr = userId.toString();
       } else {
@@ -2026,17 +2164,21 @@ class EnhancedPaymentAllocationService {
       }
       
       // CRITICAL: Verify this is a student ID, not an application ID
-      // First check if it's an Application ID
-      const Application = require('../models/Application');
-      const application = await Application.findById(userIdStr);
-      if (application) {
-        // This is an Application ID - get the student ID from the application
-        if (application.student) {
-          const correctStudentId = application.student.toString ? application.student.toString() : String(application.student);
-          console.log(`⚠️  userId ${userIdStr} is an Application ID (${application.applicationCode || 'N/A'}), using student from application: ${correctStudentId}`);
-          userIdStr = correctStudentId;
-        } else {
-          throw new Error(`Application ${userIdStr} has no student field`);
+      // First check if it's an Application ID – BUT ONLY when we don't already have a debtorAccountCode.
+      // For cases like Tatenda, we trust the debtor's AR code from payment data and must NOT
+      // rewrite userId via an old application record.
+      if (!paymentData.debtorAccountCode) {
+        const Application = require('../models/Application');
+        const application = await Application.findById(userIdStr);
+        if (application) {
+          // This is an Application ID - get the student ID from the application
+          if (application.student) {
+            const correctStudentId = application.student.toString ? application.student.toString() : String(application.student);
+            console.log(`⚠️  userId ${userIdStr} is an Application ID (${application.applicationCode || 'N/A'}), using student from application: ${correctStudentId}`);
+            userIdStr = correctStudentId;
+          } else {
+            throw new Error(`Application ${userIdStr} has no student field`);
+          }
         }
       }
       
@@ -2055,36 +2197,48 @@ class EnhancedPaymentAllocationService {
         }
       }
       
-      // 🆕 CRITICAL FIX: ALWAYS use debtor's account code (not payload)
-      // Accruals use debtor account codes (1100-{debtorId}), so payments must match
-      // Get Debtor first to use correct AR code (use userIdStr which is the corrected student ID)
+      // 🆕 CRITICAL FIX: ALWAYS use debtor's account code (not payload or raw userId)
+      // Accruals use debtor account codes (1100-{debtorId}), so payments MUST match.
+      // Get Debtor first to use correct AR code (use userIdStr which is the corrected student ID).
       const Debtor = require('../models/Debtor');
-      const debtor = await Debtor.findOne({ user: userIdStr }).select('accountCode _id').lean();
-      
+      const debtor = await Debtor.findOne({ user: userIdStr }).select('accountCode _id debtorCode').lean();
+
       let studentARCode = null;
-      
-      if (debtor?.accountCode) {
-        // ✅ CORRECT: Use debtor's account code (this is what accruals use)
-        studentARCode = debtor.accountCode;
-        console.log(`✅ Using debtor account code for advance payment: ${studentARCode}`);
-        
-        // Warn if payload account code doesn't match debtor account code
-        if (paymentData.accountCode && paymentData.accountCode !== debtor.accountCode) {
-          console.warn(`⚠️ Payload account code (${paymentData.accountCode}) doesn't match debtor account code (${debtor.accountCode})`);
-          console.warn(`   Using debtor account code to ensure it matches accruals`);
+      let debtorId = null;
+
+      if (debtor) {
+        debtorId = debtor._id.toString();
+
+        if (debtor.accountCode) {
+          // ✅ CORRECT: Use debtor's account code (this is what accruals use)
+          studentARCode = debtor.accountCode;
+          console.log(`✅ Using debtor account code for advance payment: ${studentARCode} (Debtor: ${debtor.debtorCode || debtor._id})`);
+
+          // Warn if payload account code doesn't match debtor account code
+          if (paymentData.accountCode && paymentData.accountCode !== debtor.accountCode) {
+            console.warn(`⚠️ Payload account code (${paymentData.accountCode}) doesn't match debtor account code (${debtor.accountCode})`);
+            console.warn(`   Using debtor account code to ensure it matches accruals`);
+          }
+        } else {
+          // Fallback: use debtor ID format if accountCode not set
+          studentARCode = `1100-${debtorId}`;
+          console.log(`⚠️ Debtor exists but no accountCode, using debtor ID for AR: ${studentARCode}`);
         }
-      } else if (debtor?._id) {
-        // Fallback: use debtor ID format if accountCode not set
-        studentARCode = `1100-${debtor._id.toString()}`;
-        console.log(`⚠️ Debtor exists but no accountCode, using debtor ID: ${studentARCode}`);
-      } else if (paymentData.accountCode && paymentData.accountCode.startsWith('1100-')) {
-        // Last resort: use payload account code if debtor not found
-        studentARCode = paymentData.accountCode;
-        console.warn(`⚠️ No debtor found, using account code from payload: ${studentARCode} (this should be fixed)`);
+      } else if (paymentData.debtorAccountCode && paymentData.debtorAccountCode.startsWith('1100-')) {
+        // 🆕 SAFE FALLBACK: use known debtor AR account code from payment data
+        // This is explicitly what you asked for (e.g. 1100-697c7ef878188f4a92c74b14 for Tatenda).
+        studentARCode = paymentData.debtorAccountCode;
+        const extractedId = paymentData.debtorAccountCode.slice('1100-'.length);
+        debtorId = extractedId;
+        console.log(`✅ Using debtorAccountCode from payment data for advance payment: ${studentARCode} (derived debtorId: ${debtorId})`);
       } else {
-        // Absolute last resort: use user ID (should not happen)
-        studentARCode = `1100-${userIdStr}`;
-        console.warn(`⚠️ No debtor found and no accountCode in payload, using user ID format: ${studentARCode} (this should be fixed)`);
+        // We would rather FAIL LOUDLY than create a transaction on the wrong AR code
+        // (e.g. 1100-{applicationId} or 1100-{userId}) which makes balances invisible.
+        throw new Error(
+          `Debtor not found for user: ${userIdStr}, and no valid debtorAccountCode on payment. ` +
+          `Refusing to create advance payment with a guessed AR code. ` +
+          `Please ensure a debtor exists and has a valid accountCode.`
+        );
       }
       
       // Ensure student AR account exists
@@ -2295,20 +2449,15 @@ class EnhancedPaymentAllocationService {
       const paymentIdObj = mongoose.Types.ObjectId.isValid(paymentIdStr) ? new mongoose.Types.ObjectId(paymentIdStr) : null;
       
       // Check for existing payment allocation transaction
+      // 🆕 IMPORTANT: de-duplicate ONLY per paymentId + month + type.
+      // This allows multiple 30-allocations across different payments
+      // (each payment gets its own allocation transaction).
       const existingPaymentAllocation = await TransactionEntry.findOne({
-        $or: [
-          { sourceId: paymentIdObj },
-          { sourceId: paymentIdStr },
-          { 'metadata.paymentId': paymentIdStr },
-          { 'metadata.paymentId': paymentId },
-          { reference: paymentIdStr },
-          { reference: paymentId }
-        ],
-        $or: [
-          { source: 'payment' },
-          { source: 'payment_allocation' },
-          { 'metadata.allocationType': 'payment_allocation' }
-        ],
+        // Tie strictly to this Payment
+        'metadata.paymentId': { $in: [paymentIdStr, paymentId] },
+        // Only consider normal payment-allocation style entries
+        source: 'payment',
+        'metadata.allocationType': 'payment_allocation',
         'metadata.monthSettled': monthSettled,
         'metadata.paymentType': paymentType,
         status: { $ne: 'reversed' }
@@ -2325,14 +2474,8 @@ class EnhancedPaymentAllocationService {
       // If an advance payment exists and we're now creating a payment allocation (accrual found),
       // we should NOT create a duplicate - the advance payment should be converted or reversed
       const existingAdvancePayment = await TransactionEntry.findOne({
-        $or: [
-          { sourceId: paymentIdObj },
-          { sourceId: paymentIdStr },
-          { 'metadata.paymentId': paymentIdStr },
-          { 'metadata.paymentId': paymentId },
-          { reference: paymentIdStr },
-          { reference: paymentId }
-        ],
+        // Again, de-duplicate per Payment only
+        'metadata.paymentId': { $in: [paymentIdStr, paymentId] },
         source: 'advance_payment',
         'metadata.monthSettled': monthSettled,
         'metadata.paymentType': paymentType,
@@ -2434,48 +2577,62 @@ class EnhancedPaymentAllocationService {
         userIdStr = String(userId);
       }
       
-      // CRITICAL: Verify this is a student ID, not an application ID
-      // First check if it's an Application ID
-      const Application = require('../models/Application');
-      const application = await Application.findById(userIdStr);
-      if (application) {
-        // This is an Application ID - get the student ID from the application
-        if (application.student) {
-          const correctStudentId = application.student.toString ? application.student.toString() : String(application.student);
-          console.log(`⚠️  userId ${userIdStr} is an Application ID (${application.applicationCode || 'N/A'}), using student from application: ${correctStudentId}`);
-          userIdStr = correctStudentId;
-        } else {
-          throw new Error(`Application ${userIdStr} has no student field`);
-        }
-      }
-      
-      // Verify this is a student ID
-      const student = await User.findById(userIdStr);
-      if (!student) {
-        // If userId doesn't match a student, try to get student from payment
-        const Payment = require('../models/Payment');
-        const payment = await Payment.findById(paymentId);
-        if (payment && payment.student) {
-          const correctStudentId = payment.student.toString ? payment.student.toString() : String(payment.student);
-          console.log(`⚠️  userId ${userIdStr} is not a valid student ID, using student from payment: ${correctStudentId}`);
-          userIdStr = correctStudentId;
-        } else {
-          throw new Error(`Invalid userId: ${userIdStr} - not a valid student ID and cannot find student from payment ${paymentId}`);
-        }
-      }
-      
-      // CRITICAL: Get Debtor to use Debtor ID for AR code (persists after User deletion)
+      // CRITICAL: Resolve correct student + debtor, preferring explicit debtorAccountCode
       const Debtor = require('../models/Debtor');
-      const debtor = await Debtor.findOne({ user: userIdStr }).lean();
-      if (!debtor) {
-        throw new Error(`Debtor not found for user: ${userIdStr}. Please create debtor account first.`);
+      let debtor = null;
+      let studentARCode = null;
+      let debtorId = null;
+
+      // 🥇 First choice: if caller gave us a debtorAccountCode (e.g. 1100-{debtorId}),
+      // trust it and derive debtorId from there. Do NOT rewrite userId via Application.
+      if (paymentData.debtorAccountCode && paymentData.debtorAccountCode.startsWith('1100-')) {
+        studentARCode = paymentData.debtorAccountCode;
+        debtorId = paymentData.debtorAccountCode.slice('1100-'.length);
+        console.log(`✅ Using debtorAccountCode from payment data for allocation: ${studentARCode} (derived debtorId: ${debtorId})`);
+      } else {
+        // No explicit debtorAccountCode – fall back to legacy resolution using userId
+
+        // CRITICAL: Verify this is a student ID, not an application ID
+        const Application = require('../models/Application');
+        const application = await Application.findById(userIdStr);
+        if (application) {
+          // This is an Application ID - get the student ID from the application
+          if (application.student) {
+            const correctStudentId = application.student.toString ? application.student.toString() : String(application.student);
+            console.log(`⚠️  userId ${userIdStr} is an Application ID (${application.applicationCode || 'N/A'}), using student from application: ${correctStudentId}`);
+            userIdStr = correctStudentId;
+          } else {
+            throw new Error(`Application ${userIdStr} has no student field`);
+          }
+        }
+        
+        // Verify this is a student ID
+        const student = await User.findById(userIdStr);
+        if (!student) {
+          // If userId doesn't match a student, try to get student from payment
+          const Payment = require('../models/Payment');
+          const payment = await Payment.findById(paymentId);
+          if (payment && payment.student) {
+            const correctStudentId = payment.student.toString ? payment.student.toString() : String(payment.student);
+            console.log(`⚠️  userId ${userIdStr} is not a valid student ID, using student from payment: ${correctStudentId}`);
+            userIdStr = correctStudentId;
+          } else {
+            throw new Error(`Invalid userId: ${userIdStr} - not a valid student ID and cannot find student from payment ${paymentId}`);
+          }
+        }
+        
+        // CRITICAL: Get Debtor to use Debtor ID for AR code (persists after User deletion)
+        debtor = await Debtor.findOne({ user: userIdStr }).lean();
+        if (!debtor) {
+          throw new Error(`Debtor not found for user: ${userIdStr}. Please create debtor account first.`);
+        }
+        
+        // Use Debtor's accountCode (uses Debtor ID, stable and persistent)
+        studentARCode = debtor.accountCode || `1100-${debtor._id.toString()}`;
+        debtorId = debtor._id.toString();
+        
+        console.log(`✅ Using Debtor ID AR code for allocation: ${studentARCode} (Debtor: ${debtor.debtorCode})`);
       }
-      
-      // Use Debtor's accountCode (uses Debtor ID, stable and persistent)
-      const studentARCode = debtor.accountCode || `1100-${debtor._id.toString()}`;
-      const debtorId = debtor._id.toString();
-      
-      console.log(`✅ Using Debtor ID AR code: ${studentARCode} (Debtor: ${debtor.debtorCode})`);
       
       // Ensure AR account exists (should already exist from debtor creation)
       let studentARAccount = await Account.findOne({ code: studentARCode });

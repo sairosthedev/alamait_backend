@@ -968,21 +968,29 @@ exports.processPayment = async (req, res) => {
             }
         }
         
-        // 🆕 CRITICAL FIX: Final validation - ensure payment matches debtor after save
+        // 🆕 CRITICAL FIX: Final validation - ensure payment matches debtor and carries debtor AR account code
         if (debtor && debtor.user) {
             const debtorUserId = debtor.user.toString();
             const paymentNeedsUpdate = (
                 payment.user?.toString() !== debtorUserId ||
                 payment.student?.toString() !== debtorUserId
             );
-            
+
             if (paymentNeedsUpdate) {
                 console.log(`🔄 Final sync: Updating payment to match debtor user ID`);
                 payment.user = debtor.user;
                 payment.student = debtor.user;
-                await payment.save();
-                console.log(`✅ Payment synchronized with debtor`);
             }
+
+            // Always stamp debtor AR account on the payment so allocation / advance logic can use it
+            if (debtor.accountCode) {
+                payment.debtorAccountCode = debtor.accountCode;
+                payment.accountCode = debtor.accountCode;
+                console.log(`✅ Stamped payment with debtor AR account code: ${debtor.accountCode}`);
+            }
+
+            await payment.save();
+            console.log(`✅ Payment synchronized with debtor and AR account code`);
         }
         
         // Send immediate success response; heavy processing continues in background
@@ -1012,7 +1020,9 @@ exports.processPayment = async (req, res) => {
                 adminFee: payment.adminFee || 0,
                 deposit: payment.deposit || 0,
                 method: payment.method,
-                date: payment.date
+                date: payment.date,
+                // 🆕 Pass through AR account so advance creation can safely use 1100-{debtorId}
+                debtorAccountCode: payment.debtorAccountCode || payment.accountCode
             };
             
             console.log('📝 Allocation data:', allocationData);
