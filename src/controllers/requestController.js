@@ -1569,6 +1569,33 @@ exports.updateRequest = async (req, res) => { //n
             }
         }
 
+        // Self-heal mismatched approved requests (e.g. amount changed but items/totals still stale).
+        if (request.financeStatus === 'approved') {
+            const amountNow = Number(request.amount);
+            const approvedNow = Number(request.approvedAmount);
+            const totalNow = Number(request.totalEstimatedCost);
+            const needsSync =
+                Number.isFinite(amountNow) &&
+                amountNow >= 0 &&
+                (
+                    !Number.isFinite(approvedNow) ||
+                    !Number.isFinite(totalNow) ||
+                    Math.abs(approvedNow - amountNow) > 0.0001 ||
+                    Math.abs(totalNow - amountNow) > 0.0001
+                );
+
+            if (needsSync) {
+                applyApprovedAmountToRequestItems(request, amountNow);
+                request.approvedAmount = amountNow;
+                request.markModified('items');
+                request.markModified('totalEstimatedCost');
+                request.markModified('amount');
+                request.markModified('approvedAmount');
+                syncExpensesAfterSave = true;
+                changes.push(`approved request amounts auto-synced to: ${amountNow}`);
+            }
+        }
+
         // If items were updated, mark the request as modified to trigger pre-save hooks
         if (itemsUpdated) {
             request.markModified('items');
