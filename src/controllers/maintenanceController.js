@@ -376,7 +376,55 @@ exports.updateMaintenance = async (req, res) => {
             req.params.id,
             updatePayload,
             { new: true, runValidators: true }
-        );
+        )
+            .populate('requestedBy', 'firstName lastName email')
+            .populate('residence', 'name');
+
+        // Trigger finance approval emails when this generic update endpoint is used to approve.
+        const isFinanceApprovalTransition =
+            String(financeStatus || '').toLowerCase() === 'approved' &&
+            String(maintenance.financeStatus || '').toLowerCase() !== 'approved';
+        if (isFinanceApprovalTransition) {
+            try {
+                const approvedValue = Number.isFinite(parsedAmount) && parsedAmount >= 0
+                    ? parsedAmount
+                    : Number(updatedMaintenance.amount || 0);
+                const requestedValue = Number(maintenance.amount || approvedValue || 0);
+                const pseudoRequest = {
+                    _id: updatedMaintenance._id,
+                    title: updatedMaintenance.issue || 'Maintenance Request',
+                    issue: updatedMaintenance.issue,
+                    description: updatedMaintenance.description,
+                    residence: updatedMaintenance.residence,
+                    submittedBy: updatedMaintenance.requestedBy,
+                    amount: approvedValue,
+                    approvedAmount: approvedValue,
+                    totalEstimatedCost: approvedValue,
+                    items: [
+                        {
+                            description: updatedMaintenance.issue || 'Maintenance',
+                            quantity: 1,
+                            unitCost: approvedValue,
+                            totalCost: approvedValue,
+                            estimatedCost: approvedValue
+                        }
+                    ]
+                };
+
+                EmailNotificationService.sendFinanceApprovalForAdminRequest(
+                    pseudoRequest,
+                    true,
+                    '',
+                    req.user,
+                    requestedValue,
+                    approvedValue
+                ).catch((emailErr) => {
+                    console.error('Failed to send finance approval email from updateMaintenance:', emailErr);
+                });
+            } catch (notifyError) {
+                console.error('Failed to build finance approval email payload in updateMaintenance:', notifyError);
+            }
+        }
 
         res.status(200).json(updatedMaintenance);
     } catch (error) {
