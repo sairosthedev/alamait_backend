@@ -498,6 +498,43 @@ exports.approveMaintenance = async (req, res) => {
             });
         }
 
+        // Also notify admin/CEO with requested vs approved amounts, similar to request approval flow.
+        try {
+            const pseudoRequest = {
+                _id: updatedMaintenance._id,
+                title: updatedMaintenance.issue || 'Maintenance Request',
+                issue: updatedMaintenance.issue,
+                description: updatedMaintenance.description,
+                residence: updatedMaintenance.residence,
+                submittedBy: updatedMaintenance.requestedBy,
+                items: [
+                    {
+                        description: updatedMaintenance.issue || 'Maintenance',
+                        quantity: 1,
+                        unitCost: approvalAmount,
+                        totalCost: approvalAmount,
+                        estimatedCost: approvalAmount
+                    }
+                ],
+                amount: approvalAmount,
+                approvedAmount: approvalAmount,
+                totalEstimatedCost: approvalAmount
+            };
+
+            EmailNotificationService.sendFinanceApprovalForAdminRequest(
+                pseudoRequest,
+                true,
+                notes || '',
+                req.user,
+                before?.amount || approvalAmount,
+                approvalAmount
+            ).catch((notifyErr) => {
+                console.error('Failed to send finance approval admin/ceo notification for maintenance:', notifyErr);
+            });
+        } catch (notifyBuildError) {
+            console.error('Failed to build finance approval admin/ceo notification payload for maintenance:', notifyBuildError);
+        }
+
         res.status(200).json({
             message: 'Maintenance request approved successfully',
             maintenance: updatedMaintenance,
