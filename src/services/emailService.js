@@ -36,14 +36,9 @@ class EmailService {
             console.warn('⚠️ Gmail configuration missing - EMAIL_USER or EMAIL_APP_PASSWORD not set');
         }
 
-        // Initialize SendGrid
-        if (process.env.SENDGRID_API_KEY) {
-            sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-            this.sendGridConfigured = true;
-            console.log('✅ SendGrid configured successfully');
-        } else {
-            console.warn('⚠️ SendGrid API key not found - SENDGRID_API_KEY environment variable required');
-        }
+        // SendGrid disabled for now: force Gmail-only sending.
+        this.sendGridConfigured = false;
+        console.log('📧 SendGrid disabled - using Gmail only');
     }
 
     async sendEmail(options) {
@@ -52,82 +47,7 @@ class EmailService {
         console.log(`📧 Attempting to send email to ${to}`);
         console.log(`📧 Environment: ${process.env.NODE_ENV}`);
 
-        // For production, try SendGrid first
-        if (process.env.NODE_ENV === 'production' && this.sendGridConfigured) {
-            try {
-                console.log(`📧 Trying SendGrid first (production)...`);
-                
-                // Validate SendGrid configuration
-                if (!process.env.SENDGRID_API_KEY) {
-                    throw new Error('SendGrid API key not configured');
-                }
-                
-                const msg = {
-                    to: to,
-                    from: {
-                        email: process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER || 'noreply@alamait.com',
-                        name: 'Alamait Student Accommodation'
-                    },
-                    replyTo: {
-                        email: process.env.SENDGRID_REPLY_TO || 'support@alamait.com',
-                        name: 'Alamait Support Team'
-                    },
-                    subject: subject,
-                    text: text,
-                    html: html
-                };
-
-                // Add attachments if provided (FIXED VERSION)
-                if (attachments && attachments.length > 0) {
-                    console.log(`📎 Processing ${attachments.length} attachments...`);
-                    msg.attachments = attachments.map((att, index) => {
-                        try {
-                            // Safely handle attachment content
-                            let content = '';
-                            if (att.content) {
-                                if (typeof att.content === 'string') {
-                                    content = Buffer.from(att.content).toString('base64');
-                                } else if (Buffer.isBuffer(att.content)) {
-                                    content = att.content.toString('base64');
-                                } else {
-                                    content = Buffer.from(att.content).toString('base64');
-                                }
-                            } else {
-                                console.log(`⚠️ Attachment ${index} has no content, skipping`);
-                                return null;
-                            }
-                            
-                            return {
-                                content: content,
-                                filename: att.filename || `attachment_${index}`,
-                                type: att.contentType || 'application/octet-stream',
-                                disposition: 'attachment'
-                            };
-                        } catch (attError) {
-                            console.error(`❌ Error processing attachment ${index}:`, attError.message);
-                            return null;
-                        }
-                    }).filter(att => att !== null); // Remove null attachments
-                    
-                    console.log(`📎 Processed ${msg.attachments.length} valid attachments`);
-                }
-
-                await sgMail.send(msg);
-                console.log(`✅ Email sent via SendGrid to ${to}`);
-                return true;
-                
-            } catch (error) {
-                console.error(`❌ SendGrid failed for ${to}:`, {
-                    message: error.message,
-                    code: error.code,
-                    response: error.response?.body || error.response,
-                    stack: error.stack
-                });
-                console.log(`📧 Falling back to Gmail...`);
-            }
-        }
-
-        // Try Gmail (for local development or as fallback)
+        // Gmail-only mode
         if (this.gmailTransporter) {
             try {
                 console.log(`📧 Trying Gmail SMTP first...`);
@@ -174,90 +94,12 @@ class EmailService {
                 
             } catch (error) {
                 console.error(`❌ Gmail failed for ${to}:`, error.message);
-                console.log(`📧 Falling back to SendGrid...`);
+                console.log(`📧 Gmail send failed in Gmail-only mode`);
             }
         } else {
-            console.log(`📧 Gmail not configured, trying SendGrid...`);
+            console.log(`📧 Gmail not configured`);
         }
-
-        // Fallback to SendGrid
-        if (this.sendGridConfigured) {
-            try {
-                console.log(`📧 Trying SendGrid...`);
-                
-                // Validate SendGrid configuration
-                if (!process.env.SENDGRID_API_KEY) {
-                    throw new Error('SendGrid API key not configured');
-                }
-                
-                const msg = {
-                    to: to,
-                    from: {
-                        email: process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER || 'noreply@alamait.com',
-                        name: 'Alamait Student Accommodation'
-                    },
-                    replyTo: {
-                        email: process.env.SENDGRID_REPLY_TO || 'support@alamait.com',
-                        name: 'Alamait Support Team'
-                    },
-                    subject: subject,
-                    text: text,
-                    html: html
-                };
-
-                // Add attachments if provided (FIXED VERSION)
-                if (attachments && attachments.length > 0) {
-                    console.log(`📎 Processing ${attachments.length} attachments...`);
-                    msg.attachments = attachments.map((att, index) => {
-                        try {
-                            // Safely handle attachment content
-                            let content = '';
-                            if (att.content) {
-                                if (typeof att.content === 'string') {
-                                    content = Buffer.from(att.content).toString('base64');
-                                } else if (Buffer.isBuffer(att.content)) {
-                                    content = att.content.toString('base64');
-                                } else {
-                                    content = Buffer.from(att.content).toString('base64');
-                                }
-                            } else {
-                                console.log(`⚠️ Attachment ${index} has no content, skipping`);
-                                return null;
-                            }
-                            
-                            return {
-                                content: content,
-                                filename: att.filename || `attachment_${index}`,
-                                type: att.contentType || 'application/octet-stream',
-                                disposition: 'attachment'
-                            };
-                        } catch (attError) {
-                            console.error(`❌ Error processing attachment ${index}:`, attError.message);
-                            return null;
-                        }
-                    }).filter(att => att !== null); // Remove null attachments
-                    
-                    console.log(`📎 Processed ${msg.attachments.length} valid attachments`);
-                }
-
-                await sgMail.send(msg);
-                console.log(`✅ Email sent via SendGrid to ${to}`);
-                return true;
-                
-            } catch (error) {
-                console.error(`❌ SendGrid failed for ${to}:`, {
-                    message: error.message,
-                    code: error.code,
-                    response: error.response?.body || error.response,
-                    stack: error.stack
-                });
-            }
-        } else {
-            console.log(`📧 SendGrid not configured`);
-        }
-
-        // Both services failed
-        throw new Error('All email services failed - Gmail and SendGrid both unavailable');
+        throw new Error('Email service failed - Gmail unavailable');
     }
 
     isGmailReady() {
