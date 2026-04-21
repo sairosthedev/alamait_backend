@@ -920,9 +920,27 @@ requestSchema.pre('save', function(next) {
     // Calculate total cost for each item and overall total
     if (this.items && this.items.length > 0) {
         this.items.forEach(item => {
-            // Calculate total cost for this item (unitCost × quantity)
-            if (item.unitCost && item.quantity) {
-                item.totalCost = item.unitCost * item.quantity;
+            const qty = Number(item.quantity || 1) || 1;
+            const hasTotalCost = Number.isFinite(Number(item.totalCost));
+            const hasEstimatedCost = Number.isFinite(Number(item.estimatedCost));
+            const hasUnitCost = Number.isFinite(Number(item.unitCost));
+
+            // Priority: explicit totalCost -> estimatedCost -> unitCost*qty
+            // This prevents finance updates to totalCost from being overwritten by stale unitCost.
+            if (hasTotalCost) {
+                const total = Number(item.totalCost);
+                item.totalCost = total;
+                item.estimatedCost = total;
+                item.unitCost = qty > 0 ? total / qty : total;
+            } else if (hasEstimatedCost) {
+                const total = Number(item.estimatedCost);
+                item.totalCost = total;
+                item.estimatedCost = total;
+                item.unitCost = qty > 0 ? total / qty : total;
+            } else if (hasUnitCost) {
+                const total = Number(item.unitCost) * qty;
+                item.totalCost = total;
+                item.estimatedCost = total;
             }
         });
         
