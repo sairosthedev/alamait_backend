@@ -70,11 +70,10 @@ class EmailNotificationService {
 			return this.getRequestPageUrl(requestId, email);
 		}
 		const apiBase = (
-			process.env.FRONTEND_URL ||
-			process.env.CLIENT_URL ||
+			process.env.MAGIC_LOGIN_BASE_URL ||
 			process.env.BACKEND_URL ||
 			process.env.API_BASE_URL ||
-			'https://alamait.vercel.app'
+			'http://localhost:5000'
 		).replace(/\/$/, '');
 		const magicToken = jwt.sign(
 			{
