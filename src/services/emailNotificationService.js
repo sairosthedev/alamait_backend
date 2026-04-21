@@ -69,7 +69,13 @@ class EmailNotificationService {
 		if (!email || !process.env.JWT_SECRET) {
 			return this.getRequestPageUrl(requestId, email);
 		}
-		const apiBase = (process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:5000').replace(/\/$/, '');
+		const apiBase = (
+			process.env.FRONTEND_URL ||
+			process.env.CLIENT_URL ||
+			process.env.BACKEND_URL ||
+			process.env.API_BASE_URL ||
+			'https://alamait.vercel.app'
+		).replace(/\/$/, '');
 		const magicToken = jwt.sign(
 			{
 				purpose: 'magic_request_login',
@@ -1417,6 +1423,44 @@ class EmailNotificationService {
 		const departmentInfo = formatValue(request.department, 'Not specified');
 		const requestAmount = this.getRequestAmount(request);
 		const requestUrl = this.getMagicRequestLoginUrl(request._id, submittedBy?.email);
+		const requestItems = Array.isArray(request.items) ? request.items : [];
+		const requestItemsTableHtml = requestItems.length > 0 ? `
+			<div style="margin: 18px 0;">
+				<h3 style="color: #333; margin: 0 0 10px 0; font-size: 16px;">Request Items</h3>
+				<table style="width: 100%; border-collapse: collapse; background-color: #fff; border: 1px solid #dee2e6; border-radius: 8px; overflow: hidden;">
+					<thead>
+						<tr style="background-color: #f8f9fa;">
+							<th style="padding: 10px; text-align: left; border-bottom: 1px solid #dee2e6;">Item</th>
+							<th style="padding: 10px; text-align: center; border-bottom: 1px solid #dee2e6;">Qty</th>
+							<th style="padding: 10px; text-align: right; border-bottom: 1px solid #dee2e6;">Unit Cost</th>
+							<th style="padding: 10px; text-align: right; border-bottom: 1px solid #dee2e6;">Total</th>
+						</tr>
+					</thead>
+					<tbody>
+						${requestItems.map((item, index) => {
+							const itemName = item.title || item.description || `Item ${index + 1}`;
+							const qty = Number(item.quantity || 1);
+							const unitCost = Number(item.unitCost || item.estimatedCost || 0);
+							const totalCost = Number(item.totalCost || (unitCost * qty));
+							return `
+								<tr style="border-bottom: 1px solid #f1f3f5;">
+									<td style="padding: 10px; color: #333;">${itemName}</td>
+									<td style="padding: 10px; text-align: center; color: #333;">${qty}</td>
+									<td style="padding: 10px; text-align: right; color: #333;">$${unitCost.toFixed(2)}</td>
+									<td style="padding: 10px; text-align: right; color: #333; font-weight: 600;">$${totalCost.toFixed(2)}</td>
+								</tr>
+							`;
+						}).join('')}
+					</tbody>
+					<tfoot>
+						<tr style="background-color: #f8f9fa;">
+							<td colspan="3" style="padding: 10px; text-align: right; font-weight: 700; color: #333;">Total Requested Amount:</td>
+							<td style="padding: 10px; text-align: right; font-weight: 700; color: #28a745;">$${requestAmount.toFixed(2)}</td>
+						</tr>
+					</tfoot>
+				</table>
+			</div>
+		` : '';
 		
 		const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -1438,6 +1482,7 @@ class EmailNotificationService {
 							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
 							<li><strong>Created Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
 						</ul>
+						${requestItemsTableHtml}
 						<p><strong>Approval Flow:</strong> This admin request is now awaiting <strong>Finance approval</strong> first, then <strong>CEO approval</strong>.</p>
 						<p><strong>Current Status:</strong> Pending Finance and CEO approvals</p>
 						<p><strong>Action Required:</strong> Please review and process this ${requestTypeDisplay.toLowerCase()} for approval.</p>
@@ -1852,6 +1897,39 @@ class EmailNotificationService {
 			const requestUrl = this.getMagicRequestLoginUrl(request._id, adminRecipientEmail || request.submittedBy?.email);
 			const requested = Number.isFinite(Number(requestedAmount)) ? Number(requestedAmount) : this.getRequestAmount(request);
 			const approvedVal = Number.isFinite(Number(approvedAmount)) ? Number(approvedAmount) : this.getRequestAmount(request);
+			const items = Array.isArray(request.items) ? request.items : [];
+
+			const itemsTableHtml = items.length > 0 ? `
+				<div style="margin: 20px 0;">
+					<h3 style="color: #333; margin-bottom: 12px;">Request Items</h3>
+					<table style="width: 100%; border-collapse: collapse; background-color: #fff; border: 1px solid #dee2e6; border-radius: 8px; overflow: hidden;">
+						<thead>
+							<tr style="background-color: #f8f9fa;">
+								<th style="padding: 10px; text-align: left; border-bottom: 1px solid #dee2e6;">Item</th>
+								<th style="padding: 10px; text-align: center; border-bottom: 1px solid #dee2e6;">Qty</th>
+								<th style="padding: 10px; text-align: right; border-bottom: 1px solid #dee2e6;">Unit Cost</th>
+								<th style="padding: 10px; text-align: right; border-bottom: 1px solid #dee2e6;">Total</th>
+							</tr>
+						</thead>
+						<tbody>
+							${items.map((item, index) => {
+								const name = item.title || item.description || `Item ${index + 1}`;
+								const qty = Number(item.quantity || 1);
+								const unit = Number(item.unitCost || item.estimatedCost || 0);
+								const total = Number(item.totalCost || (unit * qty));
+								return `
+									<tr style="border-bottom: 1px solid #f1f3f5;">
+										<td style="padding: 10px; color: #333;">${name}</td>
+										<td style="padding: 10px; text-align: center; color: #333;">${qty}</td>
+										<td style="padding: 10px; text-align: right; color: #333;">$${unit.toFixed(2)}</td>
+										<td style="padding: 10px; text-align: right; color: #333; font-weight: 600;">$${total.toFixed(2)}</td>
+									</tr>
+								`;
+							}).join('')}
+						</tbody>
+					</table>
+				</div>
+			` : '';
 
 			const content = `
 				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Finance has ${approved ? 'approved' : 'rejected'} an admin request.</p>
@@ -1867,6 +1945,7 @@ class EmailNotificationService {
 					</ul>
 					${notes ? `<p style="margin-top:12px;"><strong>Finance Notes:</strong> ${notes}</p>` : ''}
 				</div>
+				${itemsTableHtml}
 			`;
 
 			const emailHtml = this.getBaseEmailTemplate(
