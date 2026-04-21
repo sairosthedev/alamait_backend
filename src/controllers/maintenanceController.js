@@ -1,4 +1,5 @@
 const Maintenance = require('../models/Maintenance');
+const Request = require('../models/Request');
 const Expense = require('../models/finance/Expense');
 const { generateUniqueId } = require('../utils/idGenerator');
 const EmailNotificationService = require('../services/emailNotificationService');
@@ -229,6 +230,47 @@ exports.createMaintenance = async (req, res) => {
 exports.updateMaintenance = async (req, res) => {
     try {
         const { financeStatus, amount, paymentMethod, paymentIcon, dateApproved } = req.body;
+        const parsedAmount = amount !== undefined && amount !== null ? Number(amount) : null;
+
+        // Compatibility path: some clients send Request IDs to /api/maintenance/:id.
+        // If this ID belongs to a Request and an amount is provided, keep all request amounts in sync.
+        if (Number.isFinite(parsedAmount) && parsedAmount >= 0) {
+            const requestDoc = await Request.findById(req.params.id);
+            if (requestDoc) {
+                requestDoc.amount = parsedAmount;
+                requestDoc.approvedAmount = parsedAmount;
+                requestDoc.totalEstimatedCost = parsedAmount;
+
+                if (Array.isArray(requestDoc.items) && requestDoc.items.length > 0) {
+                    if (requestDoc.items.length === 1) {
+                        const item = requestDoc.items[0];
+                        const qty = Number(item.quantity || 1) || 1;
+                        item.totalCost = parsedAmount;
+                        item.estimatedCost = parsedAmount;
+                        item.unitCost = parsedAmount / qty;
+                    } else {
+                        const currentTotal = requestDoc.items.reduce((sum, item) => sum + Number(item.totalCost || item.estimatedCost || 0), 0);
+                        let running = 0;
+                        requestDoc.items.forEach((item, idx) => {
+                            const qty = Number(item.quantity || 1) || 1;
+                            const base = Number(item.totalCost || item.estimatedCost || 0);
+                            let newTotal = currentTotal > 0
+                                ? (idx === requestDoc.items.length - 1 ? parsedAmount - running : (base / currentTotal) * parsedAmount)
+                                : (idx === requestDoc.items.length - 1 ? parsedAmount - running : parsedAmount / requestDoc.items.length);
+                            if (newTotal < 0) newTotal = 0;
+                            item.totalCost = newTotal;
+                            item.estimatedCost = newTotal;
+                            item.unitCost = newTotal / qty;
+                            running += newTotal;
+                        });
+                    }
+                    requestDoc.markModified('items');
+                }
+
+                await requestDoc.save();
+                return res.status(200).json(requestDoc);
+            }
+        }
         
         // Check if financeStatus is being updated to 'approved'
         const maintenance = await Maintenance.findById(req.params.id);
@@ -236,38 +278,45 @@ exports.updateMaintenance = async (req, res) => {
             return res.status(404).json({ message: 'Maintenance request not found' });
         }
 
-        // If financeStatus is being set to 'approved' and amount is provided, create an expense
+        // If financeStatus is being set to 'approved' and amount is provided, upsert expense:
+        // update existing linked expense if present, otherwise create one.
         if (financeStatus === 'approved' && amount && amount > 0) {
             try {
-                // Delete any existing expense for this maintenance request
-                await Expense.deleteMany({ maintenanceRequestId: maintenance._id });
-
-                // Generate unique expense ID
-                const expenseId = await generateUniqueId('EXP');
-
-                // Create expense data
                 const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
-                const expenseData = {
-                    expenseId,
-                    residence: maintenance.residence,
-                    category: 'Maintenance',
-                    amount: parseFloat(amount),
-                    description: `Maintenance: ${maintenance.issue} - ${maintenance.description}`,
-                    expenseDate: approvalDate,
-                    paymentStatus: 'Pending',
-                    createdBy: req.user._id,
-                    period: 'monthly',
-                    paymentMethod: paymentMethod || maintenance.paymentMethod || 'Bank Transfer',
-                    paymentIcon: paymentIcon || maintenance.paymentIcon,
-                    maintenanceRequestId: maintenance._id,
-                    notes: `Converted from maintenance request${maintenance.provider ? ` - Provider: ${maintenance.provider}` : ''}`
-                };
-
-                // Create the expense
-                const newExpense = new Expense(expenseData);
-                await newExpense.save();
-
-                console.log(`Expense created for maintenance request ${maintenance._id}: ${expenseId}`);
+                const existingExpense = await Expense.findOne({ maintenanceRequestId: maintenance._id }).sort({ createdAt: -1 });
+                if (existingExpense) {
+                    existingExpense.residence = maintenance.residence;
+                    existingExpense.category = 'Maintenance';
+                    existingExpense.amount = parseFloat(amount);
+                    existingExpense.description = `Maintenance: ${maintenance.issue} - ${maintenance.description}`;
+                    existingExpense.expenseDate = approvalDate;
+                    existingExpense.paymentMethod = paymentMethod || maintenance.paymentMethod || existingExpense.paymentMethod || 'Bank Transfer';
+                    existingExpense.paymentIcon = paymentIcon || maintenance.paymentIcon || existingExpense.paymentIcon;
+                    existingExpense.notes = `Updated from maintenance request${maintenance.provider ? ` - Provider: ${maintenance.provider}` : ''}`;
+                    existingExpense.updatedBy = req.user._id;
+                    await existingExpense.save();
+                    console.log(`Expense updated for maintenance request ${maintenance._id}: ${existingExpense.expenseId}`);
+                } else {
+                    const expenseId = await generateUniqueId('EXP');
+                    const expenseData = {
+                        expenseId,
+                        residence: maintenance.residence,
+                        category: 'Maintenance',
+                        amount: parseFloat(amount),
+                        description: `Maintenance: ${maintenance.issue} - ${maintenance.description}`,
+                        expenseDate: approvalDate,
+                        paymentStatus: 'Pending',
+                        createdBy: req.user._id,
+                        period: 'monthly',
+                        paymentMethod: paymentMethod || maintenance.paymentMethod || 'Bank Transfer',
+                        paymentIcon: paymentIcon || maintenance.paymentIcon,
+                        maintenanceRequestId: maintenance._id,
+                        notes: `Converted from maintenance request${maintenance.provider ? ` - Provider: ${maintenance.provider}` : ''}`
+                    };
+                    const newExpense = new Expense(expenseData);
+                    await newExpense.save();
+                    console.log(`Expense created for maintenance request ${maintenance._id}: ${expenseId}`);
+                }
             } catch (expenseError) {
                 console.error('Error creating expense for maintenance:', expenseError);
                 // Continue with maintenance update even if expense creation fails

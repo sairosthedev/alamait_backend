@@ -66,6 +66,43 @@ function mapRequestForStudent(request) {
     return mappedRequest;
 }
 
+function normalizeRequestAmounts(request) {
+    const approved = Number(request?.approvedAmount);
+    const amount = Number(request?.amount);
+    const estimated = Number(request?.totalEstimatedCost);
+    const effectiveAmount =
+        Number.isFinite(amount) && amount >= 0
+            ? amount
+            : Number.isFinite(approved) && approved >= 0
+                ? approved
+                : Number.isFinite(estimated) && estimated >= 0
+                    ? estimated
+                    : 0;
+
+    const normalized = {
+        ...request,
+        effectiveAmount,
+        amount: effectiveAmount,
+        approvedAmount: effectiveAmount,
+        totalEstimatedCost: effectiveAmount
+    };
+
+    if (Array.isArray(normalized.items) && normalized.items.length > 0) {
+        if (normalized.items.length === 1) {
+            const item = normalized.items[0];
+            const qty = Number(item.quantity || 1) || 1;
+            normalized.items = [{
+                ...item,
+                totalCost: effectiveAmount,
+                estimatedCost: effectiveAmount,
+                unitCost: effectiveAmount / qty
+            }];
+        }
+    }
+
+    return normalized;
+}
+
 function applyApprovedAmountToRequestItems(request, approvedAmount) {
     const parsed = Number(approvedAmount);
     if (!Number.isFinite(parsed) || parsed < 0) return;
@@ -214,10 +251,13 @@ exports.getAllRequests = async (req, res) => {
         // Otherwise use countDocuments with same query
         const total = await Request.countDocuments(query);
         
+        // Normalize amounts for list preview so finance-approved amount is reflected consistently.
+        const normalizedRequests = requests.map((request) => normalizeRequestAmounts(request));
+
         // Map statuses for students
-        let mappedRequests = requests;
+        let mappedRequests = normalizedRequests;
         if (user.role === 'student') {
-            mappedRequests = requests.map(request => mapRequestForStudent(request));
+            mappedRequests = normalizedRequests.map(request => mapRequestForStudent(request));
         }
         
         res.status(200).json({
@@ -267,9 +307,9 @@ exports.getRequestById = async (req, res) => {
         }
 
         // Map status for students
-        let mappedRequest = request;
+        let mappedRequest = normalizeRequestAmounts(request.toObject());
         if (user.role === 'student') {
-            mappedRequest = mapRequestForStudent(request);
+            mappedRequest = mapRequestForStudent(mappedRequest);
         }
 
         res.status(200).json({ request: mappedRequest });
