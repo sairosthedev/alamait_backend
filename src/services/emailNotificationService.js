@@ -249,7 +249,7 @@ class EmailNotificationService {
                             <tfoot>
                                 <tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
                                     <td colspan="3" style="padding: 12px; text-align: right; font-weight: 600; color: #495057;">Total Amount:</td>
-                                    <td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</td>
+                                    <td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${this.getRequestAmount(request).toFixed(2)}</td>
                                 </tr>
                             </tfoot>
                         </table>
@@ -264,7 +264,7 @@ class EmailNotificationService {
                         <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545;">
                             <p style="color: #495057; margin: 0; font-size: 14px;">
                                 <strong>Request Type:</strong> Salary Request<br>
-                                <strong>Total Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}<br>
+                                <strong>Total Amount:</strong> $${this.getRequestAmount(request).toFixed(2)}<br>
                                 <strong>Description:</strong> ${request.description || 'No detailed breakdown available'}
                             </p>
                     </div>
@@ -290,7 +290,7 @@ class EmailNotificationService {
                         </div>
                         <div>
                             <strong style="color: #495057;">💰 Total Amount:</strong><br>
-                            <span style="color: #dc3545; font-size: 16px; font-weight: 600;">$${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</span>
+                            <span style="color: #dc3545; font-size: 16px; font-weight: 600;">$${this.getRequestAmount(request).toFixed(2)}</span>
                         </div>
                         <div>
                             <strong style="color: #495057;">👤 Submitted By:</strong><br>
@@ -1751,7 +1751,7 @@ class EmailNotificationService {
 						</div>
 						<div>
 							<strong style="color: #495057;">💰 Amount:</strong><br>
-							<span style="color: #333; font-size: 14px;">$${request.amount?.toFixed(2) || '0.00'}</span>
+							<span style="color: #333; font-size: 14px;">$${this.getRequestAmount(request).toFixed(2)}</span>
 						</div>
 					</div>
 					${approvalReason ? `

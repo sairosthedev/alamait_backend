@@ -1077,6 +1077,14 @@ exports.createRequest = async (req, res) => {
             if (isNaN(requestData.totalEstimatedCost)) {
                 requestData.totalEstimatedCost = 0;
             }
+
+            // Keep amount aligned with itemized total when amount is not explicitly provided.
+            const parsedAmountInput = Number(amount);
+            if (!Number.isFinite(parsedAmountInput) || parsedAmountInput < 0) {
+                requestData.amount = requestData.totalEstimatedCost;
+            } else {
+                requestData.amount = parsedAmountInput;
+            }
         }
         
         // Add images if provided
