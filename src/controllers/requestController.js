@@ -1554,6 +1554,21 @@ exports.updateRequest = async (req, res) => { //n
             Object.assign(request, updates);
         }
 
+        // Keep amount, totalEstimatedCost, and approvedAmount aligned when amount is edited.
+        if (updateData.amount !== undefined && updateData.amount !== null) {
+            const parsedAmount = Number(updateData.amount);
+            if (Number.isFinite(parsedAmount) && parsedAmount >= 0) {
+                applyApprovedAmountToRequestItems(request, parsedAmount);
+                request.approvedAmount = parsedAmount;
+                request.markModified('items');
+                request.markModified('totalEstimatedCost');
+                request.markModified('amount');
+                request.markModified('approvedAmount');
+                syncExpensesAfterSave = true;
+                changes.push(`amount synchronized across fields to: ${parsedAmount}`);
+            }
+        }
+
         // If items were updated, mark the request as modified to trigger pre-save hooks
         if (itemsUpdated) {
             request.markModified('items');
@@ -1581,9 +1596,12 @@ exports.updateRequest = async (req, res) => { //n
         // If approved amounts changed, sync linked expenses for statements
         if (updateData.approvedAmount !== undefined && updateData.approvedAmount !== null) {
             applyApprovedAmountToRequestItems(request, updateData.approvedAmount);
+            request.approvedAmount = Number(updateData.approvedAmount);
             request.markModified('items');
             request.markModified('totalEstimatedCost');
             request.markModified('amount');
+            request.markModified('approvedAmount');
+            await request.save();
         }
 
         if (syncExpensesAfterSave || updateData.approvedAmount !== undefined || updateData.amount !== undefined) {
