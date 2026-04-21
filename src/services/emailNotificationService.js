@@ -82,7 +82,7 @@ class EmailNotificationService {
 				requestId: requestId ? String(requestId) : null
 			},
 			process.env.JWT_SECRET,
-			{ expiresIn: '30m' }
+			{ expiresIn: '1h' }
 		);
 		return `${apiBase}/api/auth/magic-login?token=${encodeURIComponent(magicToken)}`;
 	}
