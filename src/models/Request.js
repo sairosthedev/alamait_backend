@@ -879,6 +879,44 @@ requestSchema.pre('validate', function(next) {
 
 // Pre-save middleware to update request history and calculate total cost
 requestSchema.pre('save', function(next) {
+    // If amount was edited directly, keep totals and item costs in sync.
+    if (this.isModified('amount')) {
+        const parsedAmount = Number(this.amount);
+        if (Number.isFinite(parsedAmount) && parsedAmount >= 0) {
+            if (Array.isArray(this.items) && this.items.length > 0) {
+                if (this.items.length === 1) {
+                    const item = this.items[0];
+                    const qty = Number(item.quantity || 1) || 1;
+                    item.totalCost = parsedAmount;
+                    item.estimatedCost = parsedAmount;
+                    item.unitCost = parsedAmount / qty;
+                } else {
+                    const currentTotal = this.items.reduce((sum, item) => sum + Number(item.totalCost || item.estimatedCost || 0), 0);
+                    let running = 0;
+                    this.items.forEach((item, idx) => {
+                        const qty = Number(item.quantity || 1) || 1;
+                        const baseTotal = Number(item.totalCost || item.estimatedCost || 0);
+                        let newTotal = currentTotal > 0
+                            ? (idx === this.items.length - 1
+                                ? parsedAmount - running
+                                : (baseTotal / currentTotal) * parsedAmount)
+                            : (idx === this.items.length - 1
+                                ? parsedAmount - running
+                                : parsedAmount / this.items.length);
+                        if (newTotal < 0) newTotal = 0;
+                        item.totalCost = newTotal;
+                        item.estimatedCost = newTotal;
+                        item.unitCost = newTotal / qty;
+                        running += newTotal;
+                    });
+                }
+            }
+
+            this.totalEstimatedCost = parsedAmount;
+            this.approvedAmount = parsedAmount;
+        }
+    }
+
     // Calculate total cost for each item and overall total
     if (this.items && this.items.length > 0) {
         this.items.forEach(item => {
