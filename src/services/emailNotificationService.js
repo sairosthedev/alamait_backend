@@ -1884,11 +1884,35 @@ class EmailNotificationService {
 		try {
 			const User = require('../models/User');
 			const ceoUsers = await User.find({ role: 'ceo' }).select('email firstName lastName').lean();
-			const adminRecipientEmail = request.submittedBy?.email || null;
+
+			// Resolve admin submitter email robustly
+			let adminRecipientEmail = request.submittedBy?.email || null;
+			let adminRecipientName = request.submittedBy?.firstName || 'Admin';
+			if (!adminRecipientEmail && request.submittedBy) {
+				const submitterId = typeof request.submittedBy === 'object' ? request.submittedBy._id : request.submittedBy;
+				if (submitterId) {
+					const submitterUser = await User.findById(submitterId).select('email firstName').lean();
+					if (submitterUser?.email) {
+						adminRecipientEmail = submitterUser.email;
+						adminRecipientName = submitterUser.firstName || adminRecipientName;
+					}
+				}
+			}
+
+			// Fallback: notify admin/property manager users if original submitter email is unavailable
+			let adminFallbackUsers = [];
+			if (!adminRecipientEmail) {
+				adminFallbackUsers = await User.find({ role: { $in: ['admin', 'property_manager'] } })
+					.select('email firstName lastName')
+					.lean();
+			}
+
 			const recipients = [
-				...(adminRecipientEmail ? [{ email: adminRecipientEmail, firstName: request.submittedBy?.firstName || 'Admin' }] : []),
+				...(adminRecipientEmail ? [{ email: adminRecipientEmail, firstName: adminRecipientName }] : adminFallbackUsers),
 				...ceoUsers
-			].filter(u => u?.email && u.email.includes('@'));
+			]
+				.filter(u => u?.email && u.email.includes('@'))
+				.filter((u, idx, arr) => arr.findIndex(x => x.email?.toLowerCase() === u.email?.toLowerCase()) === idx);
 
 			if (!recipients.length) return false;
 

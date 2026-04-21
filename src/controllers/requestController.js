@@ -2089,7 +2089,7 @@ exports.financeApproval = async (req, res) => {
             .populate('items.quotations.deselectedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email');
 
-        if (isApproved && updatedRequest) {
+        if ((isApproved || isRejected || isWaitlisted) && updatedRequest) {
             try {
                 const approvedAmountForEmail = Number(
                     updatedRequest.approvedAmount ??
@@ -2099,7 +2099,7 @@ exports.financeApproval = async (req, res) => {
                 );
                 await EmailNotificationService.sendFinanceApprovalForAdminRequest(
                     updatedRequest,
-                    true,
+                    isApproved,
                     notes || reason || '',
                     user,
                     requestedAmountBeforeFinanceApproval,
