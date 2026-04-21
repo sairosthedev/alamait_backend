@@ -747,8 +747,6 @@ class EmailNotificationService {
 		// Format room information
 		const roomInfo = formatValue(maintenance.room, 'Not specified');
 
-		const requestAmount = this.getRequestAmount(request);
-		const requestUrl = this.getMagicRequestLoginUrl(request._id, submittedBy?.email);
 		const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
@@ -1417,6 +1415,8 @@ class EmailNotificationService {
 		
 		// Format department information
 		const departmentInfo = formatValue(request.department, 'Not specified');
+		const requestAmount = this.getRequestAmount(request);
+		const requestUrl = this.getMagicRequestLoginUrl(request._id, submittedBy?.email);
 		
 		const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -1434,10 +1434,12 @@ class EmailNotificationService {
 							${roomInfo !== 'Not specified' ? `<li><strong>Room:</strong> ${roomInfo}</li>` : ''}
 							<li><strong>Residence:</strong> ${residenceName}</li>
 							${departmentInfo !== 'Not specified' ? `<li><strong>Department:</strong> ${departmentInfo}</li>` : ''}
-							<li><strong>Amount:</strong> $${requestAmount.toFixed(2)}</li>
+							<li><strong>Amount:</strong> $${this.getRequestAmount(request).toFixed(2)}</li>
 							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
 							<li><strong>Created Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
 						</ul>
+						<p><strong>Approval Flow:</strong> This admin request is now awaiting <strong>Finance approval</strong> first, then <strong>CEO approval</strong>.</p>
+						<p><strong>Current Status:</strong> Pending Finance and CEO approvals</p>
 						<p><strong>Action Required:</strong> Please review and process this ${requestTypeDisplay.toLowerCase()} for approval.</p>
 						<p style="margin-top: 14px;">
 							<a href="${requestUrl}" style="color:#2563eb; font-weight:600; text-decoration:none;">Open Request</a>
@@ -1827,6 +1829,66 @@ class EmailNotificationService {
 		} catch (error) {
 			console.error('❌ Error sending request sent to CEO notification:', error);
 			throw error;
+		}
+	}
+
+	/**
+	 * Send notification when finance approves/rejects an admin-created request.
+	 * Includes both the originally requested amount and the amount finance approved.
+	 */
+	static async sendFinanceApprovalForAdminRequest(request, approved, notes, approvedBy, requestedAmount, approvedAmount) {
+		try {
+			const User = require('../models/User');
+			const ceoUsers = await User.find({ role: 'ceo' }).select('email firstName lastName').lean();
+			const adminRecipientEmail = request.submittedBy?.email || null;
+			const recipients = [
+				...(adminRecipientEmail ? [{ email: adminRecipientEmail, firstName: request.submittedBy?.firstName || 'Admin' }] : []),
+				...ceoUsers
+			].filter(u => u?.email && u.email.includes('@'));
+
+			if (!recipients.length) return false;
+
+			const residenceName = await this.getResidenceName(request.residence);
+			const requestUrl = this.getMagicRequestLoginUrl(request._id, adminRecipientEmail || request.submittedBy?.email);
+			const requested = Number.isFinite(Number(requestedAmount)) ? Number(requestedAmount) : this.getRequestAmount(request);
+			const approvedVal = Number.isFinite(Number(approvedAmount)) ? Number(approvedAmount) : this.getRequestAmount(request);
+
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Finance has ${approved ? 'approved' : 'rejected'} an admin request.</p>
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid ${approved ? '#28a745' : '#dc3545'}; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📊 Approval Summary</h3>
+					<ul style="margin:0; padding-left:18px; color:#333;">
+						<li><strong>Title:</strong> ${request.title || request.issue || 'N/A'}</li>
+						<li><strong>Residence:</strong> ${residenceName}</li>
+						<li><strong>Status:</strong> ${approved ? 'Pending CEO approval' : 'Rejected by finance'}</li>
+						<li><strong>Requested Amount (Admin):</strong> $${requested.toFixed(2)}</li>
+						<li><strong>Approved Amount (Finance):</strong> $${approvedVal.toFixed(2)}</li>
+						<li><strong>Approved By (Finance):</strong> ${approvedBy?.firstName || ''} ${approvedBy?.lastName || ''}</li>
+					</ul>
+					${notes ? `<p style="margin-top:12px;"><strong>Finance Notes:</strong> ${notes}</p>` : ''}
+				</div>
+			`;
+
+			const emailHtml = this.getBaseEmailTemplate(
+				`💼 Finance ${approved ? 'Approved' : 'Rejected'} Admin Request`,
+				`Requested vs approved amounts included`,
+				content,
+				'Open Request',
+				requestUrl
+			);
+
+			for (const recipient of recipients) {
+				await sendEmail({
+					to: recipient.email,
+					subject: `Finance ${approved ? 'Approval' : 'Rejection'}: ${request.title || 'Admin Request'}`,
+					html: emailHtml
+				});
+			}
+
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending finance approval admin request email:', error);
+			return false;
 		}
 	}
 

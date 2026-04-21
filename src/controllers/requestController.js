@@ -1729,6 +1729,14 @@ exports.updateRequestStatus = async (req, res) => {
         if (!request) {
             return res.status(404).json({ message: 'Request not found' });
         }
+        const requestedAmountBeforeFinanceApproval = Number(
+            request.approvedAmount ??
+            request.amount ??
+            request.totalEstimatedCost ??
+            (Array.isArray(request.items)
+                ? request.items.reduce((sum, item) => sum + Number(item?.totalCost || item?.estimatedCost || 0), 0)
+                : 0)
+        ) || 0;
         
         // Only admins can update request status
         if (user.role !== 'admin') {
@@ -2080,6 +2088,27 @@ exports.financeApproval = async (req, res) => {
             .populate('items.quotations.selectedBy', 'firstName lastName email')
             .populate('items.quotations.deselectedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email');
+
+        if (isApproved && updatedRequest) {
+            try {
+                const approvedAmountForEmail = Number(
+                    updatedRequest.approvedAmount ??
+                    updatedRequest.amount ??
+                    updatedRequest.totalEstimatedCost ??
+                    0
+                );
+                await EmailNotificationService.sendFinanceApprovalForAdminRequest(
+                    updatedRequest,
+                    true,
+                    notes || reason || '',
+                    user,
+                    requestedAmountBeforeFinanceApproval,
+                    approvedAmountForEmail
+                );
+            } catch (notifyError) {
+                console.error('⚠️ Failed to send finance approval admin/ceo email:', notifyError.message);
+            }
+        }
         
         const response = {
             ...updatedRequest.toObject(),
