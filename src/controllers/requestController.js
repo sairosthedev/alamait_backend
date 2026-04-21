@@ -66,6 +66,61 @@ function mapRequestForStudent(request) {
     return mappedRequest;
 }
 
+function applyApprovedAmountToRequestItems(request, approvedAmount) {
+    const parsed = Number(approvedAmount);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+
+    const items = Array.isArray(request.items) ? request.items : [];
+    if (items.length === 0) {
+        request.totalEstimatedCost = parsed;
+        request.amount = parsed;
+        return;
+    }
+
+    // Single-item request: make item match approved amount directly.
+    if (items.length === 1) {
+        const item = items[0];
+        const qty = Number(item.quantity || 1) || 1;
+        item.totalCost = parsed;
+        item.estimatedCost = parsed;
+        item.unitCost = parsed / qty;
+        request.totalEstimatedCost = parsed;
+        request.amount = parsed;
+        return;
+    }
+
+    // Multi-item request: keep relative proportions.
+    const currentTotal = items.reduce((sum, it) => sum + Number(it.totalCost || it.estimatedCost || 0), 0);
+    if (currentTotal <= 0) {
+        const perItem = parsed / items.length;
+        items.forEach((item) => {
+            const qty = Number(item.quantity || 1) || 1;
+            item.totalCost = perItem;
+            item.estimatedCost = perItem;
+            item.unitCost = perItem / qty;
+        });
+        request.totalEstimatedCost = parsed;
+        request.amount = parsed;
+        return;
+    }
+
+    let running = 0;
+    items.forEach((item, idx) => {
+        const qty = Number(item.quantity || 1) || 1;
+        let newTotal = idx === items.length - 1
+            ? parsed - running
+            : (Number(item.totalCost || item.estimatedCost || 0) / currentTotal) * parsed;
+        if (newTotal < 0) newTotal = 0;
+        item.totalCost = newTotal;
+        item.estimatedCost = newTotal;
+        item.unitCost = newTotal / qty;
+        running += newTotal;
+    });
+
+    request.totalEstimatedCost = parsed;
+    request.amount = parsed;
+}
+
 // Get all requests (filtered by user role)
 exports.getAllRequests = async (req, res) => {
     try {
@@ -1340,7 +1395,7 @@ exports.updateRequest = async (req, res) => { //n
         const allowedFields = [
             'status', 'assignedTo', 'adminResponse', 'priority', 
             'category', 'description', 'title', 'selectedQuotation',
-            'estimatedCompletion', 'amount', 'financeStatus', 'dateApproved',
+            'estimatedCompletion', 'amount', 'approvedAmount', 'financeStatus', 'dateApproved',
             'items', 'requestedBy', 'deliveryLocation', 'proposedVendor'
         ];
 
@@ -1474,6 +1529,25 @@ exports.updateRequest = async (req, res) => { //n
             }
         }
 
+        // Finance/Admin can update approved amount and item amounts post-approval,
+        // then keep linked expenses in sync so statements reflect the change.
+        let syncExpensesAfterSave = false;
+        if (Array.isArray(updateData.approvedItems) &&
+            ['finance', 'finance_admin', 'finance_user', 'admin'].includes(user.role)
+        ) {
+            updateData.approvedItems.forEach(({ itemIndex, totalCost, estimatedCost }) => {
+                const idx = Number(itemIndex);
+                if (!Number.isInteger(idx) || idx < 0 || idx >= (request.items || []).length) return;
+                const newCost = Number(totalCost ?? estimatedCost);
+                if (!Number.isFinite(newCost) || newCost < 0) return;
+                request.items[idx].totalCost = newCost;
+                request.items[idx].estimatedCost = newCost;
+                itemsUpdated = true;
+                syncExpensesAfterSave = true;
+                changes.push(`approved item ${idx + 1} amount updated to: ${newCost}`);
+            });
+        }
+
         // Update the request
         if (Object.keys(updates).length > 0) {
             console.log('🔧 Applying updates:', updates);
@@ -1503,6 +1577,18 @@ exports.updateRequest = async (req, res) => { //n
         console.log(`   - Total estimated cost: ${request.totalEstimatedCost || 0}`);
         console.log(`   - Amount: ${request.amount || 0}`);
         await request.save();
+
+        // If approved amounts changed, sync linked expenses for statements
+        if (updateData.approvedAmount !== undefined && updateData.approvedAmount !== null) {
+            applyApprovedAmountToRequestItems(request, updateData.approvedAmount);
+            request.markModified('items');
+            request.markModified('totalEstimatedCost');
+            request.markModified('amount');
+        }
+
+        if (syncExpensesAfterSave || updateData.approvedAmount !== undefined || updateData.amount !== undefined) {
+            await syncExpensesForRequest(request, user);
+        }
         console.log('✅ Request saved successfully');
         console.log(`   - Final totalEstimatedCost: ${request.totalEstimatedCost || 0}`);
         console.log(`   - Final amount: ${request.amount || 0}`);
@@ -1739,7 +1825,9 @@ exports.financeApproval = async (req, res) => {
             reason,  // Support 'reason' field from frontend
             createDoubleEntryTransactions, // Support this field
             vendorDetails, // Support vendor details
-            dateApproved // Support dateApproved field
+            dateApproved, // Support dateApproved field
+            approvedAmount,
+            approvedItems
         } = req.body;
         
         console.log('🔍 Finance Approval Request Body:', {
@@ -1791,6 +1879,33 @@ exports.financeApproval = async (req, res) => {
             console.log('✅ Fallback: No clear action, defaulting to approved');
         }
         
+        // Finance can adjust approved item/total amounts during approval
+        if (Array.isArray(approvedItems) && approvedItems.length > 0 && request.items && request.items.length > 0) {
+            approvedItems.forEach(({ itemIndex, totalCost, estimatedCost }) => {
+                const idx = Number(itemIndex);
+                const newCost = Number(totalCost ?? estimatedCost);
+                if (
+                    Number.isInteger(idx) &&
+                    idx >= 0 &&
+                    idx < request.items.length &&
+                    Number.isFinite(newCost) &&
+                    newCost >= 0
+                ) {
+                    request.items[idx].totalCost = newCost;
+                    request.items[idx].estimatedCost = newCost;
+                }
+            });
+            request.totalEstimatedCost = request.items.reduce((sum, item) => sum + Number(item.totalCost || item.estimatedCost || 0), 0);
+        }
+
+        if (approvedAmount !== undefined && approvedAmount !== null) {
+            const parsedApprovedAmount = Number(approvedAmount);
+            if (Number.isFinite(parsedApprovedAmount) && parsedApprovedAmount >= 0) {
+                request.approvedAmount = parsedApprovedAmount;
+                applyApprovedAmountToRequestItems(request, parsedApprovedAmount);
+            }
+        }
+
         // Update finance approval
         const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
         console.log('🔍 Finance Approval Debug:', {
@@ -1820,7 +1935,10 @@ exports.financeApproval = async (req, res) => {
             request.status = 'pending-ceo-approval'; // ✅ ADDED: Set status to pending CEO approval
             
             // ✅ ADDED: Map totalEstimatedCost to amount for expense creation
-            if (request.totalEstimatedCost && request.totalEstimatedCost > 0) {
+            if (request.approvedAmount != null) {
+                request.amount = request.approvedAmount;
+                console.log(`💰 Using approvedAmount (${request.approvedAmount}) for expense creation`);
+            } else if (request.totalEstimatedCost && request.totalEstimatedCost > 0) {
                 request.amount = request.totalEstimatedCost;
                 console.log(`💰 Mapped totalEstimatedCost (${request.totalEstimatedCost}) to amount field`);
             } else {
@@ -1942,6 +2060,11 @@ exports.financeApproval = async (req, res) => {
         // Final save to ensure all changes are persisted
         await request.save();
         console.log('✅ Final save completed - all changes persisted');
+
+        // Re-sync linked expenses after approval amount edits
+        if (isApproved && ((approvedAmount !== undefined && approvedAmount !== null) || (Array.isArray(approvedItems) && approvedItems.length > 0))) {
+            await syncExpensesForRequest(request, user);
+        }
         
         // Fetch the updated request with all fields
         const updatedRequest = await Request.findById(request._id)
@@ -2123,6 +2246,39 @@ exports.financeOverrideQuotation = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+async function syncExpensesForRequest(request, user) {
+    const linkedExpenses = await Expense.find({ requestId: request._id });
+    if (!linkedExpenses.length) return;
+
+    const byItemIndex = new Map();
+    (request.items || []).forEach((item, idx) => byItemIndex.set(idx, item));
+
+    for (const expense of linkedExpenses) {
+        const idx = Number(expense.itemIndex);
+        if (Number.isInteger(idx) && byItemIndex.has(idx)) {
+            const item = byItemIndex.get(idx);
+            const itemAmount = Number(item.totalCost || item.estimatedCost || 0);
+            expense.amount = itemAmount;
+            expense.description = `${request.title || 'Request'} - ${item.description || expense.description}`;
+            expense.updatedBy = user._id;
+            await expense.save();
+            continue;
+        }
+
+        // Non-itemized/legacy expense: sync to approvedAmount (if set) else request amount
+        if (!Number.isInteger(idx)) {
+            const newAmount = Number(
+                request.approvedAmount != null ? request.approvedAmount : (request.amount || request.totalEstimatedCost || 0)
+            );
+            if (Number.isFinite(newAmount) && newAmount >= 0) {
+                expense.amount = newAmount;
+                expense.updatedBy = user._id;
+                await expense.save();
+            }
+        }
+    }
+}
 
 // Helper function to create simple expense for legacy maintenance requests
 async function createSimpleExpenseForRequest(request, user, approvalDate) {

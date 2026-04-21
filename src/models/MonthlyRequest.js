@@ -254,6 +254,13 @@ const monthlyRequestSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    // Finance-confirmed amount for this request.
+    // Can differ from original totalEstimatedCost submitted by admin.
+    approvedTotalCost: {
+        type: Number,
+        min: 0,
+        default: null
+    },
     submittedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',

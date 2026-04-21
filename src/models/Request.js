@@ -619,6 +619,12 @@ const requestSchema = new mongoose.Schema({
         min: 0,
         default: 0
     },
+    // Finance-confirmed amount (can differ from submitted estimate)
+    approvedAmount: {
+        type: Number,
+        min: 0,
+        default: null
+    },
     images: [{
         url: {
             type: String,

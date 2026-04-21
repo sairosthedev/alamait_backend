@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const { sendEmail } = require('../utils/email');
 const Residence = require('../models/Residence');
+const jwt = require('jsonwebtoken');
 
 // Create email transporter with production-optimized settings
 const transporter = nodemailer.createTransport({
@@ -26,6 +27,61 @@ const transporter = nodemailer.createTransport({
  * Handles all email notifications for the Alamait system
  */
 class EmailNotificationService {
+	static getFrontendBaseUrl() {
+		return process.env.FRONTEND_URL || process.env.CLIENT_URL || 'https://alamait.vercel.app';
+	}
+
+	static getRequestAmount(request) {
+		const toNumber = (v) => {
+			const n = Number(v);
+			return Number.isFinite(n) ? n : 0;
+		};
+		const fromItems = Array.isArray(request?.items)
+			? request.items.reduce((sum, item) => {
+				const qty = toNumber(item?.quantity || 1) || 1;
+				const total = toNumber(item?.totalCost);
+				const est = toNumber(item?.estimatedCost);
+				const unit = toNumber(item?.unitCost);
+				const itemAmount = total > 0 ? total : (est > 0 ? est : unit * qty);
+				return sum + itemAmount;
+			}, 0)
+			: 0;
+
+		return (
+			toNumber(request?.approvedAmount) ||
+			toNumber(request?.amount) ||
+			toNumber(request?.totalEstimatedCost) ||
+			fromItems ||
+			0
+		);
+	}
+
+	static getRequestPageUrl(requestId, email = null) {
+		const base = this.getFrontendBaseUrl().replace(/\/$/, '');
+		const params = new URLSearchParams();
+		if (requestId) params.set('requestId', String(requestId));
+		if (email) params.set('email', String(email));
+		const qs = params.toString();
+		return `${base}/requests${qs ? `?${qs}` : ''}`;
+	}
+
+	static getMagicRequestLoginUrl(requestId, email = null) {
+		if (!email || !process.env.JWT_SECRET) {
+			return this.getRequestPageUrl(requestId, email);
+		}
+		const apiBase = (process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:5000').replace(/\/$/, '');
+		const magicToken = jwt.sign(
+			{
+				purpose: 'magic_request_login',
+				email: String(email).toLowerCase(),
+				requestId: requestId ? String(requestId) : null
+			},
+			process.env.JWT_SECRET,
+			{ expiresIn: '30m' }
+		);
+		return `${apiBase}/api/auth/magic-login?token=${encodeURIComponent(magicToken)}`;
+	}
+
 	/**
 	 * Base email template with beautiful styling
 	 */
@@ -691,6 +747,8 @@ class EmailNotificationService {
 		// Format room information
 		const roomInfo = formatValue(maintenance.room, 'Not specified');
 
+		const requestAmount = this.getRequestAmount(request);
+		const requestUrl = this.getMagicRequestLoginUrl(request._id, submittedBy?.email);
 		const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
@@ -1376,11 +1434,14 @@ class EmailNotificationService {
 							${roomInfo !== 'Not specified' ? `<li><strong>Room:</strong> ${roomInfo}</li>` : ''}
 							<li><strong>Residence:</strong> ${residenceName}</li>
 							${departmentInfo !== 'Not specified' ? `<li><strong>Department:</strong> ${departmentInfo}</li>` : ''}
-							<li><strong>Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</li>
+							<li><strong>Amount:</strong> $${requestAmount.toFixed(2)}</li>
 							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
 							<li><strong>Created Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
 						</ul>
 						<p><strong>Action Required:</strong> Please review and process this ${requestTypeDisplay.toLowerCase()} for approval.</p>
+						<p style="margin-top: 14px;">
+							<a href="${requestUrl}" style="color:#2563eb; font-weight:600; text-decoration:none;">Open Request</a>
+						</p>
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
 							This is an automated message from Alamait Student Accommodation.<br>
@@ -1456,6 +1517,9 @@ class EmailNotificationService {
 				}
 			} catch (_) {}
 
+			const requestAmount = this.getRequestAmount(request);
+			const requestUrl = this.getMagicRequestLoginUrl(request._id, submittedBy?.email);
+
 			// Create items table HTML if items exist
 			let itemsTableHtml = '';
 			if (request.items && request.items.length > 0) {
@@ -1496,7 +1560,7 @@ class EmailNotificationService {
 							<tfoot>
 								<tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
 									<td colspan="3" style="padding: 12px; text-align: right; font-weight: 600; color: #495057;">Total Amount:</td>
-									<td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${request.amount?.toFixed(2) || '0.00'}</td>
+									<td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${requestAmount.toFixed(2)}</td>
 								</tr>
 							</tfoot>
 						</table>
@@ -1526,7 +1590,7 @@ class EmailNotificationService {
 						</div>
 						<div>
 							<strong style="color: #495057;">💰 Amount:</strong><br>
-							<span style="color: #ffc107; font-size: 16px; font-weight: 600;">$${request.amount?.toFixed(2) || '0.00'}</span>
+							<span style="color: #ffc107; font-size: 16px; font-weight: 600;">$${requestAmount.toFixed(2)}</span>
 						</div>
 						<div>
 							<strong style="color: #495057;">👤 Submitted By:</strong><br>
@@ -1557,7 +1621,9 @@ class EmailNotificationService {
 			const emailContent = this.getBaseEmailTemplate(
 				'📋 Request Pending CEO Approval',
 				'A new request has been submitted for your approval and review',
-				content
+				content,
+				'Open Request',
+				requestUrl
 			);
 
 			for (const ceo of ceoUsers) {
@@ -1723,6 +1789,7 @@ class EmailNotificationService {
 				return false;
 			}
 
+			const requestUrl = this.getMagicRequestLoginUrl(request._id, request.submittedBy?.email);
 			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
@@ -1737,6 +1804,9 @@ class EmailNotificationService {
 							<li><strong>Date:</strong> ${new Date().toLocaleDateString()}</li>
 						</ul>
 						<p>You will be notified once the CEO makes a decision.</p>
+						<p style="margin-top: 14px;">
+							<a href="${requestUrl}" style="color:#2563eb; font-weight:600; text-decoration:none;">View Request</a>
+						</p>
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
 							This is an automated message from Alamait Student Accommodation.<br>

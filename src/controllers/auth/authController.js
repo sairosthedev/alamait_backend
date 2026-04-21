@@ -461,6 +461,48 @@ exports.login = async (req, res) => {
     }
 };
 
+// Magic login for request emails
+exports.magicLogin = async (req, res) => {
+    try {
+        const { token } = req.query;
+        if (!token) {
+            return res.status(400).json({ error: 'Missing magic login token' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded?.purpose !== 'magic_request_login' || !decoded?.email) {
+            return res.status(400).json({ error: 'Invalid magic login token' });
+        }
+
+        const user = await User.findOne({ email: decoded.email.toLowerCase() });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found for magic login token' });
+        }
+
+        // Generate normal auth token
+        const payload = {
+            user: {
+                id: user.id,
+                role: user.role
+            }
+        };
+        const authToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '24h' });
+
+        // Redirect to frontend requests page with auth token + request context
+        const frontendBase = (process.env.FRONTEND_URL || process.env.CLIENT_URL || 'https://alamait.vercel.app').replace(/\/$/, '');
+        const redirectUrl = new URL(`${frontendBase}/requests`);
+        if (decoded.requestId) redirectUrl.searchParams.set('requestId', String(decoded.requestId));
+        redirectUrl.searchParams.set('email', user.email);
+        redirectUrl.searchParams.set('token', authToken);
+        redirectUrl.searchParams.set('magic', '1');
+
+        return res.redirect(302, redirectUrl.toString());
+    } catch (error) {
+        console.error('Error in magicLogin:', error);
+        return res.status(400).json({ error: 'Magic login link is invalid or expired' });
+    }
+};
+
 // Verify email
 exports.verifyEmail = async (req, res) => {
     try {

@@ -472,7 +472,7 @@ exports.getAllMonthlyRequests = async (req, res) => {
                     financeStatus: request.status,
                     effectiveStatus: request.status,
                     effectiveItems: request.items,
-                    effectiveTotalCost: request.totalEstimatedCost,
+                    effectiveTotalCost: request.approvedTotalCost ?? request.totalEstimatedCost,
                     isMonthlyEntry: false
                 });
             }
@@ -605,7 +605,7 @@ exports.getMonthlyRequestsWithFiltering = async (req, res) => {
                     financeStatus: request.status,
                     effectiveStatus: request.status,
                     effectiveItems: request.items,
-                    effectiveTotalCost: request.totalEstimatedCost,
+                    effectiveTotalCost: request.approvedTotalCost ?? request.totalEstimatedCost,
                     isMonthlyEntry: false
                 };
                 processedRequests.push(processedRequest);
@@ -1059,9 +1059,14 @@ exports.updateMonthlyRequest = async (req, res) => {
             return res.status(403).json({ message: 'Only admins, finance users, or the submitter can update monthly requests' });
         }
 
-        // Only allow updates if status is draft or pending
-        if (!['draft', 'pending'].includes(monthlyRequest.status)) {
-            return res.status(400).json({ message: 'Cannot update monthly request that has been approved or completed' });
+        const isFinanceUser = ['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role);
+        const isPostApprovalStatus = ['approved', 'completed', 'approved_for_installments'].includes(monthlyRequest.status);
+        const isPreApprovalStatus = ['draft', 'pending'].includes(monthlyRequest.status);
+
+        // Default rule: only draft/pending can be updated.
+        // Exception: finance/admin can update approved amounts even after approval/completion.
+        if (!isPreApprovalStatus && !(isFinanceUser && isPostApprovalStatus)) {
+            return res.status(400).json({ message: 'Cannot update monthly request in its current status' });
         }
 
         const {
@@ -1070,7 +1075,9 @@ exports.updateMonthlyRequest = async (req, res) => {
             items,
             priority,
             notes,
-            tags
+            tags,
+            approvedTotalCost,
+            approvedItems
         } = req.body;
 
         const changes = [];
@@ -1085,7 +1092,7 @@ exports.updateMonthlyRequest = async (req, res) => {
             changes.push('Description updated');
         }
 
-        if (items) {
+        if (items && isPreApprovalStatus) {
             monthlyRequest.items = items;
             changes.push('Items updated');
         }
@@ -1105,6 +1112,51 @@ exports.updateMonthlyRequest = async (req, res) => {
             changes.push('Tags updated');
         }
 
+        // Finance can adjust approved amounts after approval and keep statements in sync
+        if (isFinanceUser && isPostApprovalStatus) {
+            let amountsChanged = false;
+
+            if (Array.isArray(approvedItems) && approvedItems.length > 0) {
+                approvedItems.forEach(({ itemIndex, estimatedCost }) => {
+                    const idx = Number(itemIndex);
+                    const newCost = Number(estimatedCost);
+                    if (
+                        Number.isInteger(idx) &&
+                        idx >= 0 &&
+                        idx < monthlyRequest.items.length &&
+                        Number.isFinite(newCost) &&
+                        newCost >= 0
+                    ) {
+                        monthlyRequest.items[idx].estimatedCost = newCost;
+                        amountsChanged = true;
+                    }
+                });
+                if (amountsChanged) {
+                    changes.push('Approved item amounts updated');
+                }
+            }
+
+            if (approvedTotalCost !== undefined && approvedTotalCost !== null) {
+                const parsedApprovedTotal = Number(approvedTotalCost);
+                if (Number.isFinite(parsedApprovedTotal) && parsedApprovedTotal >= 0) {
+                    monthlyRequest.approvedTotalCost = parsedApprovedTotal;
+                    changes.push('Approved total amount updated');
+                }
+            }
+
+            // Recalculate submission total from latest item amounts
+            if (amountsChanged) {
+                monthlyRequest.totalEstimatedCost = monthlyRequest.items.reduce((sum, item) => {
+                    const qty = Number(item.quantity || 1);
+                    const cost = Number(item.estimatedCost || 0);
+                    return sum + (qty * cost);
+                }, 0);
+                if (monthlyRequest.approvedTotalCost == null) {
+                    monthlyRequest.approvedTotalCost = monthlyRequest.totalEstimatedCost;
+                }
+            }
+        }
+
         if (changes.length > 0) {
             monthlyRequest.requestHistory.push({
                 date: new Date(),
@@ -1115,6 +1167,11 @@ exports.updateMonthlyRequest = async (req, res) => {
         }
 
         await monthlyRequest.save();
+
+        // If finance edited approved amounts after approval, update linked expenses so statements reflect immediately.
+        if (isFinanceUser && isPostApprovalStatus && changes.some(c => c.includes('Approved'))) {
+            await syncExpensesForMonthlyRequest(monthlyRequest, user);
+        }
 
         const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
             .populate('residence', 'name')
@@ -1479,7 +1536,7 @@ exports.submitMonthlyRequest = async (req, res) => {
 exports.approveMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
-        const { approved, notes, month, year, status, datePaid, dateApproved } = req.body;
+        const { approved, notes, month, year, status, datePaid, dateApproved, approvedTotalCost, approvedItems } = req.body;
 
         // Check permissions - allow admin and finance users to approve
         if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
@@ -1520,6 +1577,34 @@ exports.approveMonthlyRequest = async (req, res) => {
                 return res.status(400).json({ 
                     message: `Monthly request for ${month}/${year} is not pending. Current status: ${monthlyApproval.status}` 
                 });
+            }
+
+            // Finance may adjust monthly item amounts during approval
+            if (Array.isArray(approvedItems) && approvedItems.length > 0) {
+                approvedItems.forEach(({ itemIndex, estimatedCost }) => {
+                    const idx = Number(itemIndex);
+                    const newCost = Number(estimatedCost);
+                    if (
+                        Number.isInteger(idx) &&
+                        idx >= 0 &&
+                        idx < monthlyApproval.items.length &&
+                        Number.isFinite(newCost) &&
+                        newCost >= 0
+                    ) {
+                        monthlyApproval.items[idx].estimatedCost = newCost;
+                    }
+                });
+                monthlyApproval.totalCost = monthlyApproval.items.reduce((sum, item) => {
+                    const qty = Number(item.quantity || 1);
+                    const cost = Number(item.estimatedCost || 0);
+                    return sum + (qty * cost);
+                }, 0);
+            }
+            if (approvedTotalCost !== undefined && approvedTotalCost !== null) {
+                const parsedApprovedTotal = Number(approvedTotalCost);
+                if (Number.isFinite(parsedApprovedTotal) && parsedApprovedTotal >= 0) {
+                    monthlyApproval.totalCost = parsedApprovedTotal;
+                }
             }
 
             // Update monthly approval status
@@ -1568,6 +1653,36 @@ exports.approveMonthlyRequest = async (req, res) => {
         }
         if (!monthlyRequest.approvedByEmail) {
             monthlyRequest.approvedByEmail = user.email;
+        }
+
+        // Finance may adjust regular request amounts during approval
+        if (Array.isArray(approvedItems) && approvedItems.length > 0) {
+            approvedItems.forEach(({ itemIndex, estimatedCost }) => {
+                const idx = Number(itemIndex);
+                const newCost = Number(estimatedCost);
+                if (
+                    Number.isInteger(idx) &&
+                    idx >= 0 &&
+                    idx < monthlyRequest.items.length &&
+                    Number.isFinite(newCost) &&
+                    newCost >= 0
+                ) {
+                    monthlyRequest.items[idx].estimatedCost = newCost;
+                }
+            });
+            monthlyRequest.totalEstimatedCost = monthlyRequest.items.reduce((sum, item) => {
+                const qty = Number(item.quantity || 1);
+                const cost = Number(item.estimatedCost || 0);
+                return sum + (qty * cost);
+            }, 0);
+        }
+        if (approvedTotalCost !== undefined && approvedTotalCost !== null) {
+            const parsedApprovedTotal = Number(approvedTotalCost);
+            if (Number.isFinite(parsedApprovedTotal) && parsedApprovedTotal >= 0) {
+                monthlyRequest.approvedTotalCost = parsedApprovedTotal;
+            }
+        } else if (approved) {
+            monthlyRequest.approvedTotalCost = monthlyRequest.totalEstimatedCost;
         }
 
         // Use the status from frontend if provided and approved, otherwise use default
@@ -2581,6 +2696,30 @@ async function convertSpecificRequestToExpense(requestId, user, res) {
     } catch (error) {
         console.error('Error converting specific request to expenses:', error);
         res.status(500).json({ message: error.message });
+    }
+}
+
+// Keep expense rows in sync when finance edits approved amounts after approval.
+async function syncExpensesForMonthlyRequest(request, user) {
+    const linkedExpenses = await Expense.find({ monthlyRequestId: request._id });
+    if (!linkedExpenses.length) return;
+
+    const itemMap = new Map();
+    request.items.forEach((item, idx) => itemMap.set(idx, item));
+
+    for (const expense of linkedExpenses) {
+        const itemIndex = Number(expense.itemIndex);
+        if (!Number.isInteger(itemIndex) || !itemMap.has(itemIndex)) continue;
+        const item = itemMap.get(itemIndex);
+        const qty = Number(item.quantity || 1);
+        const unitCost = Number(item.estimatedCost || 0);
+        const total = qty * unitCost;
+
+        expense.amount = total;
+        expense.description = item.description || expense.description;
+        expense.notes = `Updated from approved amount on monthly request item: ${item.title || itemIndex}`;
+        expense.updatedBy = user._id;
+        await expense.save();
     }
 }
 
