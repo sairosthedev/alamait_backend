@@ -2665,6 +2665,32 @@ class TransactionController {
                     }
                 }
             }
+            // Final fallback for orphan debtor records (user/application null):
+            // resolve by student email/name/contactInfo and prefer active debtor.
+            if (!debtor) {
+                const User = require('../../models/User');
+                const userDoc = mongoose.Types.ObjectId.isValid(studentId)
+                    ? await User.findById(studentId).select('firstName lastName email').lean()
+                    : null;
+                const firstName = userDoc?.firstName || (studentName ? String(studentName).split(' ')[0] : null);
+                const lastName = userDoc?.lastName || (studentName ? String(studentName).split(' ').slice(1).join(' ') : null);
+                const email = userDoc?.email || null;
+
+                const fallbackOr = [];
+                if (email) fallbackOr.push({ 'contactInfo.email': { $regex: new RegExp(`^${String(email).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+                if (studentName) fallbackOr.push({ 'contactInfo.name': { $regex: new RegExp(`^${String(studentName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+                if (firstName && lastName) {
+                    const fullName = `${firstName} ${lastName}`.trim();
+                    fallbackOr.push({ 'contactInfo.name': { $regex: new RegExp(`^${fullName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+                }
+                if (fallbackOr.length > 0) {
+                    debtor = await Debtor.findOne({ $or: fallbackOr }).sort({ updatedAt: -1 }).lean();
+                    if (debtor) {
+                        actualUserId = debtor.user?.toString() || actualUserId;
+                        console.log(`⚠️ Debtor resolved by fallback contact match: ${debtor.debtorCode || debtor._id}`);
+                    }
+                }
+            }
 
             if (!debtor) {
                 return res.status(400).json({
