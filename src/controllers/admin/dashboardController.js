@@ -4,6 +4,7 @@ const Maintenance = require('../../models/Maintenance');
 const { Residence } = require('../../models/Residence');
 const Payment = require('../../models/Payment');
 const { validationResult } = require('express-validator');
+const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
 
 // Get overall dashboard statistics
 exports.getDashboardStats = async (req, res) => {
@@ -412,45 +413,57 @@ exports.getRoomsWithOccupancy = async (req, res) => {
             });
         }
 
-        // Get total count for pagination
         const total = await Residence.countDocuments(query);
 
-        const rooms = residences.flatMap(residence => 
-            residence.rooms.map(room => ({
-                id: room._id,
-                roomNumber: room.roomNumber,
-                type: room.type,
-                capacity: room.capacity,
-                currentOccupancy: room.currentOccupancy || 0,
-                occupancyRate: ((room.currentOccupancy || 0) / room.capacity) * 100,
-                status: room.status,
-                price: room.price,
-                features: room.features || [],
-                floor: room.floor,
-                lastCleaned: room.lastCleaned,
-                nextMaintenance: room.nextMaintenance,
-                activeMaintenance: room.maintenance?.filter(m => m.status !== 'completed') || [],
-                location: {
-                    residenceId: residence._id,
-                    residenceName: residence.name,
-                    address: residence.address,
-                    coordinates: residence.location?.coordinates || [],
-                    amenities: residence.amenities || [],
-                    contactInfo: residence.contactInfo || {}
-                },
-                occupants: room.occupants?.map(occupant => ({
-                    id: occupant._id,
-                    name: `${occupant.firstName} ${occupant.lastName}`,
-                    email: occupant.email,
-                    phone: occupant.phone
-                })) || [],
-                statistics: {
-                    averageOccupancy: room.averageOccupancy || 0,
-                    maintenanceRequests: room.maintenanceRequests || 0,
-                    cleaningFrequency: room.cleaningFrequency || 'weekly'
-                }
-            }))
+        const roomsNested = await Promise.all(
+            residences.map((residence) =>
+                Promise.all(
+                    residence.rooms.map(async (room) => {
+                        const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(
+                            residence._id,
+                            room.roomNumber
+                        );
+                        const currentOccupancy = occ.currentOccupancy;
+                        return {
+                            id: room._id,
+                            roomNumber: room.roomNumber,
+                            type: room.type,
+                            capacity: room.capacity,
+                            currentOccupancy,
+                            occupancyRate: occ.occupancyRate,
+                            status: room.status,
+                            price: room.price,
+                            features: room.features || [],
+                            floor: room.floor,
+                            lastCleaned: room.lastCleaned,
+                            nextMaintenance: room.nextMaintenance,
+                            activeMaintenance: room.maintenance?.filter((m) => m.status !== 'completed') || [],
+                            location: {
+                                residenceId: residence._id,
+                                residenceName: residence.name,
+                                address: residence.address,
+                                coordinates: residence.location?.coordinates || [],
+                                amenities: residence.amenities || [],
+                                contactInfo: residence.contactInfo || {}
+                            },
+                            occupants: room.occupants?.map((occupant) => ({
+                                id: occupant._id,
+                                name: `${occupant.firstName} ${occupant.lastName}`,
+                                email: occupant.email,
+                                phone: occupant.phone
+                            })) || [],
+                            leaseOccupants: occ.validStudents || [],
+                            statistics: {
+                                averageOccupancy: room.averageOccupancy || 0,
+                                maintenanceRequests: room.maintenanceRequests || 0,
+                                cleaningFrequency: room.cleaningFrequency || 'weekly'
+                            }
+                        };
+                    })
+                )
+            )
         );
+        const rooms = roomsNested.flat();
 
         res.json({
             rooms,

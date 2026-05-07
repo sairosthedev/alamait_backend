@@ -29,10 +29,10 @@ class MonthlyAccrualCronService {
                 return;
             }
             
-            // Schedule: Run every 60 seconds in both production and development
-            // Cron format: '* * * * *' = every minute (60 seconds)
-            const cronSchedule = '* * * * *';
-            const scheduleDescription = 'Every 60 seconds (Zimbabwe time)';
+            // Schedule: hourly integrity check (Zimbabwe time).
+            // This is strong enough to catch missing accruals quickly without spamming duplicates/retries.
+            const cronSchedule = '0 * * * *';
+            const scheduleDescription = 'Hourly (Zimbabwe time)';
             
             this.job = cron.schedule(cronSchedule, async () => {
                 await this.processMonthlyAccrualsInstance();
@@ -48,9 +48,9 @@ class MonthlyAccrualCronService {
             console.log(`   Next run: ${this.nextRun}`);
             console.log(`   Schedule: ${scheduleDescription}`);
             
-            // Run initial check after 5 seconds to ensure system is ready
-            console.log('🔄 Running initial monthly accrual check in 5 seconds...');
-            setTimeout(() => this.processMonthlyAccrualsInstance(), 5000);
+            // Run initial check after 10 seconds to ensure system is ready
+            console.log('🔄 Running initial accrual integrity check in 10 seconds...');
+            setTimeout(() => this.processMonthlyAccrualsInstance(), 10000);
             
         } catch (error) {
             console.error('❌ Failed to start monthly accrual cron service:', error);

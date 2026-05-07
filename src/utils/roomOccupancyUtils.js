@@ -5,11 +5,27 @@
  * by excluding expired, forfeited, and cancelled students/applications.
  */
 
-const User = require('../models/User');
 const Application = require('../models/Application');
 const { Residence } = require('../models/Residence');
 
 class RoomOccupancyUtils {
+
+    /**
+     * Approved applications whose lease includes `asOf` for this physical room.
+     */
+    static buildLeaseActiveQuery(residenceId, roomNumber, asOf) {
+        return {
+            residence: residenceId,
+            status: 'approved',
+            startDate: { $exists: true, $ne: null, $lte: asOf },
+            endDate: { $exists: true, $ne: null, $gte: asOf },
+            paymentStatus: { $ne: 'cancelled' },
+            $or: [
+                { allocatedRoom: roomNumber },
+                { 'allocatedRoomDetails.roomNumber': roomNumber }
+            ]
+        };
+    }
     
     /**
      * Calculate accurate room occupancy excluding expired/forfeited students
@@ -20,62 +36,42 @@ class RoomOccupancyUtils {
      */
     static async calculateAccurateRoomOccupancy(residenceId, roomNumber, asOfDate = new Date()) {
         try {
-            // Find all approved applications for this room (this is the primary source of truth)
-            const approvedApplications = await Application.find({
-                residence: residenceId,
-                allocatedRoom: roomNumber,
-                status: { $in: ['approved', 'active'] }
-            });
+            const asOf = asOfDate ? new Date(asOfDate) : new Date();
+            const leaseQuery = this.buildLeaseActiveQuery(residenceId, roomNumber, asOf);
+
+            // Primary source: approved applications with lease window covering `asOf`
+            const approvedApplications = await Application.find(leaseQuery).lean();
             
-            console.log(`📋 Found ${approvedApplications.length} approved applications for room ${roomNumber}`);
+            console.log(`📋 Found ${approvedApplications.length} approved applications (lease active on as-of date) for room ${roomNumber}`);
             
-            // Also find students in User collection with currentRoom set (for backward compatibility)
-            const studentsInRoom = await User.find({
-                currentRoom: roomNumber,
-                residence: residenceId,
-                role: 'student',
-                isActive: true,
-                status: { $nin: ['forfeited', 'expired', 'cancelled'] }
-            });
-            
-            console.log(`👥 Found ${studentsInRoom.length} students with currentRoom set for room ${roomNumber}`);
-            
-            // Combine both sources and deduplicate
             const allOccupants = new Map();
-            
-            // Add approved applications
-            approvedApplications.forEach(app => {
-                const key = app.email || app.studentId || app.student;
+
+            const addFromApplication = (app) => {
+                const sid = app.student && (app.student._id || app.student);
+                const key = sid ? String(sid) : (app.email && String(app.email).toLowerCase()) || null;
+                if (!key) {
+                    return;
+                }
                 allOccupants.set(key, {
-                    id: app.studentId || app.student,
-                    name: `${app.firstName} ${app.lastName}`,
+                    id: sid || null,
+                    name: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
                     email: app.email,
                     status: app.status,
-                    source: 'application'
+                    source: 'application',
+                    leaseStart: app.startDate,
+                    leaseEnd: app.endDate
                 });
-            });
-            
-            // Add students with currentRoom (if not already counted)
-            studentsInRoom.forEach(student => {
-                const key = student.email || student._id.toString();
-                if (!allOccupants.has(key)) {
-                    allOccupants.set(key, {
-                        id: student._id,
-                        name: `${student.firstName} ${student.lastName}`,
-                        email: student.email,
-                        status: student.status,
-                        source: 'user_currentRoom'
-                    });
-                }
-            });
-            
+            };
+
+            approvedApplications.forEach(addFromApplication);
+
             const validStudents = Array.from(allOccupants.values());
-            
+
             // Get room details
             const residence = await Residence.findById(residenceId);
             const room = residence?.rooms.find(r => r.roomNumber === roomNumber);
             const capacity = room?.capacity || 1;
-            
+
             return {
                 roomNumber,
                 residenceId,
@@ -84,13 +80,16 @@ class RoomOccupancyUtils {
                 occupancyRate: capacity > 0 ? (validStudents.length / capacity) * 100 : 0,
                 isFull: validStudents.length >= capacity,
                 isAvailable: validStudents.length < capacity,
-                validStudents: validStudents.map(student => ({
-                    id: student._id,
-                    name: `${student.firstName} ${student.lastName}`,
-                    email: student.email,
-                    status: student.status
+                validStudents: validStudents.map((s) => ({
+                    id: s.id,
+                    name: s.name,
+                    email: s.email,
+                    status: s.status,
+                    leaseStart: s.leaseStart,
+                    leaseEnd: s.leaseEnd,
+                    source: s.source
                 })),
-                calculatedAt: asOfDate
+                calculatedAt: asOf
             };
             
         } catch (error) {
@@ -207,7 +206,8 @@ class RoomOccupancyUtils {
      */
     static async checkRoomAvailability(residenceId, roomNumber, startDate, endDate) {
         try {
-            const occupancy = await this.calculateAccurateRoomOccupancy(residenceId, roomNumber);
+            const asOf = startDate ? new Date(startDate) : new Date();
+            const occupancy = await this.calculateAccurateRoomOccupancy(residenceId, roomNumber, asOf);
             
             return {
                 available: occupancy.isAvailable,

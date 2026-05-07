@@ -133,21 +133,20 @@ bookingSchema.statics.checkAvailability = async function(residenceId, roomNumber
     }
 
     const overlappingBookings = await this.find(query);
-    
-    // Use the room occupancy utility to get accurate occupancy count
+
+    // Use the room occupancy utility to get accurate occupancy count as-of the requested start date
     const RoomOccupancyUtils = require('../utils/roomOccupancyUtils');
-    const occupancyDetails = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(residenceId, roomNumber);
-    
-    // Use the accurate occupancy count (this already includes all approved applications)
+    const occupancyDetails = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(residenceId, roomNumber, new Date(startDate));
     const totalOccupancy = occupancyDetails.currentOccupancy;
     
     // For shared rooms, check if adding this booking would exceed capacity
     // For single rooms (capacity = 1), any overlap means unavailable
     if (roomCapacity === 1) {
-        return totalOccupancy === 0;
+        return overlappingBookings.length === 0 && totalOccupancy === 0;
     } else {
-        // For shared rooms, check if we're at capacity
-        return totalOccupancy < roomCapacity;
+        // For shared rooms, check if we're at capacity (bookings + active occupants)
+        // Note: occupancyDetails already counts active applications as-of startDate.
+        return (totalOccupancy + overlappingBookings.length) < roomCapacity;
     }
 };
 

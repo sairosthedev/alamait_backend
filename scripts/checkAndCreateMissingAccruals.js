@@ -10,7 +10,7 @@
 
 require('dotenv').config();
 const mongoose = require('mongoose');
-const { RentalAccrualService } = require('../src/services/rentalAccrualService');
+const RentalAccrualService = require('../src/services/rentalAccrualService');
 
 async function checkAndCreateMissingAccruals() {
     try {

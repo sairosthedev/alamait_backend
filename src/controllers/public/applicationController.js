@@ -1,4 +1,5 @@
 const Application = require('../../models/Application');
+const { findOverlappingApprovedApplication } = require('../../utils/leaseOverlapUtils');
 const { sendEmail } = require('../../utils/email');
 const whatsappService = require('../../services/whatsappService');
 const User = require('../../models/User');
@@ -78,10 +79,10 @@ exports.submitApplication = async (req, res) => {
                 console.log(`📊 Previous financial summary:`, previousFinancialHistory);
             }
             
-            // Check if user has any active applications or leases that haven't ended
+            // Block duplicate open applications (approved leases are validated separately via date overlap)
             const activeApplication = await Application.findOne({
                 email: email.toLowerCase(),
-                status: { $in: ['pending', 'approved', 'waitlisted'] }
+                status: { $in: ['pending', 'waitlisted'] }
             });
             
             if (activeApplication) {
@@ -96,25 +97,60 @@ exports.submitApplication = async (req, res) => {
                 });
             }
             
-            // Check if user has any approved applications with leases that haven't ended yet
+            // Block only when the requested dates overlap an approved lease (allows non-overlapping history/backfill intent)
             const currentDate = new Date();
-            const activeLease = await Application.findOne({
-                email: email.toLowerCase(),
-                status: 'approved',
-                endDate: { $gt: currentDate } // Lease hasn't ended yet
-            });
-            
-            if (activeLease) {
-                return res.status(400).json({ 
-                    error: 'You currently have an active lease that hasn\'t ended yet. Please wait until your lease ends to apply again.',
-                    existingLease: {
-                        id: activeLease._id,
-                        applicationCode: activeLease.applicationCode,
-                        startDate: activeLease.startDate,
-                        endDate: activeLease.endDate,
-                        daysRemaining: Math.ceil((new Date(activeLease.endDate) - currentDate) / (1000 * 60 * 60 * 24))
-                    }
+            const parsedStart = startDate ? new Date(startDate) : null;
+            const parsedEnd = endDate ? new Date(endDate) : null;
+            const hasValidRange =
+                parsedStart &&
+                parsedEnd &&
+                !Number.isNaN(parsedStart.getTime()) &&
+                !Number.isNaN(parsedEnd.getTime()) &&
+                parsedEnd > parsedStart;
+
+            if (hasValidRange) {
+                const overlapApp = await findOverlappingApprovedApplication(
+                    email.toLowerCase(),
+                    existingUser._id,
+                    parsedStart,
+                    parsedEnd
+                );
+                if (overlapApp) {
+                    return res.status(400).json({
+                        error:
+                            'You have an approved lease that overlaps these dates. Adjust your requested dates so they do not overlap your existing lease.',
+                        existingLease: {
+                            id: overlapApp._id,
+                            applicationCode: overlapApp.applicationCode,
+                            startDate: overlapApp.startDate,
+                            endDate: overlapApp.endDate,
+                            daysRemaining: Math.ceil(
+                                (new Date(overlapApp.endDate) - currentDate) / (1000 * 60 * 60 * 24)
+                            ),
+                        },
+                    });
+                }
+            } else {
+                const activeLease = await Application.findOne({
+                    email: email.toLowerCase(),
+                    status: 'approved',
+                    endDate: { $gt: currentDate },
                 });
+                if (activeLease) {
+                    return res.status(400).json({
+                        error:
+                            "You currently have an active lease that hasn't ended yet. Please wait until your lease ends to apply again.",
+                        existingLease: {
+                            id: activeLease._id,
+                            applicationCode: activeLease.applicationCode,
+                            startDate: activeLease.startDate,
+                            endDate: activeLease.endDate,
+                            daysRemaining: Math.ceil(
+                                (new Date(activeLease.endDate) - currentDate) / (1000 * 60 * 60 * 24)
+                            ),
+                        },
+                    });
+                }
             }
         }
 

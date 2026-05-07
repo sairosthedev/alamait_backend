@@ -23,6 +23,7 @@ const { backfillTransactionsForDebtor } = require('../../services/transactionBac
 const ExcelJS = require('exceljs');
 const StudentDeletionService = require('../../services/studentDeletionService');
 const { getStudentInfo } = require('../../utils/studentUtils');
+const { findOverlappingApprovedApplication, isLeasePeriodFullyEnded } = require('../../utils/leaseOverlapUtils');
 
 // Helper function to safely format dates
 const safeDateFormat = (date) => {
@@ -1179,31 +1180,8 @@ exports.manualAddStudent = async (req, res) => {
             adminFee
         } = req.body;
 
-        // Check if user already exists and has an active lease
         let existingUser = await User.findOne({ email });
         if (existingUser) {
-            // Check if user has any active leases that haven't ended
-            const currentDate = new Date();
-            const activeLease = await Application.findOne({
-                email: email.toLowerCase(),
-                status: 'approved',
-                endDate: { $gt: currentDate } // Lease hasn't ended yet
-            });
-            
-            if (activeLease) {
-                return res.status(400).json({ 
-                    error: 'User has an active lease that hasn\'t ended yet. Please wait until the lease ends to create a new application.',
-                    existingLease: {
-                        id: activeLease._id,
-                        applicationCode: activeLease.applicationCode,
-                        startDate: activeLease.startDate,
-                        endDate: activeLease.endDate,
-                        daysRemaining: Math.ceil((new Date(activeLease.endDate) - currentDate) / (1000 * 60 * 60 * 24))
-                    }
-                });
-            }
-            
-            // If no active lease, allow re-application
             console.log(`🔄 Re-application detected for existing student: ${email}`);
         }
 
@@ -1280,8 +1258,8 @@ exports.manualAddStudent = async (req, res) => {
             }
         }
         
-        // Also check current occupancy as a secondary check
-        if (room.currentOccupancy >= room.capacity) {
+        // Also check current occupancy as a secondary check (skip for fully-ended leases — snapshot reflects "now", not the historical period)
+        if (!isLeasePeriodFullyEnded(endDate) && room.currentOccupancy >= room.capacity) {
             console.log(`⚠️ Room ${roomNumber} is at full capacity (${room.currentOccupancy}/${room.capacity}), but checking if it will be available by lease start date`);
             
             // If room is at capacity, check if any current occupants will be leaving before the lease starts
@@ -1381,6 +1359,37 @@ exports.manualAddStudent = async (req, res) => {
             }
         } catch (dateError) {
             return res.status(400).json({ error: 'Date parsing error', details: dateError.message });
+        }
+
+        if (existingUser) {
+            const conflictingApp = await findOverlappingApprovedApplication(
+                email.toLowerCase(),
+                existingUser._id,
+                parsedStartDate,
+                parsedEndDate
+            );
+            if (conflictingApp) {
+                const currentDate = new Date();
+                return res.status(400).json({
+                    error:
+                        'The requested lease dates overlap another approved application for this student. Use dates that do not overlap (for example, a past lease that ends before the current lease begins).',
+                    conflictingLease: {
+                        id: conflictingApp._id,
+                        applicationCode: conflictingApp.applicationCode,
+                        startDate: conflictingApp.startDate,
+                        endDate: conflictingApp.endDate,
+                    },
+                    existingLease: {
+                        id: conflictingApp._id,
+                        applicationCode: conflictingApp.applicationCode,
+                        startDate: conflictingApp.startDate,
+                        endDate: conflictingApp.endDate,
+                        daysRemaining: Math.ceil(
+                            (new Date(conflictingApp.endDate) - currentDate) / (1000 * 60 * 60 * 24)
+                        ),
+                    },
+                });
+            }
         }
         
         console.log('✅ All variables validated successfully');
@@ -2083,25 +2092,6 @@ exports.uploadCsvStudents = async (req, res) => {
                 // Check if user already exists and has an active lease
                 const existingUser = await User.findOne({ email: row.email });
                 if (existingUser) {
-                    // Check if user has any active leases that haven't ended
-                    const currentDate = new Date();
-                    const activeLease = await Application.findOne({
-                        email: row.email.toLowerCase(),
-                        status: 'approved',
-                        endDate: { $gt: currentDate } // Lease hasn't ended yet
-                    });
-                    
-                    if (activeLease) {
-                        results.failed.push({
-                            row: rowNumber,
-                            error: `User has an active lease ending ${activeLease.endDate.toDateString()}. Cannot create new application.`,
-                            data: row
-                        });
-                        results.summary.totalFailed++;
-                        continue;
-                    }
-                    
-                    // If no active lease, allow re-application
                     console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
                 
@@ -2121,8 +2111,13 @@ exports.uploadCsvStudents = async (req, res) => {
                         continue;
                     }
                     
-                    // Check room availability
-                    if (room.currentOccupancy >= room.capacity) {
+                    // Check room availability (snapshot); skip when backfilling a lease that already ended
+                    const provisionalEnd = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : null);
+                    const skipSnapshotCapacity =
+                        provisionalEnd &&
+                        !Number.isNaN(provisionalEnd.getTime()) &&
+                        isLeasePeriodFullyEnded(provisionalEnd);
+                    if (!skipSnapshotCapacity && room.currentOccupancy >= room.capacity) {
                         results.failed.push({
                             row: rowNumber,
                             error: `Room ${roomNumber} is at full capacity`,
@@ -2156,6 +2151,24 @@ exports.uploadCsvStudents = async (req, res) => {
                     });
                     results.summary.totalFailed++;
                     continue;
+                }
+
+                if (existingUser) {
+                    const conflict = await findOverlappingApprovedApplication(
+                        row.email.toLowerCase(),
+                        existingUser._id,
+                        startDate,
+                        endDate
+                    );
+                    if (conflict) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Lease dates overlap an existing approved application (${conflict.applicationCode || conflict._id}).`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
                 }
                 
                 // Handle existing user or create new one
@@ -2746,25 +2759,6 @@ exports.uploadExcelStudents = async (req, res) => {
                 // Check if user already exists and has an active lease
                 const existingUser = await User.findOne({ email: row.email });
                 if (existingUser) {
-                    // Check if user has any active leases that haven't ended
-                    const currentDate = new Date();
-                    const activeLease = await Application.findOne({
-                        email: row.email.toLowerCase(),
-                        status: 'approved',
-                        endDate: { $gt: currentDate } // Lease hasn't ended yet
-                    });
-                    
-                    if (activeLease) {
-                        results.failed.push({
-                            row: rowNumber,
-                            error: `User has an active lease ending ${activeLease.endDate.toDateString()}. Cannot create new application.`,
-                            data: row
-                        });
-                        results.summary.totalFailed++;
-                        continue;
-                    }
-                    
-                    // If no active lease, allow re-application
                     console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
                 
@@ -2790,8 +2784,14 @@ exports.uploadExcelStudents = async (req, res) => {
                         continue;
                     }
                     
-                    // Check room availability
-                    if (room.currentOccupancy >= room.capacity) {
+                    // Check room availability (snapshot); skip when backfilling a lease that already ended
+                    const endRawExc = row.endDate || row.enddate || row.end_date || defaultEndDate;
+                    const provisionalEnd = endRawExc ? new Date(endRawExc) : null;
+                    const skipSnapshotCapacity =
+                        provisionalEnd &&
+                        !Number.isNaN(provisionalEnd.getTime()) &&
+                        isLeasePeriodFullyEnded(provisionalEnd);
+                    if (!skipSnapshotCapacity && room.currentOccupancy >= room.capacity) {
                         results.failed.push({
                             row: rowNumber,
                             error: `Room ${roomNumber} is at full capacity`,
@@ -2839,6 +2839,24 @@ exports.uploadExcelStudents = async (req, res) => {
                     });
                     results.summary.totalFailed++;
                     continue;
+                }
+
+                if (existingUser) {
+                    const conflict = await findOverlappingApprovedApplication(
+                        row.email.toLowerCase(),
+                        existingUser._id,
+                        startDate,
+                        endDate
+                    );
+                    if (conflict) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Lease dates overlap an existing approved application (${conflict.applicationCode || conflict._id}).`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
                 }
                 
                 // Handle existing user or create new one
@@ -3472,28 +3490,9 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                     continue;
                 }
                 
-                // Check if user already exists and has an active lease
+                // Check if user already exists
                 const existingUser = await User.findOne({ email: row.email });
                 if (existingUser) {
-                    // Check if user has any active leases that haven't ended
-                    const currentDate = new Date();
-                    const activeLease = await Application.findOne({
-                        email: row.email.toLowerCase(),
-                        status: 'approved',
-                        endDate: { $gt: currentDate }
-                    });
-                    
-                    if (activeLease) {
-                        console.log(`❌ User ${row.email} has active lease ending ${activeLease.endDate}`);
-                        results.failed.push({
-                            row: rowNumber,
-                            error: `User has an active lease ending ${activeLease.endDate.toDateString()}. Cannot create new application.`,
-                            data: row
-                        });
-                        results.summary.totalFailed++;
-                        continue;
-                    }
-                    
                     console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
                 
@@ -3523,8 +3522,13 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                     console.log(`✅ Room ${roomNumber} found`);
                     console.log(`   - Current occupancy: ${roomData.currentOccupancy}/${roomData.capacity}`);
                     
-                    // Check room availability
-                    if (roomData.currentOccupancy >= roomData.capacity) {
+                    // Snapshot capacity; skip when backfilling a lease that already ended
+                    const provisionalEndBg = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : null);
+                    const skipSnapshotCapacity =
+                        provisionalEndBg &&
+                        !Number.isNaN(provisionalEndBg.getTime()) &&
+                        isLeasePeriodFullyEnded(provisionalEndBg);
+                    if (!skipSnapshotCapacity && roomData.currentOccupancy >= roomData.capacity) {
                         console.log(`❌ Room ${roomNumber} is at full capacity`);
                         results.failed.push({
                             row: rowNumber,
@@ -3563,6 +3567,25 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                     });
                     results.summary.totalFailed++;
                     continue;
+                }
+
+                if (existingUser) {
+                    const conflict = await findOverlappingApprovedApplication(
+                        row.email.toLowerCase(),
+                        existingUser._id,
+                        startDate,
+                        endDate
+                    );
+                    if (conflict) {
+                        console.log(`❌ Lease overlap with ${conflict.applicationCode}`);
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Lease dates overlap an existing approved application (${conflict.applicationCode || conflict._id}).`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
                 }
                 
                 // Handle existing user or create new one

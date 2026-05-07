@@ -12,6 +12,7 @@ const ExpiredStudent = require('../../models/ExpiredStudent');
 const EmailNotificationService = require('../../services/emailNotificationService');
 const Payment = require('../../models/Payment');
 const { getStudentInfo } = require('../../utils/studentUtils');
+const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
 
 // Get all applications with room status
 exports.getApplications = async (req, res) => {
@@ -1158,53 +1159,26 @@ exports.updateRoomValidity = async (req, res) => {
     }
 };
 
-// Sync room occupancy with allocations
+// Sync room occupancy with allocations (per residence + lease dates active today)
 exports.syncRoomOccupancy = async (req, res) => {
     try {
-        console.log('🔄 Syncing room occupancy with allocations...');
-        
-        const { Residence } = require('../../models/Residence');
-        const residences = await Residence.find({});
-        
-        let updatedRooms = 0;
-        
+        console.log('🔄 Syncing room occupancy with lease-based counts...');
+
+        const residences = await Residence.find({}).select('_id');
+        let totalUpdated = 0;
+
         for (const residence of residences) {
-            for (const room of residence.rooms) {
-                // Count active applications for this room
-                const activeApplications = await Application.countDocuments({
-                    allocatedRoom: room.roomNumber,
-                    status: 'approved',
-                    paymentStatus: { $in: ['paid', 'unpaid'] }
-                });
-                
-                // Update room occupancy
-                if (room.currentOccupancy !== activeApplications) {
-                    room.currentOccupancy = activeApplications;
-                    
-                    // Update room status based on occupancy
-                    if (room.currentOccupancy >= room.capacity) {
-                        room.status = 'occupied';
-                    } else if (room.currentOccupancy > 0) {
-                        room.status = 'reserved';
-                    } else {
-                        room.status = 'available';
-                    }
-                    
-                    updatedRooms++;
-                }
-            }
-            
-                await residence.save();
-            }
-        
-        console.log(`✅ Synced ${updatedRooms} rooms across ${residences.length} residences`);
-        
+            const sync = await RoomOccupancyUtils.syncAllRoomOccupancies(residence._id);
+            totalUpdated += sync.totalUpdated || 0;
+        }
+
+        console.log(`✅ Lease-based sync: ${totalUpdated} rooms updated across ${residences.length} residences`);
+
         res.json({
-            message: 'Room occupancy synced successfully',
-            updatedRooms,
+            message: 'Room occupancy synced successfully (approved leases active as of today, per residence)',
+            updatedRooms: totalUpdated,
             totalResidences: residences.length
         });
-        
     } catch (error) {
         console.error('❌ Error syncing room occupancy:', error);
         res.status(500).json({ error: 'Server error' });

@@ -114,20 +114,38 @@ class TenantAccrualCheckService {
                     // 🆕 ENHANCED: Check for missing lease start transaction
                     if (leaseStartDate <= now) {
                         console.log(`      🔍 Checking for lease start transaction...`);
+                        const leaseStartDayStart = new Date(leaseStartDate.toISOString().split('T')[0]); // local-day start
+                        const leaseStartDayEnd = new Date(new Date(leaseStartDayStart).setDate(leaseStartDayStart.getDate() + 1));
                         
                         const existingLeaseStart = await TransactionEntry.findOne({
                             $or: [
                                 { 'metadata.applicationId': application._id, 'metadata.type': 'lease_start' },
                                 { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' },
                                 ...(debtorId ? [
-                                    { source: 'rental_accrual', 'metadata.type': 'lease_start', 'metadata.debtorId': debtorId },
-                                    { source: 'rental_accrual', sourceModel: 'Debtor', sourceId: debtorId, 'metadata.type': 'lease_start' }
+                                    {
+                                        source: 'rental_accrual',
+                                        'metadata.type': 'lease_start',
+                                        'metadata.debtorId': debtorId,
+                                        date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd }
+                                    },
+                                    {
+                                        source: 'rental_accrual',
+                                        sourceModel: 'Debtor',
+                                        sourceId: debtorId,
+                                        'metadata.type': 'lease_start',
+                                        date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd }
+                                    }
                                 ] : []),
                                 ...(arAccountCode ? [
-                                    { source: 'rental_accrual', 'metadata.type': 'lease_start', 'entries.accountCode': arAccountCode }
+                                    {
+                                        source: 'rental_accrual',
+                                        'metadata.type': 'lease_start',
+                                        'entries.accountCode': arAccountCode,
+                                        date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd }
+                                    }
                                 ] : [])
                             ],
-                            status: { $ne: 'deleted' }
+                            status: { $ne: 'reversed' }
                         });
                         
                         if (!existingLeaseStart) {
@@ -137,7 +155,12 @@ class TenantAccrualCheckService {
                                 const leaseStartResult = await RentalAccrualService.processLeaseStart(application);
                                 
                                 if (leaseStartResult && leaseStartResult.success && !leaseStartResult.skipped) {
-                                    console.log(`      ✅ Created missing lease start transaction`);
+                                    // processLeaseStart may return success even when transactions already existed (invoice-only/welcome-email path)
+                                    if (leaseStartResult.existingTransaction || /already exist/i.test(leaseStartResult.message || '')) {
+                                        console.log(`      ✅ Lease start transaction already existed (no new lease start posted)`);
+                                    } else {
+                                        console.log(`      ✅ Created missing lease start transaction`);
+                                    }
                                 } else if (leaseStartResult && leaseStartResult.skipped) {
                                     console.log(`      ⏭️ Lease start skipped: ${leaseStartResult.message}`);
                                 } else {
@@ -363,14 +386,28 @@ class TenantAccrualCheckService {
                                     totalAccrualsCreated++;
                                     monthsWithAccruals.push(`${month}/${year}`);
                                 } else {
-                                    console.log(`      ⚠️ Failed to create monthly accrual for ${month}/${year}: ${result.error}`);
-                                    errors.push({
-                                        tenant: studentName,
-                                        applicationCode: application.applicationCode,
-                                        month,
-                                        year,
-                                        error: result.error
-                                    });
+                                    const msg = result?.error || 'Unknown';
+                                    const isExpectedSkip = typeof msg === 'string' && msg.toLowerCase().includes('already exists');
+                                    if (isExpectedSkip) {
+                                        console.log(`      ℹ️ Skipped ${month}/${year}: ${msg}`);
+                                        tenantAccrualsSkipped++;
+                                        // Treat as present (it exists in DB even if our primary lookup missed it)
+                                        if (!monthsWithAccruals.includes(`${month}/${year}`)) {
+                                            monthsWithAccruals.push(`${month}/${year}`);
+                                        }
+                                        // Remove from missing list if it was added
+                                        const missingIdx = monthsMissing.indexOf(`${month}/${year}`);
+                                        if (missingIdx >= 0) monthsMissing.splice(missingIdx, 1);
+                                    } else {
+                                        console.log(`      ⚠️ Failed to create monthly accrual for ${month}/${year}: ${msg}`);
+                                        errors.push({
+                                            tenant: studentName,
+                                            applicationCode: application.applicationCode,
+                                            month,
+                                            year,
+                                            error: msg
+                                        });
+                                    }
                                 }
                             } catch (error) {
                                 console.error(`      ❌ Error creating monthly accrual for ${month}/${year}: ${error.message}`);

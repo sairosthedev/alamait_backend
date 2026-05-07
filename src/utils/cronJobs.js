@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { handleExpiredApplications, sendExpiryWarnings } = require('./applicationUtils');
 const emailOutboxService = require('../services/emailOutboxService');
 const TenantAccrualCheckService = require('../services/tenantAccrualCheckService');
+const AccrualIntegrityService = require('../services/accrualIntegrityService');
 
 // Schedule tasks to be run on the server
 const initCronJobs = () => {
@@ -20,6 +21,19 @@ const initCronJobs = () => {
             await TenantAccrualCheckService.checkAllTenantsForMissingAccruals();
         } catch (error) {
             console.error('❌ Error in tenant accrual check cron job:', error);
+        }
+    }, {
+        scheduled: true,
+        timezone: "Africa/Harare"
+    });
+
+    // Strong accrual integrity job (daily): ensure lease_start + monthly, then reverse duplicates.
+    cron.schedule('10 2 * * *', async () => {
+        try {
+            console.log('🧾 Running daily accrual integrity job...');
+            await AccrualIntegrityService.run({ fixDuplicates: true });
+        } catch (error) {
+            console.error('❌ Error in daily accrual integrity job:', error);
         }
     }, {
         scheduled: true,

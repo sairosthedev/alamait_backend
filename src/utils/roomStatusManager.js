@@ -8,6 +8,7 @@
 const { Residence } = require('../models/Residence');
 const Application = require('../models/Application');
 const User = require('../models/User');
+const RoomOccupancyUtils = require('./roomOccupancyUtils');
 
 class RoomStatusManager {
     
@@ -191,97 +192,33 @@ class RoomStatusManager {
      */
     static async syncAllRoomOccupancy(residenceId = null) {
         try {
-            console.log('🔄 Syncing room occupancy for all applications...');
-            
-            // Find all applications with allocated rooms
-            const query = {
-                allocatedRoom: { $exists: true, $ne: null },
-                status: { $in: ['approved', 'active'] }
-            };
-            
-            if (residenceId) {
-                query.residence = residenceId;
-            }
-            
-            const applications = await Application.find(query);
-            console.log(`Found ${applications.length} applications with allocated rooms`);
-            
-            // Group by residence and room
-            const roomAllocations = {};
-            
-            applications.forEach(app => {
-                const key = `${app.residence}-${app.allocatedRoom}`;
-                if (!roomAllocations[key]) {
-                    roomAllocations[key] = {
-                        residenceId: app.residence,
-                        roomNumber: app.allocatedRoom,
-                        count: 0,
-                        applications: []
-                    };
-                }
-                roomAllocations[key].count++;
-                roomAllocations[key].applications.push(app._id);
-            });
-            
-            console.log(`Found ${Object.keys(roomAllocations).length} unique room allocations`);
-            
-            // Update each room's occupancy
-            const results = [];
-            for (const [key, allocation] of Object.entries(roomAllocations)) {
-                try {
-                    const residence = await Residence.findById(allocation.residenceId);
-                    if (residence) {
-                        const room = residence.rooms.find(r => r.roomNumber === allocation.roomNumber);
-                        if (room) {
-                            const oldOccupancy = room.currentOccupancy || 0;
-                            const newOccupancy = allocation.count;
-                            
-                            room.currentOccupancy = newOccupancy;
-                            
-                            if (newOccupancy === 0) {
-                                room.status = 'available';
-                            } else if (newOccupancy >= (room.capacity || 1)) {
-                                room.status = 'occupied';
-                            } else {
-                                room.status = 'reserved';
-                            }
-                            
-                            await residence.save();
-                            
-                            results.push({
-                                roomNumber: allocation.roomNumber,
-                                residenceId: allocation.residenceId,
-                                oldOccupancy: oldOccupancy,
-                                newOccupancy: newOccupancy,
-                                newStatus: room.status,
-                                applicationCount: allocation.count,
-                                updated: oldOccupancy !== newOccupancy
-                            });
-                            
-                            if (oldOccupancy !== newOccupancy) {
-                                console.log(`✅ Room ${allocation.roomNumber}: ${oldOccupancy} → ${newOccupancy} (${room.status})`);
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.error(`❌ Error syncing room ${allocation.roomNumber}:`, error);
-                    results.push({
-                        roomNumber: allocation.roomNumber,
-                        residenceId: allocation.residenceId,
-                        error: error.message
-                    });
+            console.log('🔄 Syncing room occupancy (lease-based, per residence)...');
+
+            const residences = residenceId
+                ? [await Residence.findById(residenceId)].filter(Boolean)
+                : await Residence.find({}).select('_id');
+
+            const allResults = [];
+            let totalUpdated = 0;
+
+            for (const res of residences) {
+                if (!res?._id) continue;
+                const sync = await RoomOccupancyUtils.syncAllRoomOccupancies(res._id);
+                totalUpdated += sync.totalUpdated || 0;
+                if (Array.isArray(sync.results)) {
+                    allResults.push(...sync.results);
                 }
             }
-            
-            const updatedRooms = results.filter(r => r.updated).length;
-            
+
+            const updatedRooms = allResults.filter((r) => r.updated).length;
+
             return {
                 success: true,
-                totalRooms: results.length,
-                updatedRooms: updatedRooms,
-                results: results
+                totalRooms: allResults.length,
+                updatedRooms,
+                totalUpdated,
+                results: allResults
             };
-            
         } catch (error) {
             console.error('❌ Error syncing room occupancy:', error);
             return { success: false, error: error.message };

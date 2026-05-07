@@ -22,6 +22,21 @@ const accrualLog = (...args) => {
  * Supports both accrual and cash basis accounting
  */
 class RentalAccrualService {
+    static END_MONTH_CUTOFF_DAY = 5; // if lease ends on/before this day, do NOT accrue that month
+
+    static shouldAccrueMonthForLease(leaseStart, leaseEnd, month, year) {
+        if (!(leaseStart instanceof Date) || !(leaseEnd instanceof Date)) return true;
+        if (Number.isNaN(leaseStart.getTime()) || Number.isNaN(leaseEnd.getTime())) return true;
+
+        // If this is the lease end month and lease ends very early, do not accrue it.
+        const endMonth = leaseEnd.getMonth() + 1;
+        const endYear = leaseEnd.getFullYear();
+        const endDay = leaseEnd.getDate();
+        if (year === endYear && month === endMonth && endDay <= RentalAccrualService.END_MONTH_CUTOFF_DAY) {
+            return false;
+        }
+        return true;
+    }
     /**
      * Check if a monthly rent accrual already exists for a student/month/year
      * Uses comprehensive duplicate detection logic
@@ -31,7 +46,7 @@ class RentalAccrualService {
         
         const query = {
             source: 'rental_accrual',
-            status: { $ne: 'deleted' }, // Exclude deleted transactions
+            status: { $ne: 'reversed' }, // Exclude reversed duplicates/voids
             $and: [
                 {
                     $or: [
@@ -42,6 +57,7 @@ class RentalAccrualService {
                 {
                     $or: [
                         { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+                        { 'metadata.accrualMonth': String(month), 'metadata.accrualYear': String(year) },
                         { 'metadata.month': monthKey },
                         { description: { $regex: new RegExp(monthKey) } },
                         { description: { $regex: new RegExp(`\\b${month}\\b.*\\b${year}\\b`) } }
@@ -57,7 +73,14 @@ class RentalAccrualService {
             studentCriteria.push({ 'metadata.studentId': studentId.toString() });
             studentCriteria.push({ 'metadata.userId': studentId.toString() });
             // Also check if sourceId matches
-            studentCriteria.push({ sourceId: mongoose.Types.ObjectId.isValid(studentId) ? new mongoose.Types.ObjectId(studentId) : studentId });
+            if (mongoose.Types.ObjectId.isValid(studentId)) {
+                const oid = new mongoose.Types.ObjectId(studentId);
+                studentCriteria.push({ sourceId: oid });
+                studentCriteria.push({ sourceId: studentId.toString() }); // sometimes persisted as string
+                studentCriteria.push({ 'metadata.studentId': oid }); // some writers store ObjectId in metadata
+            } else {
+                studentCriteria.push({ sourceId: studentId });
+            }
         }
         if (applicationId) {
             studentCriteria.push({ 'metadata.applicationId': applicationId.toString() });
@@ -535,6 +558,8 @@ class RentalAccrualService {
             // 🆕 ENHANCED: Comprehensive duplicate detection for lease starts
             // Check by multiple criteria to prevent duplicates from any source
             const leaseStartDateStr = leaseStartDate.toISOString().split('T')[0]; // YYYY-MM-DD
+            const leaseStartDayStart = new Date(leaseStartDateStr);
+            const leaseStartDayEnd = new Date(new Date(leaseStartDayStart).setDate(leaseStartDayStart.getDate() + 1));
             
             // Build comprehensive duplicate check array
             const duplicateChecks = [
@@ -542,37 +567,74 @@ class RentalAccrualService {
                     { 'metadata.applicationId': application._id, 'metadata.type': 'lease_start' },
                     { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' },
                     { source: 'rental_accrual', sourceModel: 'Application', sourceId: application._id },
-                // 🆕 ENHANCED: Check by description patterns (catches both "Lease start for" and "Lease start accounting entries")
-                // Check by application code in description (if present)
-                { description: { $regex: new RegExp(`Lease start.*${application.applicationCode}`, 'i') } },
-                // Check by student name in description (catches both formats)
-                { description: { $regex: new RegExp(`Lease start.*${application.firstName}.*${application.lastName}`, 'i') } },
-                { description: { $regex: new RegExp(`Lease start accounting entries.*${application.firstName}.*${application.lastName}`, 'i') } },
+                // 🆕 ENHANCED: Check by description patterns (legacy writers).
+                // IMPORTANT: scope these to the SAME lease-start DAY; otherwise an older lease_start
+                // for the same named person can incorrectly block the new lease_start.
+                {
+                    source: 'rental_accrual',
+                    'metadata.type': 'lease_start',
+                    description: { $regex: new RegExp(`Lease start.*${application.applicationCode}`, 'i') },
+                    date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd }
+                },
+                {
+                    source: 'rental_accrual',
+                    'metadata.type': 'lease_start',
+                    description: { $regex: new RegExp(`Lease start.*${application.firstName}.*${application.lastName}`, 'i') },
+                    date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd }
+                },
+                {
+                    source: 'rental_accrual',
+                    'metadata.type': 'lease_start',
+                    description: { $regex: new RegExp(`Lease start accounting entries.*${application.firstName}.*${application.lastName}`, 'i') },
+                    date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd }
+                },
                 // 🆕 CRITICAL: Check by student name + date (catches duplicates regardless of description format)
                     ...(studentId ? [{
                         source: 'rental_accrual',
                         'metadata.type': 'lease_start',
                         'metadata.studentId': studentId,
                         date: {
-                            $gte: new Date(leaseStartDateStr),
-                            $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
+                            $gte: leaseStartDayStart,
+                            $lt: leaseStartDayEnd
                         },
-                        status: { $ne: 'deleted' }
+                        status: { $ne: 'reversed' }
                 }] : []),
             ];
             
-            // 🆕 Add debtor-based checks if debtor exists (prevents duplicates across different applications for same student)
+            // 🆕 Add debtor-based checks if debtor exists.
+            // IMPORTANT: These checks MUST be scoped to the same lease-start date.
+            // Otherwise, an older lease_start for the same debtor can incorrectly block a new application's lease_start
+            // (e.g., student renewals or multiple lease periods).
             if (debtorId) {
                 duplicateChecks.push(
-                    { source: 'rental_accrual', 'metadata.type': 'lease_start', 'metadata.debtorId': debtorId },
-                    { source: 'rental_accrual', sourceModel: 'Debtor', sourceId: debtorId, 'metadata.type': 'lease_start' }
+                    {
+                        source: 'rental_accrual',
+                        'metadata.type': 'lease_start',
+                        'metadata.debtorId': debtorId,
+                        date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd },
+                        status: { $ne: 'reversed' }
+                    },
+                    {
+                        source: 'rental_accrual',
+                        sourceModel: 'Debtor',
+                        sourceId: debtorId,
+                        'metadata.type': 'lease_start',
+                        date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd },
+                        status: { $ne: 'reversed' }
+                    }
                 );
             }
             
-            // 🆕 Add account code check if available (catches duplicates by AR account)
+            // 🆕 Add account code check if available (catches duplicates by AR account) - also scope to the same day
             if (debtor && debtor.accountCode && typeof debtor.accountCode === 'string') {
                 duplicateChecks.push(
-                    { source: 'rental_accrual', 'metadata.type': 'lease_start', 'entries.accountCode': debtor.accountCode }
+                    {
+                        source: 'rental_accrual',
+                        'metadata.type': 'lease_start',
+                        'entries.accountCode': debtor.accountCode,
+                        date: { $gte: leaseStartDayStart, $lt: leaseStartDayEnd },
+                        status: { $ne: 'reversed' }
+                    }
                 );
             }
             
@@ -580,7 +642,7 @@ class RentalAccrualService {
             
             const existingEntries = await TransactionEntry.findOne({
                 $or: duplicateChecks,
-                status: { $ne: 'deleted' } // Exclude deleted transactions
+                status: { $ne: 'reversed' } // Exclude reversed duplicates/voids
             });
             
             if (existingEntries) {
@@ -924,7 +986,7 @@ class RentalAccrualService {
                     $gte: new Date(leaseStartDateStr),
                     $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
                 },
-                status: { $ne: 'deleted' },
+                status: { $ne: 'reversed' },
                 $or: [
                     // Check by student ID
                     { 'metadata.studentId': studentId },
@@ -1003,6 +1065,9 @@ class RentalAccrualService {
             const leaseStartDateForBackfill = new Date(application.startDate);
             const leaseStartMonthForBackfill = leaseStartDateForBackfill.getMonth() + 1;
             const leaseStartYearForBackfill = leaseStartDateForBackfill.getFullYear();
+            const leaseEndDateForBackfill = new Date(application.endDate);
+            const leaseEndMonthForBackfill = leaseEndDateForBackfill.getMonth() + 1;
+            const leaseEndYearForBackfill = leaseEndDateForBackfill.getFullYear();
             
             // Check if lease started in a past month (not current month)
             if (leaseStartYearForBackfill < currentYear || (leaseStartYearForBackfill === currentYear && leaseStartMonthForBackfill < currentMonth)) {
@@ -1021,6 +1086,10 @@ class RentalAccrualService {
                     
                     let accrualsCreated = 0;
                     while (year < currentYear || (year === currentYear && month <= currentMonth)) {
+                        // Stop at lease end boundary (do not create accruals after the lease ends)
+                        if (year > leaseEndYearForBackfill || (year === leaseEndYearForBackfill && month > leaseEndMonthForBackfill)) {
+                            break;
+                        }
                         const result = await this.createStudentRentAccrual(application, month, year);
                         if (result.success) {
                             accrualsCreated++;
@@ -1101,6 +1170,11 @@ class RentalAccrualService {
             for (const student of activeStudents) {
                 try {
                     const studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim() || 'Unknown';
+                    // Lease-end cutoff rule: if lease ends on/before day 5 of this month, skip month accrual.
+                    if (!this.shouldAccrueMonthForLease(new Date(student.startDate), new Date(student.endDate), month, year)) {
+                        console.log(`   ⏭️ Skipping ${studentName}: lease ended early in ${month}/${year} (no accrual)`);
+                        continue;
+                    }
                     const result = await this.createStudentRentAccrual(student, month, year);
                     if (result.success) {
                         accrualsCreated++;
@@ -1202,6 +1276,70 @@ class RentalAccrualService {
                 const leaseEndMonth = leaseEnd.getMonth() + 1;
                 const leaseEndYear = leaseEnd.getFullYear();
 
+                // ✅ Ensure lease_start exists for the lease start month (if within range and not future)
+                try {
+                    const isFutureLeaseStart =
+                        (leaseStartYear > currentYear) ||
+                        (leaseStartYear === currentYear && leaseStartMonth > currentMonth);
+
+                    const inRange =
+                        (leaseStartYear > checkStartYear || (leaseStartYear === checkStartYear && leaseStartMonth >= checkStartMonth)) &&
+                        (leaseStartYear < checkEndYear || (leaseStartYear === checkEndYear && leaseStartMonth <= checkEndMonth));
+
+                    if (!isFutureLeaseStart && inRange) {
+                        const TransactionEntry = require('../models/TransactionEntry');
+                        const leaseStartQuery = {
+                            source: 'rental_accrual',
+                            status: { $ne: 'reversed' },
+                            $and: [
+                                {
+                                    $or: [
+                                        { 'metadata.type': 'lease_start' },
+                                        { description: { $regex: /lease start/i } }
+                                    ]
+                                },
+                                {
+                                    $or: [
+                                        { 'metadata.applicationId': app._id?.toString() },
+                                        { sourceId: app._id },
+                                        { sourceId: app._id?.toString() },
+                                        ...(app.student?._id ? [{ 'metadata.studentId': app.student._id.toString() }] : []),
+                                        ...(app.student ? [{ 'metadata.studentId': String(app.student) }] : []),
+                                        ...(app.applicationCode ? [{ 'metadata.applicationCode': app.applicationCode }] : [])
+                                    ]
+                                }
+                            ]
+                        };
+                        const existingLeaseStart = await TransactionEntry.findOne(leaseStartQuery).lean();
+                        if (!existingLeaseStart) {
+                            totalMissing++;
+                            missingAccruals.push({
+                                applicationId: app._id,
+                                studentId: app.student?._id || app.student,
+                                studentName: app.student ? `${app.student.firstName} ${app.student.lastName}` : `${app.firstName || ''} ${app.lastName || ''}`.trim(),
+                                month: leaseStartMonth,
+                                year: leaseStartYear,
+                                type: 'lease_start'
+                            });
+                            if (!dryRun) {
+                                const leaseStartResult = await this.processLeaseStart(app);
+                                if (leaseStartResult?.success && !leaseStartResult?.skipped) {
+                                    totalCreated++;
+                                    console.log(`   ✅ Created missing lease_start for ${app.student?.firstName || app.firstName} - ${leaseStartMonth}/${leaseStartYear}`);
+                                } else if (leaseStartResult?.skipped) {
+                                    // already exists by deeper check
+                                } else {
+                                    totalErrors++;
+                                    console.log(`   ❌ Failed to create lease_start for ${app.student?.firstName || app.firstName}: ${leaseStartResult?.error || 'Unknown'}`);
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    totalErrors++;
+                    console.log(`   ❌ Error ensuring lease_start for ${app.student?.firstName || app.firstName}: ${e.message}`);
+                }
+
                 // Determine which months to check
                 let checkMonth = Math.max(checkStartMonth, leaseStartMonth);
                 let checkYear = checkStartMonth >= leaseStartMonth ? checkStartYear : leaseStartYear;
@@ -1228,6 +1366,20 @@ class RentalAccrualService {
 
                     // Skip lease start month (handled by lease_start process)
                     if (month === leaseStartMonth && year === leaseStartYear) {
+                        month++;
+                        if (month > 12) {
+                            month = 1;
+                            year++;
+                        }
+                        continue;
+                    }
+
+                    // Lease-end cutoff rule: if lease ends on/before day 5 of this month, do not create this month's accrual.
+                    if (!this.shouldAccrueMonthForLease(leaseStart, leaseEnd, month, year)) {
+                        // If this is the lease end month and it's not accrued, stop checking further months.
+                        if (year === leaseEndYear && month === leaseEndMonth) {
+                            break;
+                        }
                         month++;
                         if (month > 12) {
                             month = 1;
@@ -1619,7 +1771,7 @@ class RentalAccrualService {
                                 ]
                             }
                         ],
-                        status: { $ne: 'deleted' }
+                        status: { $ne: 'reversed' }
                     };
                     
                     const existingLeaseStart = await TransactionEntry.findOne(leaseStartQuery);
@@ -1688,6 +1840,14 @@ class RentalAccrualService {
                         break;
                     }
 
+                    // Lease-end cutoff rule: if lease ends on/before day 5 of this month, do not accrue this month.
+                    if (!this.shouldAccrueMonthForLease(leaseStart, leaseEnd, checkMonth, checkYear)) {
+                        if (checkYear === leaseEndYear && checkMonth === leaseEndMonth) {
+                            break;
+                        }
+                        // otherwise continue (shouldn't normally happen)
+                    }
+
                     try {
                         // Check if monthly accrual exists (use studentId from above)
                         const existingMonthlyAccrual = await this.checkExistingMonthlyAccrual(
@@ -1695,7 +1855,7 @@ class RentalAccrualService {
                             checkMonth,
                             checkYear,
                             applicationId || student._id,
-                            student.debtor
+                            debtorIdForStudent || student.debtor
                         );
 
                         if (!existingMonthlyAccrual) {
@@ -1897,7 +2057,7 @@ class RentalAccrualService {
                 'metadata.accrualMonth': month,
                 'metadata.accrualYear': year,
                 'metadata.studentId': studentIdString,
-                status: { $ne: 'deleted' }
+                status: { $ne: 'reversed' }
             });
             
             if (existingAccrualExact) {
@@ -1911,7 +2071,7 @@ class RentalAccrualService {
                 sourceId: sourceId,
                 date: monthStart,
                 'metadata.type': 'monthly_rent_accrual',
-                status: { $ne: 'deleted' }
+                status: { $ne: 'reversed' }
             });
             
             if (existingBySourceId) {
@@ -1930,7 +2090,7 @@ class RentalAccrualService {
                         { 'metadata.debtorId': debtorIdForCheck },
                         { sourceModel: 'Debtor', sourceId: debtorIdForCheck }
                     ],
-                    status: { $ne: 'deleted' }
+                    status: { $ne: 'reversed' }
                 });
                 
                 if (existingByDebtorId) {
@@ -1943,7 +2103,7 @@ class RentalAccrualService {
             const existingByDescription = await TransactionEntry.findOne({
                 source: 'rental_accrual',
                 description: { $regex: new RegExp(`Monthly rent accrual.*${student.firstName}.*${student.lastName}.*${month}/${year}`, 'i') },
-                status: { $ne: 'deleted' }
+                status: { $ne: 'reversed' }
             });
             
             if (existingByDescription) {
@@ -2165,14 +2325,14 @@ class RentalAccrualService {
                         'metadata.accrualMonth': month,
                         'metadata.accrualYear': year,
                         'metadata.studentId': studentIdString,
-                        status: { $ne: 'deleted' }
+                        status: { $ne: 'reversed' }
                     },
                     {
                         source: 'rental_accrual',
                         sourceId: sourceId,
                         date: monthStart,
                         'metadata.type': 'monthly_rent_accrual',
-                        status: { $ne: 'deleted' }
+                        status: { $ne: 'reversed' }
                     }
                 ]
             });
@@ -2230,7 +2390,7 @@ class RentalAccrualService {
                         'metadata.accrualMonth': month,
                         'metadata.accrualYear': year,
                         'metadata.studentId': studentIdString,
-                        status: { $ne: 'deleted' }
+                        status: { $ne: 'reversed' }
                     });
                     
                     // If not found by metadata, try by sourceId + date
@@ -2240,7 +2400,7 @@ class RentalAccrualService {
                             sourceId: sourceId,
                             date: monthStart,
                             'metadata.type': 'monthly_rent_accrual',
-                            status: { $ne: 'deleted' }
+                            status: { $ne: 'reversed' }
                         });
                     }
                     

@@ -339,7 +339,7 @@ transactionEntrySchema.index(
     partialFilterExpression: {
       source: 'rental_accrual',
       'metadata.type': 'monthly_rent_accrual',
-      status: { $ne: 'deleted' }
+      status: { $ne: 'reversed' }
     }
   }
 );
@@ -360,7 +360,7 @@ transactionEntrySchema.index(
     partialFilterExpression: {
       source: 'rental_accrual',
       'metadata.type': 'monthly_rent_accrual',
-      status: { $ne: 'deleted' }
+      status: { $ne: 'reversed' }
     }
   }
 );

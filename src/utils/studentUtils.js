@@ -76,6 +76,21 @@ async function getStudentIdentifierMap() {
  */
 async function getStudentInfo(studentId) {
     try {
+        // Accept common shapes (ObjectId, populated student object, etc.)
+        if (studentId && typeof studentId === 'object') {
+            // If caller passed a populated student object, extract _id
+            if (studentId._id && mongoose.Types.ObjectId.isValid(studentId._id)) {
+                studentId = studentId._id.toString();
+            } else if (studentId.toString && mongoose.Types.ObjectId.isValid(studentId.toString())) {
+                // If caller passed an ObjectId
+                studentId = studentId.toString();
+            } else {
+                // Last-ditch: avoid logging massive objects; keep warning consistent
+                console.warn(`⚠️ Invalid studentId provided to getStudentInfo: ${studentId}`);
+                return null;
+            }
+        }
+
         // Validate studentId before using it
         if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
             console.warn(`⚠️ Invalid studentId provided to getStudentInfo: ${studentId}`);

@@ -2,6 +2,7 @@ const { validationResult } = require('express-validator');
 const { Residence } = require('../../models/Residence');
 const Application = require('../../models/Application');
 const ResidencePaymentService = require('../../services/residencePaymentService');
+const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
 const { body } = require('express-validator');
 
 // Helper function to parse CSV room data
@@ -551,19 +552,26 @@ exports.getRoomsByResidence = async (req, res) => {
             });
         }
 
-        // Return rooms with availability information
-        const rooms = residence.rooms.map(room => ({
-            roomNumber: room.roomNumber,
-            type: room.type,
-            capacity: room.capacity,
-            price: room.price,
-            status: room.status,
-            currentOccupancy: room.currentOccupancy || 0,
-            floor: room.floor,
-            area: room.area,
-            features: room.features || [],
-            isAvailable: (room.currentOccupancy || 0) < room.capacity
-        }));
+        const rooms = await Promise.all(
+            (residence.rooms || []).map(async (room) => {
+                const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(
+                    residenceId,
+                    room.roomNumber
+                );
+                return {
+                    roomNumber: room.roomNumber,
+                    type: room.type,
+                    capacity: room.capacity,
+                    price: room.price,
+                    status: room.status,
+                    currentOccupancy: occ.currentOccupancy,
+                    floor: room.floor,
+                    area: room.area,
+                    features: room.features || [],
+                    isAvailable: occ.isAvailable
+                };
+            })
+        );
 
         res.status(200).json({
             success: true,
@@ -592,19 +600,26 @@ exports.getResidenceRooms = async (req, res) => {
             });
         }
 
-        // Format rooms for response
-        const formattedRooms = residence.rooms.map(room => ({
-            roomNumber: room.roomNumber,
-            type: room.type,
-            capacity: room.capacity,
-            currentOccupancy: room.currentOccupancy || 0,
-            status: room.status,
-            price: room.price,
-            floor: room.floor,
-            area: room.area,
-            features: room.features || [],
-            isAvailable: room.status === 'available' || room.status === 'reserved'
-        }));
+        const formattedRooms = await Promise.all(
+            (residence.rooms || []).map(async (room) => {
+                const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(
+                    residence._id,
+                    room.roomNumber
+                );
+                return {
+                    roomNumber: room.roomNumber,
+                    type: room.type,
+                    capacity: room.capacity,
+                    currentOccupancy: occ.currentOccupancy,
+                    status: room.status,
+                    price: room.price,
+                    floor: room.floor,
+                    area: room.area,
+                    features: room.features || [],
+                    isAvailable: occ.isAvailable
+                };
+            })
+        );
 
         res.json({
             success: true,

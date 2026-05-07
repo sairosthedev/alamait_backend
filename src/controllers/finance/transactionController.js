@@ -2557,6 +2557,26 @@ class TransactionController {
                 const monthStart = new Date(yearNum, monthNum - 1, 1, 0, 0, 0, 0);
                 const monthEnd = new Date(yearNum, monthNum, 0, 23, 59, 59, 999);
                 const studentIdObj = mongoose.Types.ObjectId.isValid(studentId) ? new mongoose.Types.ObjectId(studentId) : null;
+                const Debtor = require('../../models/Debtor');
+                const Application = require('../../models/Application');
+
+                // Resolve debtor account up-front so accrual lookup works even when sourceId/metadata studentId differ.
+                let debtorForAccrual = await Debtor.findOne({ user: studentId }).select('_id accountCode user application').lean();
+                if (!debtorForAccrual && studentIdObj) {
+                    debtorForAccrual = await Debtor.findOne({ user: studentIdObj }).select('_id accountCode user application').lean();
+                }
+                if (!debtorForAccrual) {
+                    const appByStudent = await Application.findOne({ student: studentId }).select('_id').lean();
+                    if (appByStudent?._id) {
+                        debtorForAccrual = await Debtor.findOne({ application: appByStudent._id }).select('_id accountCode user application').lean();
+                    }
+                }
+                if (!debtorForAccrual && studentIdObj) {
+                    const appById = await Application.findById(studentIdObj).select('student').lean();
+                    if (appById?.student) {
+                        debtorForAccrual = await Debtor.findOne({ user: appById.student }).select('_id accountCode user application').lean();
+                    }
+                }
 
                 const studentMatch = {
                     $or: [
@@ -2567,6 +2587,9 @@ class TransactionController {
                 };
                 if (studentIdObj) {
                     studentMatch.$or.push({ 'metadata.studentId': studentIdObj });
+                }
+                if (debtorForAccrual?.accountCode) {
+                    studentMatch.$or.push({ 'entries.accountCode': debtorForAccrual.accountCode });
                 }
 
                 originalAccrual = await TransactionEntry.findOne({
@@ -2605,14 +2628,13 @@ class TransactionController {
 
                 // Fallback: find by date in month + entries contain AR account for this student (via debtor)
                 if (!originalAccrual && studentIdObj) {
-                    const Debtor = require('../../models/Debtor');
-                    const debtor = await Debtor.findOne({ user: studentIdObj }).select('accountCode').lean();
-                    if (debtor?.accountCode) {
+                    const debtorAccountCode = debtorForAccrual?.accountCode;
+                    if (debtorAccountCode) {
                         originalAccrual = await TransactionEntry.findOne({
                             source: 'rental_accrual',
                             status: 'posted',
                             date: { $gte: monthStart, $lte: monthEnd },
-                            'entries.accountCode': debtor.accountCode
+                            'entries.accountCode': debtorAccountCode
                         });
                     }
                 }
