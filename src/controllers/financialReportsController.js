@@ -7,6 +7,135 @@ const SimpleBalanceSheetService = require('../services/simpleBalanceSheetService
 const Account = require('../models/Account');
 const { validateToken } = require('../middleware/auth');
 
+const DEPOSIT_LIABILITY_CODES = ['2201', '2020', '20002', '2002', '2028', '20020', '21001'];
+const INCOME_SECURITY_DEPOSIT_ALIASES = new Set(['deposits', 'security_deposits', 'securitydeposits']);
+
+function normalizeReportAccountCode(code) {
+    return String(code ?? '').trim();
+}
+
+function getEntryAccountCode(entry) {
+    return normalizeReportAccountCode(entry?.accountCode || entry?.account?.code);
+}
+
+function getEntriesForAccount(transaction, accountCode) {
+    const target = normalizeReportAccountCode(accountCode);
+    return (transaction?.entries || []).filter((entry) => getEntryAccountCode(entry) === target);
+}
+
+function sumEntriesForAccount(transaction, accountCode) {
+    const entries = getEntriesForAccount(transaction, accountCode);
+    return entries.reduce((totals, entry) => {
+        totals.debit += entry.debit || 0;
+        totals.credit += entry.credit || 0;
+        return totals;
+    }, { debit: 0, credit: 0 });
+}
+
+function isIncomeSecurityDepositsCategory(accountCode) {
+    return INCOME_SECURITY_DEPOSIT_ALIASES.has(normalizeReportAccountCode(accountCode).toLowerCase());
+}
+
+function isDepositReceiptTransaction(transaction, depositCodes = DEPOSIT_LIABILITY_CODES) {
+    if (!transaction?.entries?.length) {
+        return false;
+    }
+    const codes = new Set(depositCodes.map(normalizeReportAccountCode));
+    let depositCredit = 0;
+    let depositDebit = 0;
+    let cashOrAssetDebit = 0;
+
+    for (const entry of transaction.entries) {
+        const code = getEntryAccountCode(entry);
+        const credit = entry.credit || 0;
+        const debit = entry.debit || 0;
+        if (codes.has(code)) {
+            depositCredit += credit;
+            depositDebit += debit;
+        }
+        if (code.match(/^100/) && debit > 0) {
+            cashOrAssetDebit += debit;
+        }
+    }
+
+    return depositCredit > 0 && cashOrAssetDebit > 0 && depositDebit === 0;
+}
+
+function getDepositReceiptAmount(transaction, depositCodes = DEPOSIT_LIABILITY_CODES) {
+    const codes = new Set(depositCodes.map(normalizeReportAccountCode));
+    let depositCredit = 0;
+    let cashDebit = 0;
+
+    for (const entry of transaction.entries || []) {
+        const code = getEntryAccountCode(entry);
+        if (codes.has(code)) {
+            depositCredit += entry.credit || 0;
+        }
+        if (code.match(/^100/) && (entry.debit || 0) > 0) {
+            cashDebit += entry.debit || 0;
+        }
+    }
+
+    return depositCredit > 0 ? depositCredit : cashDebit;
+}
+
+const REPORT_MONTH_NAMES = [
+    'january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december'
+];
+
+function resolveMonthDateRange(period, month) {
+    if (!period || !month) {
+        return null;
+    }
+
+    const year = parseInt(String(period).slice(0, 4), 10);
+    if (Number.isNaN(year)) {
+        return null;
+    }
+
+    const monthInput = String(month).toLowerCase().trim();
+    let monthIndex = REPORT_MONTH_NAMES.indexOf(monthInput);
+    if (monthIndex === -1) {
+        const numericMonth = parseInt(monthInput, 10);
+        if (numericMonth >= 1 && numericMonth <= 12) {
+            monthIndex = numericMonth - 1;
+        }
+    }
+    if (monthIndex === -1) {
+        return null;
+    }
+
+    return {
+        startDate: new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0, 0)),
+        endDate: new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999)),
+        monthName: REPORT_MONTH_NAMES[monthIndex],
+        monthIndex,
+        year
+    };
+}
+
+function transactionDateInRange(transaction, range) {
+    if (!range || !transaction?.date) {
+        return true;
+    }
+    const txDate = new Date(transaction.date);
+    return txDate >= range.startDate && txDate <= range.endDate;
+}
+
+function appendQueryClause(query, clause) {
+    if (query.$and && Array.isArray(query.$and)) {
+        query.$and.push(clause);
+        return query;
+    }
+    return {
+        $and: [
+            query,
+            clause
+        ]
+    };
+}
+
 /**
  * Financial Reports Controller
  * 
@@ -2343,7 +2472,6 @@ class FinancialReportsController {
     static async getCashFlowAccountDetails(req, res) {
         try {
             let { period, month, accountCode, residenceId } = req.query;
-            
             // 🆕 Parse account code if it contains compound key (e.g., "20002__interbranch_newlands" -> "20002")
             // This handles cases where the frontend sends compound keys but we need just the account code
             if (accountCode && accountCode.includes('__')) {
@@ -2351,6 +2479,9 @@ class FinancialReportsController {
                 accountCode = parts[0]; // Use only the account code part (before __)
                 console.log(`📊 Parsed compound account code: ${req.query.accountCode} -> ${accountCode}`);
             }
+            accountCode = normalizeReportAccountCode(accountCode);
+            const isIncomeSecurityDeposits = isIncomeSecurityDepositsCategory(accountCode);
+            const monthDateRange = resolveMonthDateRange(period, month);
             
             console.log(`📊 Getting cash flow account details for account ${accountCode} in ${month} ${period}${residenceId ? ` (residence: ${residenceId})` : ''}`);
             
@@ -2365,9 +2496,31 @@ class FinancialReportsController {
             // For deposits, fetch all deposit accounts
             let account = null;
             let depositAccounts = [];
-            const depositAccountCodes = ['2201', '2020', '20002', '2002', '2028', '20020'];
+            const depositAccountCodes = DEPOSIT_LIABILITY_CODES.filter((code) => code !== '21001');
             
-            if (depositAccountCodes.includes(accountCode)) {
+            if (isIncomeSecurityDeposits) {
+                depositAccounts = await Account.find({
+                    $or: [
+                        { code: { $in: DEPOSIT_LIABILITY_CODES } },
+                        {
+                            type: 'Liability',
+                            $or: [
+                                { name: /deposit/i },
+                                { name: /security deposit/i },
+                                { name: /tenant deposit/i }
+                            ]
+                        }
+                    ]
+                }).lean();
+                account = {
+                    code: 'deposits',
+                    name: 'Security Deposits',
+                    type: 'Income',
+                    category: 'Operating Revenue',
+                    isVirtual: true,
+                    isIncomeSecurityDeposits: true
+                };
+            } else if (depositAccountCodes.includes(accountCode)) {
                 // Fetch all deposit accounts
                 depositAccounts = await Account.find({
                     $or: [
@@ -2405,10 +2558,10 @@ class FinancialReportsController {
                         category: 'Income',
                         isVirtual: true
                     };
-                } else if (accountCode === '4003' || accountCode === 'deposits' || 
-                          (typeof accountCode === 'string' && accountCode.toLowerCase().includes('deposit') && !accountCode.toLowerCase().includes('other'))) {
+                } else if (accountCode === '4003' ||
+                          (typeof accountCode === 'string' && accountCode.toLowerCase().includes('forfeit') && accountCode.toLowerCase().includes('deposit'))) {
                     // Account code 4003 is used for FORFEITED deposits income (virtual account)
-                    // Regular deposits are liabilities (2020, 2028, etc.)
+                    // Regular security deposit receipts use the virtual "deposits" income category
                     // Create a virtual account object for forfeited deposits
                     account = {
                         code: '4003',
@@ -2936,10 +3089,23 @@ class FinancialReportsController {
             // 1. Payment transactions (cash received) - these have cash (1000) and AR (1100-...)
             // 2. Accrual transactions (income earned) - these have the income account code (4001) directly
             if (account.type === 'Income') {
-                // For cash flow account details, query payment transactions (cash received)
-                // Match the same sources as the cash flow service uses
-                // Special handling for other_income - fetch ALL payment transactions (will filter by description)
-                if (accountCode === '4006' || accountCode === 'other_income') {
+                // Security deposit receipts in the cash-flow income section (virtual "deposits" category)
+                if (account.isIncomeSecurityDeposits || isIncomeSecurityDeposits) {
+                    const allDepositCodes = depositAccounts.length > 0
+                        ? depositAccounts.map((acc) => normalizeReportAccountCode(acc.code))
+                        : DEPOSIT_LIABILITY_CODES;
+                    query = {
+                        $or: [
+                            { 'entries.accountCode': { $in: allDepositCodes } },
+                            {
+                                'entries.accountCode': { $regex: '^100' },
+                                'entries.debit': { $gt: 0 },
+                                description: { $regex: /deposit|security/i }
+                            }
+                        ],
+                        status: { $nin: ['reversed', 'draft'] }
+                    };
+                } else if (accountCode === '4006' || accountCode === 'other_income') {
                     // For other_income, fetch transactions that debit cash account (1000) and credit debtors
                     // Uses cash account code 1000 (regex ^100), NOT account code 4003
                     // This includes: DR Cash CR Debtor (council payments, etc.)
@@ -3116,7 +3282,7 @@ class FinancialReportsController {
                         { 'entries.accountCode': { $in: allDepositCodes } }, // All deposit account entries
                         {
                             'entries.accountCode': { $regex: '^1000' }, // Payment transactions with cash
-                            source: { $in: ['payment', 'accounts_receivable_collection'] },
+                            source: { $in: ['payment', 'accounts_receivable_collection', 'advance_payment', 'payment_allocation', 'manual'] },
                             description: { $regex: /deposit|security/i }
                         }
                     ],
@@ -3179,35 +3345,24 @@ class FinancialReportsController {
             }
             
             // Add date filter - use transaction date (same as cash flow service)
-            // For cash flow, we use transaction date, not allocation month
-            if (period && period.length === 4) {
-                // Year filter
-                if (month) {
-                    // Month name provided (e.g., "october")
-                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
-                    const monthIndex = monthNames.indexOf(month.toLowerCase());
-                    if (monthIndex !== -1) {
-                        // Specific month within the year - use transaction date
-                        const startDate = new Date(parseInt(period), monthIndex, 1);
-                        const endDate = new Date(parseInt(period), monthIndex + 1, 0, 23, 59, 59, 999); // Last day of the month
-                        query.date = { $gte: startDate, $lte: endDate };
-                    } else {
-                        // Year only
-                        const startDate = new Date(`${period}-01-01`);
-                        const endDate = new Date(`${period}-12-31`);
-                        query.date = { $gte: startDate, $lte: endDate };
-                    }
-                } else {
-                    // Year only
-                    const startDate = new Date(`${period}-01-01`);
-                    const endDate = new Date(`${period}-12-31`);
-                    query.date = { $gte: startDate, $lte: endDate };
+            if (monthDateRange) {
+                query.date = { $gte: monthDateRange.startDate, $lte: monthDateRange.endDate };
+            } else if (period && String(period).length === 4) {
+                const year = parseInt(period, 10);
+                query.date = {
+                    $gte: new Date(Date.UTC(year, 0, 1)),
+                    $lte: new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999))
+                };
+            } else if (period && String(period).includes('-')) {
+                const [yearPart, monthPart] = String(period).split('-');
+                const year = parseInt(yearPart, 10);
+                const monthIdx = parseInt(monthPart, 10) - 1;
+                if (!Number.isNaN(year) && monthIdx >= 0 && monthIdx <= 11) {
+                    query.date = {
+                        $gte: new Date(Date.UTC(year, monthIdx, 1)),
+                        $lte: new Date(Date.UTC(year, monthIdx + 1, 0, 23, 59, 59, 999))
+                    };
                 }
-            } else if (period && period.includes('-')) {
-                // Month filter (YYYY-MM)
-                const startDate = new Date(`${period}-01`);
-                const endDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0, 23, 59, 59, 999);
-                query.date = { $gte: startDate, $lte: endDate };
             }
             
             // Add residence filtering if specified (same as cash flow service)
@@ -3222,27 +3377,8 @@ class FinancialReportsController {
                     residence: residenceObjectId
                 };
                 
-                // 🆕 Handle different query structures properly
-                if (query.$and && Array.isArray(query.$and)) {
-                    // Query already has $and array - add residence filter to it
-                    query.$and.push(residenceFilter);
-                } else if (query.$or && Array.isArray(query.$or)) {
-                    // Query has $or - wrap both in $and
-                    query = {
-                        $and: [
-                            { $or: query.$or },
-                            residenceFilter
-                        ]
-                    };
-                } else {
-                    // Simple query - add residence filter using $and
-                    query = {
-                        $and: [
-                            query,
-                            residenceFilter
-                        ]
-                    };
-                }
+                // Preserve date/status/other constraints when adding residence filter
+                query = appendQueryClause(query, residenceFilter);
                 
                 console.log(`🔍 Filtering transactions by residence: ${residenceId}`);
             }
@@ -3250,17 +3386,13 @@ class FinancialReportsController {
             // Add forfeiture exclusion (same as cash flow service)
             // 🆕 EXCEPT for account 4003 (Forfeited Deposits Income) - we WANT forfeiture transactions
             if (accountCode !== '4003') {
-                // 🆕 Add to $and array if query has $and structure, otherwise add directly
-                if (query.$and && Array.isArray(query.$and)) {
-                    query.$and.push({ 'metadata.isForfeiture': { $ne: true } });
-                } else {
-            query['metadata.isForfeiture'] = { $ne: true };
-                }
+                query = appendQueryClause(query, { 'metadata.isForfeiture': { $ne: true } });
             }
             
             let transactions = await TransactionEntry.find(query)
                 .sort({ date: -1 })
-                .limit(500); // Get more transactions to filter by description
+                .limit(500)
+                .lean(); // Get more transactions to filter by description
             
             // 🆕 For investing_activities, filter to only include transactions with cash account credits
             // Loans given must have both: loan account debit AND cash account credit
@@ -3576,49 +3708,24 @@ class FinancialReportsController {
                 
                 // Limit to 100 after filtering
                 transactions = transactions.slice(0, 100);
+            } else if (account.isIncomeSecurityDeposits || isIncomeSecurityDeposits) {
+                const allDepositCodes = depositAccounts.length > 0
+                    ? depositAccounts.map((acc) => normalizeReportAccountCode(acc.code))
+                    : DEPOSIT_LIABILITY_CODES;
+                transactions = transactions.filter((tx) => isDepositReceiptTransaction(tx, allDepositCodes));
+                transactions = transactions.slice(0, 100);
             } else if (depositAccountCodes.includes(accountCode)) {
-                // For deposit accounts, filter to include only deposit-related transactions
-                const allDepositCodes = depositAccounts.length > 0 
-                    ? depositAccounts.map(acc => acc.code)
-                    : depositAccountCodes;
-                
-                transactions = transactions.filter(tx => {
-                    // SPECIAL CASE: For account 2028 (Security deposit payable), only show expense transactions
-                    // Expense transactions: dr 2028, cr cash (security deposit returns)
-                    // Exclude: dr cash cr 2028 (deposit receipts), dr 10005 cr 2028 (opening balance), lease start entries
-                    if (accountCode === '2028') {
-                        const account2028Entry = tx.entries.find(e => String(e.accountCode || '').trim() === '2028');
-                        const cashEntry = tx.entries.find(e => String(e.accountCode || '').trim().match(/^1000/));
-                        const openingBalanceEntry = tx.entries.find(e => String(e.accountCode || '').trim() === '10005');
+                const resolvedAccountCode = normalizeReportAccountCode(account?.code || accountCode);
+                transactions = transactions.filter((tx) => {
+                    if (resolvedAccountCode === '2028') {
+                        const account2028Entries = getEntriesForAccount(tx, '2028');
+                        const cashEntry = tx.entries?.find((e) => getEntryAccountCode(e).match(/^1000/) && (e.credit || 0) > 0);
+                        const openingBalanceEntry = tx.entries?.find((e) => getEntryAccountCode(e) === '10005');
                         const isLeaseStart = tx.source === 'rental_accrual' || (tx.description || '').toLowerCase().includes('lease start');
-                        
-                        // Only include if: 2028 is debited (expense) AND cash is credited AND no opening balance entry
-                        if (account2028Entry && account2028Entry.debit > 0 && cashEntry && cashEntry.credit > 0 && !openingBalanceEntry && !isLeaseStart) {
-                            return true; // This is an expense transaction (security deposit return)
-                        }
-                        
-                        // Exclude all other transactions for 2028
-                        return false;
+                        return account2028Entries.some((e) => (e.debit || 0) > 0) && cashEntry && !openingBalanceEntry && !isLeaseStart;
                     }
-                    
-                    // For other deposit accounts, use original logic
-                    // Check if transaction has any deposit account entry
-                    const depositEntry = tx.entries.find(e => allDepositCodes.includes(e.accountCode));
-                    if (depositEntry) {
-                        return true; // Include transactions with any deposit account code
-                    }
-                    
-                    // Or check if it's a payment transaction with deposit in description
-                    const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
-                    const description = (tx.description || '').toLowerCase();
-                    if (cashEntry && (description.includes('deposit') || description.includes('security'))) {
-                        return true;
-                    }
-                    
-                    return false;
+                    return getEntriesForAccount(tx, resolvedAccountCode).length > 0;
                 });
-                
-                // Limit to 100 after filtering
                 transactions = transactions.slice(0, 100);
             }
             
@@ -3636,10 +3743,17 @@ class FinancialReportsController {
                     };
                 }
                 
-                if (account.type === 'Income') {
+                if (account.isIncomeSecurityDeposits || isIncomeSecurityDeposits) {
+                    const amount = getDepositReceiptAmount(transaction);
+                    if (amount > 0) {
+                        monthlyBreakdown[monthKey].totalCredit += amount;
+                        monthlyBreakdown[monthKey].netAmount += amount;
+                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    }
+                } else if (account.type === 'Income') {
                     // For income accounts in cash flow, only handle payment transactions (cash received)
                     // Accruals are excluded as they don't involve actual cash movement
-                    const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
+                    const cashEntry = transaction.entries.find(entry => getEntryAccountCode(entry).match(/^1000/));
                     
                     if (cashEntry && cashEntry.debit > 0) {
                         // This is a payment transaction - use cash received amount (cash debit)
@@ -3650,8 +3764,9 @@ class FinancialReportsController {
                         monthlyBreakdown[monthKey].transactionCount += 1;
                     }
                 } else if (depositAccountCodes.includes(accountCode)) {
+                    const resolvedAccountCode = normalizeReportAccountCode(account?.code || accountCode);
                     // SPECIAL CASE: For account 2028, only count expense transactions (dr 2028, cr cash)
-                    if (accountCode === '2028') {
+                    if (resolvedAccountCode === '2028') {
                         const account2028Entry = transaction.entries.find(entry => String(entry.accountCode || '').trim() === '2028');
                         const cashEntry = transaction.entries.find(entry => String(entry.accountCode || '').trim().match(/^1000/));
                         const openingBalanceEntry = transaction.entries.find(entry => String(entry.accountCode || '').trim() === '10005');
@@ -3667,29 +3782,11 @@ class FinancialReportsController {
                         }
                         // Skip all other transactions (deposit receipts, opening balances, lease starts)
                     } else {
-                        // For other deposit accounts, show cash received for deposits
-                        // Check for any deposit account entry across all deposit accounts
-                        const allDepositCodes = depositAccounts.length > 0 
-                            ? depositAccounts.map(acc => acc.code)
-                            : depositAccountCodes;
-                        
-                        const depositEntry = transaction.entries.find(entry => allDepositCodes.includes(entry.accountCode));
-                        const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
-                        
-                        if (depositEntry) {
-                            // Direct deposit account entry - use credit amount (liability increases)
-                            const depositAmount = depositEntry.credit || 0;
-                            monthlyBreakdown[monthKey].totalDebit += depositEntry.debit || 0;
-                            monthlyBreakdown[monthKey].totalCredit += depositAmount;
-                            // For deposits: netAmount = credit - debit (credits increase liability, which means cash received)
-                            monthlyBreakdown[monthKey].netAmount += depositAmount - (depositEntry.debit || 0);
-                            monthlyBreakdown[monthKey].transactionCount += 1;
-                        } else if (cashEntry && cashEntry.debit > 0) {
-                            // Payment transaction with deposit - use cash amount received
-                            const cashAmount = cashEntry.debit || 0;
-                            monthlyBreakdown[monthKey].totalDebit += 0;
-                            monthlyBreakdown[monthKey].totalCredit += cashAmount; // Cash received = deposit credit
-                            monthlyBreakdown[monthKey].netAmount += cashAmount; // Net amount = cash received
+                        const totals = sumEntriesForAccount(transaction, resolvedAccountCode);
+                        if (totals.debit > 0 || totals.credit > 0) {
+                            monthlyBreakdown[monthKey].totalDebit += totals.debit;
+                            monthlyBreakdown[monthKey].totalCredit += totals.credit;
+                            monthlyBreakdown[monthKey].netAmount += totals.credit - totals.debit;
                             monthlyBreakdown[monthKey].transactionCount += 1;
                         }
                     }
@@ -3824,7 +3921,91 @@ class FinancialReportsController {
                 
                 // Convert to array format
                 finalMonthlyBreakdown = Object.values(assetMonthlyBreakdown);
-            } else if (accountData && (accountData.totalCredit !== undefined || accountData.totalDebit !== undefined || accountData.netAmount !== undefined)) {
+            } else if (account.isIncomeSecurityDeposits || isIncomeSecurityDeposits || depositAccountCodes.includes(accountCode)) {
+                const monthNames = ['january', 'february', 'march', 'april', 'may', 'june',
+                    'july', 'august', 'september', 'october', 'november', 'december'];
+                const resolvedAccountCode = normalizeReportAccountCode(account?.code || accountCode);
+                let depositTotalDebit = 0;
+                let depositTotalCredit = 0;
+                const depositMonthlyBreakdown = {};
+
+                const addDepositTotals = (tx, debit, credit, netAmount) => {
+                    depositTotalDebit += debit;
+                    depositTotalCredit += credit;
+                    const txDate = new Date(tx.date);
+                    const monthKey = `${txDate.getUTCFullYear()}-${String(txDate.getUTCMonth() + 1).padStart(2, '0')}`;
+                    if (!depositMonthlyBreakdown[monthKey]) {
+                        depositMonthlyBreakdown[monthKey] = {
+                            month: monthNames[txDate.getUTCMonth()],
+                            totalDebit: 0,
+                            totalCredit: 0,
+                            netAmount: 0,
+                            transactionCount: 0
+                        };
+                    }
+                    depositMonthlyBreakdown[monthKey].totalDebit += debit;
+                    depositMonthlyBreakdown[monthKey].totalCredit += credit;
+                    depositMonthlyBreakdown[monthKey].netAmount += netAmount;
+                    depositMonthlyBreakdown[monthKey].transactionCount += 1;
+                };
+
+                transactions.forEach((tx) => {
+                    if (account.isIncomeSecurityDeposits || isIncomeSecurityDeposits) {
+                        const amount = getDepositReceiptAmount(tx);
+                        if (amount > 0) {
+                            addDepositTotals(tx, 0, amount, amount);
+                        }
+                        return;
+                    }
+
+                    if (resolvedAccountCode === '2028') {
+                        const account2028Entries = getEntriesForAccount(tx, '2028');
+                        const cashEntry = tx.entries?.find((e) => getEntryAccountCode(e).match(/^1000/) && (e.credit || 0) > 0);
+                        const openingBalanceEntry = tx.entries?.find((e) => getEntryAccountCode(e) === '10005');
+                        const isLeaseStart = tx.source === 'rental_accrual' || (tx.description || '').toLowerCase().includes('lease start');
+                        const debit = account2028Entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                        const credit = account2028Entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                        if (debit > 0 && cashEntry && !openingBalanceEntry && !isLeaseStart) {
+                            addDepositTotals(tx, debit, credit, debit - credit);
+                        }
+                        return;
+                    }
+
+                    const totals = sumEntriesForAccount(tx, resolvedAccountCode);
+                    if (totals.debit > 0 || totals.credit > 0) {
+                        addDepositTotals(tx, totals.debit, totals.credit, totals.credit - totals.debit);
+                    }
+                });
+
+                let scopedMonthlyBreakdown = Object.values(depositMonthlyBreakdown);
+                if (monthDateRange) {
+                    scopedMonthlyBreakdown = scopedMonthlyBreakdown.filter(
+                        (entry) => entry.month === monthDateRange.monthName
+                    );
+                }
+
+                const scopedTotals = scopedMonthlyBreakdown.reduce((totals, entry) => {
+                    totals.totalDebit += entry.totalDebit || 0;
+                    totals.totalCredit += entry.totalCredit || 0;
+                    totals.netAmount += entry.netAmount || 0;
+                    totals.transactionCount += entry.transactionCount || 0;
+                    return totals;
+                }, { totalDebit: 0, totalCredit: 0, netAmount: 0, transactionCount: 0 });
+
+                finalCashFlowData = {
+                    totalDebit: monthDateRange ? scopedTotals.totalDebit : depositTotalDebit,
+                    totalCredit: monthDateRange ? scopedTotals.totalCredit : depositTotalCredit,
+                    netAmount: monthDateRange ? scopedTotals.netAmount : (
+                        (account.isIncomeSecurityDeposits || isIncomeSecurityDeposits || resolvedAccountCode !== '2028')
+                            ? depositTotalCredit - depositTotalDebit
+                            : depositTotalDebit - depositTotalCredit
+                    ),
+                    transactionCount: monthDateRange ? scopedTotals.transactionCount : transactions.length,
+                    type: account.isIncomeSecurityDeposits || isIncomeSecurityDeposits ? 'income' : cashFlowType,
+                    ...(monthDateRange ? { filteredMonth: monthDateRange.monthName, filteredYear: monthDateRange.year } : {})
+                };
+                finalMonthlyBreakdown = scopedMonthlyBreakdown;
+            } else if (accountData && !depositAccountCodes.includes(accountCode) && (accountData.totalCredit !== undefined || accountData.totalDebit !== undefined || accountData.netAmount !== undefined)) {
                 // Use the data from cash flow service (ensures it matches the cash flow statement)
                 // This works for both income (totalCredit) and expenses (totalDebit)
                 finalCashFlowData = {
@@ -4005,6 +4186,10 @@ class FinancialReportsController {
             
             const response = {
                 success: true,
+                ...(monthDateRange ? {
+                    filteredMonth: monthDateRange.monthName,
+                    filteredYear: monthDateRange.year
+                } : {}),
                 account: {
                     code: account.code,
                     name: account.name,
@@ -4012,7 +4197,7 @@ class FinancialReportsController {
                     category: account.category
                 },
                 // Include all deposit accounts if querying for deposits
-                ...(depositAccounts.length > 0 && depositAccountCodes.includes(accountCode) ? {
+                ...(depositAccounts.length > 0 && (depositAccountCodes.includes(accountCode) || isIncomeSecurityDeposits) ? {
                     depositAccounts: depositAccounts.map(acc => ({
                         code: acc.code,
                         name: acc.name,
@@ -4048,43 +4233,24 @@ class FinancialReportsController {
                             amount = cashEntry.debit || 0;
                             type = 'debit'; // Cash debit means cash received
                         }
+                    } else if (account.isIncomeSecurityDeposits || isIncomeSecurityDeposits) {
+                        amount = getDepositReceiptAmount(tx);
+                        type = 'credit';
                     } else if (depositAccountCodes.includes(accountCode)) {
-                        // SPECIAL CASE: For account 2028, only show expense transactions (dr 2028, cr cash)
-                        if (accountCode === '2028') {
-                            const account2028Entry = tx.entries.find(e => String(e.accountCode || '').trim() === '2028');
-                            const openingBalanceEntry = tx.entries.find(e => String(e.accountCode || '').trim() === '10005');
+                        const resolvedAccountCode = normalizeReportAccountCode(account?.code || accountCode);
+                        if (resolvedAccountCode === '2028') {
+                            const account2028Entries = getEntriesForAccount(tx, '2028');
+                            const openingBalanceEntry = tx.entries?.find((e) => getEntryAccountCode(e) === '10005');
                             const isLeaseStart = tx.source === 'rental_accrual' || (tx.description || '').toLowerCase().includes('lease start');
-                            
-                            // Only show if: 2028 is debited (expense) AND cash is credited AND no opening balance
-                            if (account2028Entry && account2028Entry.debit > 0 && cashEntry && cashEntry.credit > 0 && !openingBalanceEntry && !isLeaseStart) {
-                                amount = account2028Entry.debit || 0;
-                                type = 'debit'; // Expense transaction
-                            } else {
-                                // Skip this transaction for 2028 (it's a deposit receipt, opening balance, or lease start)
-                                amount = 0;
+                            const debit = account2028Entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                            if (debit > 0 && cashEntry && cashEntry.credit > 0 && !openingBalanceEntry && !isLeaseStart) {
+                                amount = debit;
+                                type = 'debit';
                             }
                         } else {
-                            // For other deposit accounts, show cash received for deposits
-                            // Check for any deposit account entry across all deposit accounts
-                            const allDepositCodes = depositAccounts.length > 0 
-                                ? depositAccounts.map(acc => acc.code)
-                                : depositAccountCodes;
-                            
-                            const depositEntry = tx.entries.find(e => allDepositCodes.includes(e.accountCode));
-                            
-                            if (cashEntry && cashEntry.debit > 0) {
-                                // Cash is debited (money coming in) - this is the cash received amount
-                                amount = cashEntry.debit || 0;
-                                type = 'debit'; // Cash debit means cash received
-                            } else if (depositEntry) {
-                                // Use deposit account credit (liability increases = cash received)
-                                amount = depositEntry.credit || 0;
-                                type = 'credit';
-                            } else if (accountEntry) {
-                                // Fallback to requested account code entry
-                                amount = accountEntry.credit || 0;
-                                type = 'credit';
-                            }
+                            const totals = sumEntriesForAccount(tx, resolvedAccountCode);
+                            amount = totals.credit || totals.debit || 0;
+                            type = totals.credit >= totals.debit ? 'credit' : 'debit';
                         }
                     } else if (account && account.isRefundAccount) {
                         // 🆕 CRITICAL: For refund virtual accounts, show refund transactions with their associated accounts
@@ -4525,24 +4691,15 @@ class FinancialReportsController {
                         }
                     }
                     return tx;
-                }).filter(tx => {
-                    // For account 2028, filter out transactions with amount 0 (deposit receipts, opening balances, lease starts)
-                    if (accountCode === '2028') {
+                }).filter((tx) => {
+                    if (account.isIncomeSecurityDeposits || isIncomeSecurityDeposits || depositAccountCodes.includes(accountCode)) {
                         return tx.amount > 0;
                     }
-                    return true; // Include all transactions for other accounts
+                    return true;
                 }),
                 monthlyBreakdown: Object.values(finalMonthlyBreakdown).sort((a, b) => b.month.localeCompare(a.month)),
                 summary: {
-                    totalTransactions: accountCode === '2028' 
-                        ? transactions.filter(tx => {
-                            const account2028Entry = tx.entries?.find(e => String(e.accountCode || '').trim() === '2028');
-                            const cashEntry = tx.entries?.find(e => String(e.accountCode || '').trim().match(/^1000/));
-                            const openingBalanceEntry = tx.entries?.find(e => String(e.accountCode || '').trim() === '10005');
-                            const isLeaseStart = tx.source === 'rental_accrual' || (tx.description || '').toLowerCase().includes('lease start');
-                            return account2028Entry && account2028Entry.debit > 0 && cashEntry && cashEntry.credit > 0 && !openingBalanceEntry && !isLeaseStart;
-                        }).length
-                        : transactions.length,
+                    totalTransactions: finalCashFlowData.transactionCount,
                     totalDebit: finalCashFlowData.totalDebit,
                     totalCredit: finalCashFlowData.totalCredit,
                     netAmount: finalCashFlowData.netAmount

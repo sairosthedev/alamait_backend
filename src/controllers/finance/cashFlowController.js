@@ -57,6 +57,13 @@ class CashFlowController {
     static async getAccountTransactionDetails(req, res) {
         try {
             const { period, month, accountCode, residenceId, sourceType, page = '1', limit: limitParam = '50' } = req.query;
+            const normalizedAccountCode = String(accountCode || '').trim().toLowerCase();
+
+            // Cash-flow income row "Security Deposits" uses virtual code "deposits"
+            if (['deposits', 'security_deposits', 'securitydeposits'].includes(normalizedAccountCode)) {
+                const FinancialReportsController = require('../financialReportsController');
+                return FinancialReportsController.getCashFlowAccountDetails(req, res);
+            }
             
             // Validate required parameters
             if (!period || !month || !accountCode) {
