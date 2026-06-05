@@ -1177,15 +1177,29 @@ const createPayment = async (req, res) => {
             
             // Prepare data for Smart FIFO allocation
             // Ensure each payment component has a paid date; default to top-level payment.date
-            const normalizedPayments = (payment.payments || []).map(p => ({
+            let normalizedPayments = (payment.payments || []).map(p => ({
                 ...p,
                 date: p?.date || payment.date
             }));
 
+            // If totalAmount > sum(payments[]), treat the difference as rent.
+            // This fixes cases where the UI stored only a couple of months in payments[],
+            // but totalAmount represents a larger lump-sum (e.g., $500 paid before lease start).
+            const paymentsSum = normalizedPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+            const totalAmount = Number(payment.totalAmount) || 0;
+            const unaccounted = Math.max(0, totalAmount - paymentsSum);
+            if (unaccounted > 0) {
+                normalizedPayments = [
+                    ...normalizedPayments,
+                    { type: 'rent', amount: unaccounted, date: payment.date }
+                ];
+                console.log(`ℹ️ Payments breakdown was short by $${unaccounted}. Added implicit rent component for allocation.`);
+            }
+
             const allocationData = {
                 paymentId: payment._id.toString(),
                 studentId: payment.student || payment.user,
-                totalAmount: payment.totalAmount,
+                totalAmount: totalAmount,
                 payments: normalizedPayments,
                 residence: payment.residence,
                 paymentMonth: payment.paymentMonth,

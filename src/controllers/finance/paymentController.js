@@ -1009,11 +1009,28 @@ exports.processPayment = async (req, res) => {
             
             const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
             
+            // Normalize payments so sum(payments[]) matches totalAmount.
+            // If it doesn't, allocate the remainder as rent (common for lump-sum payments entered without a full breakdown).
+            let normalizedPayments = (payment.payments || []).map((p) => ({
+                ...p,
+                date: p?.date || payment.date
+            }));
+            const paymentsSum = normalizedPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+            const totalAmount = Number(payment.totalAmount) || 0;
+            const unaccounted = Math.max(0, totalAmount - paymentsSum);
+            if (unaccounted > 0) {
+                normalizedPayments = [
+                    ...normalizedPayments,
+                    { type: 'rent', amount: unaccounted, date: payment.date }
+                ];
+                console.log(`ℹ️ Payments breakdown was short by $${unaccounted}. Added implicit rent component for allocation.`);
+            }
+
             const allocationData = {
                 paymentId: payment._id.toString(),
                 studentId: payment.student,
-                totalAmount: payment.totalAmount,
-                payments: payment.payments || [],
+                totalAmount: totalAmount,
+                payments: normalizedPayments,
                 residence: payment.residence,
                 paymentMonth: payment.paymentMonth,
                 rentAmount: payment.rentAmount || 0,

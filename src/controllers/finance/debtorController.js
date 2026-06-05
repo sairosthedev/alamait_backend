@@ -1355,6 +1355,12 @@ exports.getDebtorPaymentHistory = async (req, res) => {
 // Get debtor transactions
 exports.getDebtorTransactions = async (req, res) => {
     try {
+        // Prevent browsers/proxies from caching ledger-like API responses.
+        // This avoids 304 Not Modified masking newly-created transactions.
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+
         const { id } = req.params;
         const { startDate, endDate, type, limit = 50 } = req.query;
 
@@ -1432,6 +1438,23 @@ exports.getDebtorTransactions = async (req, res) => {
             .sort({ date: -1 })
             .limit(parseInt(limit));
 
+        const getArTotals = (tx) => {
+            const matching = (tx.entries || []).filter(e => e.accountCode === debtor.accountCode);
+            return matching.reduce((acc, e) => {
+                acc.debit += Number(e.debit) || 0;
+                acc.credit += Number(e.credit) || 0;
+                return acc;
+            }, { debit: 0, credit: 0 });
+        };
+
+        const getMonthBucket = (tx) => {
+            // For advance payments, prefer the intended month so they show under April/May,
+            // not under the cash receipt month (March).
+            return tx?.metadata?.monthSettled
+                || tx?.metadata?.paymentMonth
+                || new Date(tx.date).toISOString().slice(0, 7); // YYYY-MM
+        };
+
         // Calculate transaction statistics
         let totalAccruals = 0;
         let totalPayments = 0;
@@ -1439,9 +1462,7 @@ exports.getDebtorTransactions = async (req, res) => {
         let totalCredit = 0;
 
         transactions.forEach(transaction => {
-            const debitEntry = transaction.entries.find(e => e.accountCode === debtor.accountCode);
-            const amount = debitEntry ? debitEntry.debit : 0;
-            const creditAmount = debitEntry ? debitEntry.credit : 0;
+            const { debit: amount, credit: creditAmount } = getArTotals(transaction);
 
             totalDebit += amount;
             totalCredit += creditAmount;
@@ -1449,6 +1470,9 @@ exports.getDebtorTransactions = async (req, res) => {
             if (transaction.source === 'rental_accrual') {
                 totalAccruals += amount;
             } else if (transaction.source === 'payment') {
+                totalPayments += creditAmount;
+            } else if (transaction.source === 'advance_payment') {
+                // Advance payments reduce future owing and must be counted as payments/credits.
                 totalPayments += creditAmount;
             } else if (transaction.source === 'manual') {
                 // 🆕 Include negotiated payment adjustments in totalPayments
@@ -1463,7 +1487,7 @@ exports.getDebtorTransactions = async (req, res) => {
 
         // Group transactions by month
         const monthlyBreakdown = transactions.reduce((acc, transaction) => {
-            const month = new Date(transaction.date).toISOString().slice(0, 7); // YYYY-MM
+            const month = getMonthBucket(transaction);
             if (!acc[month]) {
                 acc[month] = {
                     accruals: 0,
@@ -1473,13 +1497,13 @@ exports.getDebtorTransactions = async (req, res) => {
                 };
             }
 
-            const debitEntry = transaction.entries.find(e => e.accountCode === debtor.accountCode);
-            const amount = debitEntry ? debitEntry.debit : 0;
-            const creditAmount = debitEntry ? debitEntry.credit : 0;
+            const { debit: amount, credit: creditAmount } = getArTotals(transaction);
 
             if (transaction.source === 'rental_accrual') {
                 acc[month].accruals += amount;
             } else if (transaction.source === 'payment') {
+                acc[month].payments += creditAmount;
+            } else if (transaction.source === 'advance_payment') {
                 acc[month].payments += creditAmount;
             } else if (transaction.source === 'manual') {
                 // 🆕 Include negotiated payment adjustments in monthly payments
@@ -1497,8 +1521,8 @@ exports.getDebtorTransactions = async (req, res) => {
                 date: transaction.date,
                 description: transaction.description,
                 source: transaction.source,
-                amount: amount || creditAmount,
-                type: amount > 0 ? 'debit' : 'credit'
+                amount: amount > 0 ? amount : creditAmount,
+                type: amount > 0 ? 'debit' : (creditAmount > 0 ? 'credit' : 'other')
             });
 
             return acc;
@@ -1514,9 +1538,7 @@ exports.getDebtorTransactions = async (req, res) => {
                 accountCode: debtor.accountCode
             },
             transactions: transactions.map(tx => {
-                const debitEntry = tx.entries.find(e => e.accountCode === debtor.accountCode);
-                const amount = debitEntry ? debitEntry.debit : 0;
-                const creditAmount = debitEntry ? debitEntry.credit : 0;
+                const { debit: amount, credit: creditAmount } = getArTotals(tx);
                 
                 return {
                     _id: tx._id,
@@ -1526,8 +1548,8 @@ exports.getDebtorTransactions = async (req, res) => {
                     source: tx.source,
                     sourceId: tx.sourceId,
                     sourceModel: tx.sourceModel,
-                    amount: amount || creditAmount,
-                    type: amount > 0 ? 'debit' : 'credit',
+                    amount: amount > 0 ? amount : creditAmount,
+                    type: amount > 0 ? 'debit' : (creditAmount > 0 ? 'credit' : 'other'),
                     metadata: tx.metadata
                 };
             }),

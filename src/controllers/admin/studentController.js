@@ -1239,21 +1239,25 @@ exports.manualAddStudent = async (req, res) => {
             return res.status(404).json({ error: 'Room not found in this residence' });
         }
 
-        // Check room availability using date-based booking logic
+        // Check room availability using lease dates and blocking bookings
         const Booking = require('../../models/Booking');
-        const isRoomAvailable = await Booking.checkAvailability(residenceId, roomNumber, startDate, endDate);
+        const availability = await Booking.checkAvailability(residenceId, roomNumber, startDate, endDate);
         
-        if (!isRoomAvailable) {
-            const roomCapacity = room.capacity || 1;
+        if (!availability.available) {
+            const roomCapacity = availability.capacity || room.capacity || 1;
+            const conflictMessage = availability.message
+                || Booking.formatAvailabilityConflicts(roomNumber, availability.conflicts || []);
             if (roomCapacity === 1) {
                 return res.status(400).json({ 
                     error: 'Room is not available for the specified dates',
-                    details: 'Another booking already exists for this room during the requested period'
+                    details: conflictMessage,
+                    conflicts: availability.conflicts || []
                 });
             } else {
                 return res.status(400).json({ 
                     error: 'Room is at full capacity for the specified dates',
-                    details: `Room has reached its maximum capacity of ${roomCapacity} students during the requested period`
+                    details: `${conflictMessage}. Capacity: ${availability.currentOccupancy}/${roomCapacity}`,
+                    conflicts: availability.conflicts || []
                 });
             }
         }

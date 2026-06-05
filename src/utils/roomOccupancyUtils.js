@@ -26,6 +26,73 @@ class RoomOccupancyUtils {
             ]
         };
     }
+
+    /**
+     * Approved applications whose lease window overlaps [periodStart, periodEnd].
+     */
+    static buildLeaseOverlapQuery(residenceId, roomNumber, periodStart, periodEnd, excludeApplicationId = null) {
+        const start = new Date(periodStart);
+        const end = new Date(periodEnd);
+        const query = {
+            residence: residenceId,
+            status: 'approved',
+            startDate: { $exists: true, $ne: null, $lte: end },
+            endDate: { $exists: true, $ne: null, $gte: start },
+            paymentStatus: { $ne: 'cancelled' },
+            $or: [
+                { allocatedRoom: roomNumber },
+                { 'allocatedRoomDetails.roomNumber': roomNumber }
+            ]
+        };
+        if (excludeApplicationId) {
+            query._id = { $ne: excludeApplicationId };
+        }
+        return query;
+    }
+
+    /**
+     * Approved leases overlapping the period, one entry per distinct occupant.
+     */
+    static async getOverlappingLeasesForPeriod(residenceId, roomNumber, periodStart, periodEnd, excludeApplicationId = null) {
+        const query = this.buildLeaseOverlapQuery(residenceId, roomNumber, periodStart, periodEnd, excludeApplicationId);
+        const applications = await Application.find(query)
+            .select('firstName lastName email student startDate endDate applicationCode')
+            .lean();
+        const occupants = new Map();
+        for (const app of applications) {
+            const key = app.student
+                ? String(app.student)
+                : (app.email && String(app.email).toLowerCase());
+            if (!key || occupants.has(key)) {
+                continue;
+            }
+            occupants.set(key, {
+                type: 'lease',
+                name: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
+                email: app.email,
+                studentId: app.student,
+                startDate: app.startDate,
+                endDate: app.endDate,
+                applicationCode: app.applicationCode || null,
+                applicationId: app._id
+            });
+        }
+        return Array.from(occupants.values());
+    }
+
+    /**
+     * Distinct occupants (by student id or email) with an approved lease overlapping the period.
+     */
+    static async countOverlappingLeasesForPeriod(residenceId, roomNumber, periodStart, periodEnd, excludeApplicationId = null) {
+        const leases = await this.getOverlappingLeasesForPeriod(
+            residenceId,
+            roomNumber,
+            periodStart,
+            periodEnd,
+            excludeApplicationId
+        );
+        return leases.length;
+    }
     
     /**
      * Calculate accurate room occupancy excluding expired/forfeited students

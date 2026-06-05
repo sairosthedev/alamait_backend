@@ -2073,7 +2073,7 @@ class EnhancedPaymentAllocationService {
    * @param {string} paymentType - Type of advance payment
    * @returns {Object} Advance payment transaction
    */
-  static async createAdvancePaymentTransaction(paymentId, userId, amount, paymentData, paymentType) {
+  static async createAdvancePaymentTransaction(paymentId, userId, amount, paymentData, paymentType, monthSettled = null) {
     try {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
       
@@ -2094,10 +2094,15 @@ class EnhancedPaymentAllocationService {
       let userIdStr = userId && userId.toString ? userId.toString() : String(userId);
       
       // 🆕 CRITICAL FIX: Check if advance payment transaction already exists
-      // This prevents duplicate transactions if called multiple times
-      // Check with multiple query patterns to catch all possible matches
+      // De-duplicate PER paymentId + paymentType + monthSettled.
+      // We must allow multiple advance_payment entries for the same paymentId/paymentType
+      // when they represent different months (e.g. 2026-04, 2026-05) or an unassigned remainder.
       const paymentIdStr = paymentId?.toString ? paymentId.toString() : String(paymentId);
       const paymentDate = paymentData.date ? new Date(paymentData.date) : new Date();
+
+      const monthMatchClause = (monthSettled === null || monthSettled === undefined)
+        ? { $or: [{ 'metadata.monthSettled': null }, { 'metadata.monthSettled': { $exists: false } }] }
+        : { 'metadata.monthSettled': monthSettled };
       
       // Check 1: By payment ID + payment type (allow separate advance for rent vs deposit)
       // Same payment can have one advance for 'rent' and one for 'deposit' - they must be separate transactions
@@ -2112,6 +2117,7 @@ class EnhancedPaymentAllocationService {
         ],
         source: 'advance_payment',
         'metadata.paymentType': paymentType,
+        ...monthMatchClause,
         status: { $ne: 'reversed' }
       });
       
@@ -2911,7 +2917,7 @@ class EnhancedPaymentAllocationService {
       
       // Create advance payment transaction
       const advanceTransaction = await this.createAdvancePaymentTransaction(
-        paymentId, userId, amount, paymentData, paymentType
+        paymentId, userId, amount, paymentData, paymentType, null
       );
       
       // Update debtor deferred income only for rent advances

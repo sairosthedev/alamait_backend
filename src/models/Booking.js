@@ -100,54 +100,80 @@ bookingSchema.methods.addPayment = function(payment) {
     }
 };
 
-// Check if booking dates overlap with existing bookings
+function formatAvailabilityDate(date) {
+    const value = new Date(date);
+    if (Number.isNaN(value.getTime())) {
+        return 'unknown date';
+    }
+    return value.toISOString().split('T')[0];
+}
+
+function formatAvailabilityConflict(conflict) {
+    const tenant = conflict.name
+        || conflict.email
+        || (conflict.studentId ? `student ${String(conflict.studentId).slice(-8)}` : 'Unknown tenant');
+    const range = `${formatAvailabilityDate(conflict.startDate)} to ${formatAvailabilityDate(conflict.endDate)}`;
+    const code = conflict.applicationCode ? `, ${conflict.applicationCode}` : '';
+    return `${tenant} (lease: ${range}${code})`;
+}
+
+bookingSchema.statics.formatAvailabilityConflicts = function(roomNumber, conflicts) {
+    if (!conflicts.length) {
+        return `Room ${roomNumber} is not available for the specified dates`;
+    }
+    const summary = conflicts.map(formatAvailabilityConflict).join('; ');
+    const noun = conflicts.length === 1 ? 'lease' : 'leases';
+    return `Room ${roomNumber} conflicts with existing ${noun}: ${summary}`;
+};
+
+// Check if booking dates overlap with existing bookings / approved leases
 bookingSchema.statics.checkAvailability = async function(residenceId, roomNumber, startDate, endDate, excludeBookingId = null) {
+    const result = await this.getAvailabilityDetails(residenceId, roomNumber, startDate, endDate, excludeBookingId);
+    return result;
+};
+
+bookingSchema.statics.getAvailabilityDetails = async function(residenceId, roomNumber, startDate, endDate, excludeBookingId = null) {
     const { Residence } = require('./Residence');
-    const User = require('./User');
-    
-    // Get room capacity
+
     const residence = await Residence.findById(residenceId);
     if (!residence) {
-        return false;
+        return { available: false, capacity: 0, conflicts: [], message: 'Residence not found' };
     }
-    
+
     const room = residence.rooms.find(r => r.roomNumber === roomNumber);
     if (!room) {
-        return false;
+        return { available: false, capacity: 0, conflicts: [], message: 'Room not found' };
     }
-    
+
     const roomCapacity = room.capacity || 1;
-    
-    // Find all overlapping bookings
-    const query = {
-        residence: residenceId,
-        'room.roomNumber': roomNumber,
-        status: { $nin: ['cancelled', 'completed'] },
-        $or: [
-            { startDate: { $lte: endDate }, endDate: { $gte: startDate } }
-        ]
-    };
+    const periodStart = new Date(startDate);
+    const periodEnd = new Date(endDate);
 
-    if (excludeBookingId) {
-        query._id = { $ne: excludeBookingId };
-    }
-
-    const overlappingBookings = await this.find(query);
-
-    // Use the room occupancy utility to get accurate occupancy count as-of the requested start date
     const RoomOccupancyUtils = require('../utils/roomOccupancyUtils');
-    const occupancyDetails = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(residenceId, roomNumber, new Date(startDate));
-    const totalOccupancy = occupancyDetails.currentOccupancy;
-    
-    // For shared rooms, check if adding this booking would exceed capacity
-    // For single rooms (capacity = 1), any overlap means unavailable
-    if (roomCapacity === 1) {
-        return overlappingBookings.length === 0 && totalOccupancy === 0;
-    } else {
-        // For shared rooms, check if we're at capacity (bookings + active occupants)
-        // Note: occupancyDetails already counts active applications as-of startDate.
-        return (totalOccupancy + overlappingBookings.length) < roomCapacity;
-    }
+
+    // Approved application leases are the source of truth for occupancy.
+    // Orphan/stale Booking records without a matching lease must not block availability.
+    const conflicts = await RoomOccupancyUtils.getOverlappingLeasesForPeriod(
+        residenceId,
+        roomNumber,
+        periodStart,
+        periodEnd
+    );
+
+    const totalOccupancy = conflicts.length;
+    const available = roomCapacity === 1
+        ? totalOccupancy === 0
+        : totalOccupancy < roomCapacity;
+
+    return {
+        available,
+        capacity: roomCapacity,
+        currentOccupancy: totalOccupancy,
+        conflicts,
+        message: available
+            ? null
+            : this.formatAvailabilityConflicts(roomNumber, conflicts)
+    };
 };
 
 // Performance indexes for Booking

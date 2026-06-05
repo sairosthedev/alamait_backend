@@ -255,6 +255,16 @@ class DebtorLedgerService {
             });
             
             ledgerData.totalOwing = Math.max(ledgerData.totalExpected - ledgerData.totalPaid, 0);
+
+            // Expose unassigned advance payments separately (so UI can show “Advance balance”).
+            // These are payments that were received but not tied to a specific monthSettled.
+            const advanceBucket = ledgerData.monthlyBreakdown['advance'];
+            ledgerData.advanceBalance = {
+                paid: advanceBucket?.paid || 0,
+                expected: advanceBucket?.expected || 0,
+                owing: advanceBucket?.owing || 0,
+                transactionCount: advanceBucket?.transactions?.length || 0
+            };
             
             console.log(`📊 Ledger computed: Expected=$${ledgerData.totalExpected}, Paid=$${ledgerData.totalPaid}, Owing=$${ledgerData.totalOwing}`);
             
@@ -337,7 +347,14 @@ class DebtorLedgerService {
                 // The debit side is just transferring to deferred income, which doesn't affect AR balance
                 if (totalCredit > 0) {
                     const transactionDate = new Date(transaction.date);
-                    const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
+                    // IMPORTANT: Advance payments should be grouped by the intended month being paid for,
+                    // not by the cash receipt month. Otherwise a March payment intended for April/May
+                    // shows up as "March paid" and hides the payment for April/May.
+                    // If there is no intended month, classify it as an unassigned advance balance.
+                    const monthKey =
+                        transaction.metadata?.monthSettled ||
+                        transaction.metadata?.paymentMonth ||
+                        'advance';
                     
                     return {
                         transactionId: transaction.transactionId,
