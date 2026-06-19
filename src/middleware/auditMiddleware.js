@@ -14,7 +14,7 @@ const auditMiddleware = async (req, res, next) => {
     const startTime = Date.now();
     const originalSend = res.send;
     
-    // Skip audit logging for certain paths
+    // Skip audit logging for high-volume read endpoints and health checks
     const skipPaths = [
         '/health',
         '/ping',
@@ -23,8 +23,27 @@ const auditMiddleware = async (req, res, next) => {
         '/static',
         '/assets'
     ];
+
+    const skipReadPaths = [
+        '/api/residences',
+        '/api/admin/residences',
+        '/api/finance/residences',
+        '/api/applications',
+        '/api/admin/applications',
+        '/api/finance/applications',
+        '/api/monthly-requests',
+        '/api/requests/pending-count',
+        '/api/finance/dashboard/badges',
+        '/pending-count',
+        '/approvals',
+        '/templates'
+    ];
     
     if (skipPaths.some(path => req.path.startsWith(path))) {
+        return next();
+    }
+
+    if (req.method === 'GET' && skipReadPaths.some((segment) => req.path.includes(segment))) {
         return next();
     }
     
@@ -60,8 +79,9 @@ const auditMiddleware = async (req, res, next) => {
             try {
                 const responseData = sanitizeResponseData(data);
                 
-                // For very large responses, just log metadata instead of full data
-                const responseSize = JSON.stringify(responseData).length;
+                const responseSize = typeof data === 'string'
+                    ? data.length
+                    : (Buffer.isBuffer(data) ? data.length : JSON.stringify(responseData).length);
                 let finalResponseData = responseData;
                 
                 if (responseSize > 100000) {

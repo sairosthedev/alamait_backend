@@ -361,5 +361,7 @@ applicationSchema.index({ student: 1, status: 1 }); // For finding student appli
 // Dashboard optimization indexes
 applicationSchema.index({ residenceId: 1, status: 1, startDate: 1, endDate: 1 }); // For occupancy calculations
 applicationSchema.index({ 'allocatedRoomDetails.residenceId': 1, status: 1 }); // For allocated room queries
+applicationSchema.index({ status: 1, residence: 1, allocatedRoom: 1 }); // For residence room occupancy counts
+applicationSchema.index({ status: 1, applicationDate: -1 }); // For paginated finance application lists
 
 module.exports = mongoose.model('Application', applicationSchema); 

@@ -3,35 +3,37 @@ const User = require('../models/User');
 const Application = require('../models/Application');
 const mongoose = require('mongoose');
 
+const AUTH_DEBUG = process.env.AUTH_DEBUG === 'true';
+const USER_AUTH_SELECT = 'email role firstName lastName status isVerified applicationCode';
+
 const auth = async (req, res, next) => {
     try {
-        console.log('Auth middleware - Headers:', {
-            ...req.headers,
-            authorization: req.headers.authorization ? '[REDACTED]' : undefined
-        });
+        if (AUTH_DEBUG) {
+            console.log('Auth middleware - Headers:', {
+                ...req.headers,
+                authorization: req.headers.authorization ? '[REDACTED]' : undefined
+            });
+        }
 
         const token = req.header('Authorization')?.replace('Bearer ', '');
         
         if (!token) {
-            console.error('Auth middleware - No token provided');
             return res.status(401).json({ error: 'Please authenticate' });
         }
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        console.log('Auth middleware - Token decoded:', {
-            decoded,
-            userId: decoded.user?.id || decoded.user?._id,
-            email: decoded.user?.email
-        });
+        if (AUTH_DEBUG) {
+            console.log('Auth middleware - Token decoded:', {
+                userId: decoded.user?.id || decoded.user?._id,
+                email: decoded.user?.email
+            });
+        }
 
         let userId = decoded.user?.id || decoded.user?._id;
         if (!userId) {
-            console.error('Auth middleware - Invalid token payload:', decoded);
             return res.status(401).json({ error: 'Please authenticate' });
         }
-        // Check database connection before querying
         if (mongoose.connection.readyState !== 1) {
-            console.error('Auth middleware - Database not connected, readyState:', mongoose.connection.readyState);
             return res.status(503).json({ 
                 error: 'Database connection issue. Please try again.',
                 code: 'DB_CONNECTION_ERROR',
@@ -39,39 +41,27 @@ const auth = async (req, res, next) => {
             });
         }
         
-        // Try both ObjectId and string for user lookup
+        const userIdStr = userId.toString();
         let user = null;
         try {
-            if (mongoose.Types.ObjectId.isValid(userId)) {
-                user = await User.findOne({ _id: new mongoose.Types.ObjectId(userId) });
-            }
-            if (!user) {
-                user = await User.findOne({ _id: userId });
+            if (mongoose.Types.ObjectId.isValid(userIdStr)) {
+                user = await User.findById(userIdStr).select(USER_AUTH_SELECT).lean();
             }
         } catch (dbError) {
-            // If database query fails, check if it's a connection issue
             if (dbError.name === 'MongoNetworkError' || 
                 dbError.name === 'MongooseError' ||
                 dbError.message?.includes('buffering timed out') ||
                 dbError.message?.includes('connection')) {
-                console.error('Auth middleware - Database query failed due to connection issue');
                 return res.status(503).json({ 
                     error: 'Database connection issue. Please try again.',
                     code: 'DB_CONNECTION_ERROR',
                     retry: true
                 });
             }
-            // Re-throw other database errors
             throw dbError;
         }
-        console.log('Auth middleware - User found:', {
-            found: !!user,
-            userId,
-            userEmail: user?.email,
-            userRole: user?.role
-        });
+
         if (!user) {
-            console.error('Auth middleware - User not found for ID:', userId);
             return res.status(401).json({ error: 'Please authenticate' });
         }
 

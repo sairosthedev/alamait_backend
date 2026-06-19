@@ -198,7 +198,8 @@ class RentalAccrualService {
             adminFee: 0,
             securityDeposit: 0,
             utilities: 0,
-            maintenance: 0
+            maintenance: 0,
+            levies: 0
         };
 
         console.log('🔍 Payment Config Debug:', {
@@ -252,6 +253,14 @@ class RentalAccrualService {
                 fees.maintenance = paymentConfig.maintenance.amount || 0;
             } else if (paymentConfig.maintenance.calculation === 'percentage') {
                 fees.maintenance = (room.price * (paymentConfig.maintenance.percentage || 0)) / 100;
+            }
+        }
+
+        // Levies at lease start when upfront, first_month, or every_month (first installment)
+        if (paymentConfig.levies && paymentConfig.levies.enabled === true) {
+            const application = paymentConfig.levies.application || 'every_month';
+            if (application === 'upfront' || application === 'first_month' || application === 'every_month') {
+                fees.levies = paymentConfig.levies.amount || 0;
             }
         }
 
@@ -757,11 +766,13 @@ class RentalAccrualService {
             const fees = this.calculateFeesFromPaymentConfig(residence, room);
             const adminFee = fees.adminFee;
             const securityDeposit = fees.securityDeposit;
+            const leaseStartLevies = fees.levies;
             
             console.log(`   Room Price: $${room.price}`);
             console.log(`   Prorated Rent (${proratedDays} days): $${proratedRent.toFixed(2)}`);
             console.log(`   Admin Fee: $${adminFee}`);
             console.log(`   Security Deposit: $${securityDeposit}`);
+            console.log(`   Levies (lease start): $${leaseStartLevies}`);
             
             // 🆕 CRITICAL: Use debtor's account code if debtor exists, otherwise use ensureStudentARAccount
             let accountsReceivable;
@@ -849,9 +860,24 @@ class RentalAccrualService {
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             const adminIncome = await Account.findOne({ code: '4002' }); // Administrative Fees
             const depositLiability = await Account.findOne({ code: '2020' }); // Tenant Security Deposits
+            let leviesIncome = await Account.findOne({ code: '4010' }); // Levies Income
+            if (!leviesIncome && leaseStartLevies > 0) {
+                leviesIncome = new Account({
+                    code: '4010',
+                    name: 'Levies Income',
+                    type: 'Income',
+                    category: 'Operating Revenue',
+                    description: 'Body corporate / estate levies charged to tenants',
+                    isActive: true
+                });
+                await leviesIncome.save();
+            }
             
             if (!accountsReceivable || !rentalIncome || !depositLiability) {
                 throw new Error('Required accounts not found');
+            }
+            if (leaseStartLevies > 0 && !leviesIncome) {
+                throw new Error('Levies income account (4010) not found');
             }
             
             // Create transaction for lease start
@@ -918,6 +944,26 @@ class RentalAccrualService {
                     description: `Administrative income accrued - ${application.firstName} ${application.lastName}`
                 });
             }
+
+            // 2b. Levies at lease start (upfront / first month only)
+            if (leaseStartLevies > 0 && leviesIncome) {
+                entries.push({
+                    accountCode: String(arAccountCode),
+                    accountName: accountsReceivable.name,
+                    accountType: accountsReceivable.type,
+                    debit: leaseStartLevies,
+                    credit: 0,
+                    description: `Levies due from ${application.firstName} ${application.lastName}`
+                });
+                entries.push({
+                    accountCode: leviesIncome.code,
+                    accountName: leviesIncome.name,
+                    accountType: leviesIncome.type,
+                    debit: 0,
+                    credit: leaseStartLevies,
+                    description: `Levies income accrued - ${application.firstName} ${application.lastName}`
+                });
+            }
             
             // 3. Security Deposit Liability
             entries.push({
@@ -972,6 +1018,7 @@ class RentalAccrualService {
                     proratedRent,
                     adminFee,
                     securityDeposit,
+                    levies: leaseStartLevies,
                     totalDebit,
                     totalCredit
                 }
@@ -2219,6 +2266,38 @@ class RentalAccrualService {
             if (!accountsReceivable || !rentalIncome) {
                 throw new Error('Required accounts not found');
             }
+
+            // Monthly levies (when residence config is every_month)
+            let monthlyLevies = 0;
+            let leviesIncome = null;
+            if (residence?.paymentConfiguration?.levies?.enabled) {
+                const ResidencePaymentService = require('./residencePaymentService');
+                const leaseStart = student.startDate ? new Date(student.startDate) : monthStart;
+                const leaseEnd = student.endDate ? new Date(student.endDate) : monthEnd;
+                const levyBreakdown = await ResidencePaymentService.calculatePaymentAmounts(
+                    student.residence,
+                    { price: room.price },
+                    leaseStart,
+                    leaseEnd,
+                    month,
+                    year
+                );
+                monthlyLevies = levyBreakdown.amounts.levies || 0;
+                if (monthlyLevies > 0) {
+                    leviesIncome = await Account.findOne({ code: '4010' });
+                    if (!leviesIncome) {
+                        leviesIncome = new Account({
+                            code: '4010',
+                            name: 'Levies Income',
+                            type: 'Income',
+                            category: 'Operating Revenue',
+                            description: 'Body corporate / estate levies charged to tenants',
+                            isActive: true
+                        });
+                        await leviesIncome.save();
+                    }
+                }
+            }
             
             // 🆕 CRITICAL SAFETY CHECK: Ensure accountsReceivable.code is a string
             let arAccountCode = accountsReceivable.code;
@@ -2312,6 +2391,29 @@ class RentalAccrualService {
                     description: `Monthly rental income accrued - ${student.firstName} ${student.lastName} - ${month}/${year}`
                 }
             ];
+
+            if (monthlyLevies > 0 && leviesIncome) {
+                entries.push(
+                    {
+                        accountCode: String(arAccountCode),
+                        accountName: accountsReceivable.name,
+                        accountType: accountsReceivable.type,
+                        debit: monthlyLevies,
+                        credit: 0,
+                        description: `Monthly levies due from ${student.firstName} ${student.lastName} - ${month}/${year}`
+                    },
+                    {
+                        accountCode: leviesIncome.code,
+                        accountName: leviesIncome.name,
+                        accountType: leviesIncome.type,
+                        debit: 0,
+                        credit: monthlyLevies,
+                        description: `Levies income accrued - ${student.firstName} ${student.lastName} - ${month}/${year}`
+                    }
+                );
+            }
+
+            const totalEntryAmount = rentAmount + monthlyLevies;
             
             // 🆕 FINAL CHECK: One more comprehensive duplicate check right before creating the transaction entry
             // This is the last chance to prevent duplicates before database write
@@ -2353,8 +2455,8 @@ class RentalAccrualService {
                 description: `Monthly rent accrual: ${student.firstName} ${student.lastName} - ${month}/${year}`,
                 reference: studentIdString,
                 entries,
-                totalDebit: rentAmount,
-                totalCredit: rentAmount,
+                totalDebit: totalEntryAmount,
+                totalCredit: totalEntryAmount,
                 source: 'rental_accrual',
                 sourceId: sourceId, // Use resolved student/application ID
                 sourceModel: 'Lease',
@@ -2370,7 +2472,8 @@ class RentalAccrualService {
                     accrualYear: year,
                     type: 'monthly_rent_accrual',
                     rentAmount,
-                    totalAmount: rentAmount,
+                    levies: monthlyLevies,
+                    totalAmount: totalEntryAmount,
                     ...(debtorIdForCheck ? { debtorId: debtorIdForCheck } : {})
                 }
             });

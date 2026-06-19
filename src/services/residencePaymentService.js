@@ -99,7 +99,8 @@ class ResidencePaymentService {
                     adminFee: 0,
                     deposit: 0,
                     utilities: 0,
-                    maintenance: 0
+                    maintenance: 0,
+                    levies: 0
                 },
                 breakdown: {}
             };
@@ -174,6 +175,25 @@ class ResidencePaymentService {
                     description: config.maintenance.description,
                     application: config.maintenance.application,
                     enabled: config.maintenance.enabled
+                };
+            }
+
+            // Calculate Levies
+            if (config.levies?.enabled) {
+                paymentBreakdown.amounts.levies = this.calculateLevies(
+                    config.levies,
+                    currentMonth,
+                    currentYear,
+                    leaseStartMonth,
+                    leaseStartYear,
+                    leaseEndMonth,
+                    leaseEndYear
+                );
+                paymentBreakdown.breakdown.levies = {
+                    amount: paymentBreakdown.amounts.levies,
+                    description: config.levies.description,
+                    application: config.levies.application,
+                    enabled: config.levies.enabled
                 };
             }
             
@@ -288,6 +308,26 @@ class ResidencePaymentService {
                 return 0;
         }
     }
+
+    /**
+     * Calculate levies amount based on configuration
+     */
+    static calculateLevies(config, currentMonth, currentYear, leaseStartMonth, leaseStartYear, leaseEndMonth, leaseEndYear) {
+        if (!config?.enabled || config.amount <= 0) return 0;
+
+        switch (config.application) {
+            case 'every_month':
+                return config.amount;
+            case 'first_month':
+                return (currentMonth === leaseStartMonth && currentYear === leaseStartYear) ? config.amount : 0;
+            case 'last_month':
+                return (currentMonth === leaseEndMonth && currentYear === leaseEndYear) ? config.amount : 0;
+            case 'upfront':
+                return (currentMonth === leaseStartMonth && currentYear === leaseStartYear) ? config.amount : 0;
+            default:
+                return 0;
+        }
+    }
     
     /**
      * Validate payment configuration
@@ -319,6 +359,12 @@ class ResidencePaymentService {
                 amount: Math.max(0, Number(config.maintenance?.amount) || 0),
                 description: String(config.maintenance?.description || 'Maintenance fee'),
                 application: config.maintenance?.application || 'every_month'
+            },
+            levies: {
+                enabled: Boolean(config.levies?.enabled),
+                amount: Math.max(0, Number(config.levies?.amount) || 0),
+                description: String(config.levies?.description || 'Levies'),
+                application: config.levies?.application || 'every_month'
             },
             rentProration: {
                 enabled: Boolean(config.rentProration?.enabled),
@@ -367,6 +413,12 @@ class ResidencePaymentService {
                 enabled: false,
                 amount: 0,
                 description: 'Maintenance fee',
+                application: 'every_month'
+            },
+            levies: {
+                enabled: false,
+                amount: 0,
+                description: 'Levies',
                 application: 'every_month'
             },
             rentProration: {

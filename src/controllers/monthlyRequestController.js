@@ -483,6 +483,7 @@ exports.getAllMonthlyRequests = async (req, res) => {
             filteredRequests = processedRequests.filter(r => r.financeStatus === status);
         }
 
+        res.set('Cache-Control', 'private, max-age=60');
         res.status(200).json({
             monthlyRequests: filteredRequests,
             pagination: {
@@ -2458,18 +2459,21 @@ exports.getFinanceMonthlyRequests = async (req, res) => {
         }
         
         const skip = (page - 1) * limit;
-        
-        const monthlyRequests = await MonthlyRequest.find(query)
-            .populate('residence', 'name')
-            .populate('submittedBy', 'firstName lastName email')
-            .populate('approvedBy', 'firstName lastName email')
-            .populate('items.quotations.uploadedBy', 'firstName lastName email')
-            .populate('items.quotations.approvedBy', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
-        
-        const total = await MonthlyRequest.countDocuments(query);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+        const listSelect = 'title description residence month year status isTemplate items.title items.estimatedCost items.quantity items.quotations.uploadedAt items.quotations.isApproved totalEstimatedCost approvedTotalCost requestHistory submittedBy approvedBy createdAt updatedAt';
+
+        const [monthlyRequests, total] = await Promise.all([
+            MonthlyRequest.find(query)
+                .select(listSelect)
+                .populate('residence', 'name')
+                .populate('submittedBy', 'firstName lastName email')
+                .populate('approvedBy', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            MonthlyRequest.countDocuments(query)
+        ]);
         
         // Add change indicators and approval status for each request
         const enhancedRequests = monthlyRequests.map(request => {
@@ -2485,7 +2489,7 @@ exports.getFinanceMonthlyRequests = async (req, res) => {
             }
             
             // Check for recent history changes (last 30 days)
-            const recentChanges = request.requestHistory.filter(history => 
+            const recentChanges = (request.requestHistory || []).filter(history => 
                 history.date >= new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
             );
             if (recentChanges.length > 0) {
@@ -2497,8 +2501,8 @@ exports.getFinanceMonthlyRequests = async (req, res) => {
             }
             
             // Check for new quotations in current month
-            const newQuotations = request.items.some(item => 
-                item.quotations.some(quotation => 
+            const newQuotations = (request.items || []).some(item => 
+                (item.quotations || []).some(quotation => 
                     quotation.uploadedAt >= new Date(currentYear, currentMonth - 1, 1) &&
                     quotation.uploadedAt < new Date(currentYear, currentMonth, 1)
                 )
@@ -2512,12 +2516,12 @@ exports.getFinanceMonthlyRequests = async (req, res) => {
             }
             
             // Check if any items have unapproved quotations
-            const hasUnapprovedQuotations = request.items.some(item => 
-                item.quotations.some(quotation => !quotation.isApproved)
+            const hasUnapprovedQuotations = (request.items || []).some(item => 
+                (item.quotations || []).some(quotation => !quotation.isApproved)
             );
             
             return {
-                ...request.toObject(),
+                ...request,
                 changes,
                 hasChanges: changes.length > 0,
                 needsApproval,
@@ -2537,16 +2541,17 @@ exports.getFinanceMonthlyRequests = async (req, res) => {
             totalEstimatedCost: enhancedRequests.reduce((sum, r) => sum + (r.totalEstimatedCost || 0), 0)
         };
         
+        res.set('Cache-Control', 'private, max-age=60');
         res.status(200).json({
             monthlyRequests: enhancedRequests,
             summary,
             currentMonth,
             currentYear,
             pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
+                currentPage: parseInt(page, 10) || 1,
+                totalPages: Math.ceil(total / limitNum),
                 totalItems: total,
-                itemsPerPage: parseInt(limit)
+                itemsPerPage: limitNum
             }
         });
     } catch (error) {
@@ -3043,21 +3048,24 @@ exports.getFinancePendingApprovals = async (req, res) => {
         };
         
         const skip = (page - 1) * limit;
-        
-        const pendingRequests = await MonthlyRequest.find(query)
-            .populate('residence', 'name')
-            .populate('submittedBy', 'firstName lastName email')
-            .populate('approvedBy', 'firstName lastName email')
-            .populate('items.quotations.uploadedBy', 'firstName lastName email')
-            .populate('items.quotations.approvedBy', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
-        
-        const total = await MonthlyRequest.countDocuments(query);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+        const listSelect = 'title description residence month year status isTemplate items.title items.estimatedCost items.quantity items.quotations.uploadedAt items.quotations.isApproved totalEstimatedCost approvedTotalCost requestHistory submittedBy approvedBy createdAt updatedAt';
+
+        const [monthlyRequests, total] = await Promise.all([
+            MonthlyRequest.find(query)
+                .select(listSelect)
+                .populate('residence', 'name')
+                .populate('submittedBy', 'firstName lastName email')
+                .populate('approvedBy', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            MonthlyRequest.countDocuments(query)
+        ]);
         
         // Add change indicators for each request
-        const enhancedRequests = pendingRequests.map(request => {
+        const enhancedRequests = monthlyRequests.map(request => {
             const changes = [];
             
             // Check if created this month
@@ -3066,7 +3074,7 @@ exports.getFinancePendingApprovals = async (req, res) => {
             }
             
             // Check for recent history changes
-            const recentChanges = request.requestHistory.filter(history => 
+            const recentChanges = (request.requestHistory || []).filter(history => 
                 history.date >= new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
             );
             if (recentChanges.length > 0) {
@@ -3074,8 +3082,8 @@ exports.getFinancePendingApprovals = async (req, res) => {
             }
             
             // Check for new quotations
-            const newQuotations = request.items.some(item => 
-                item.quotations.some(quotation => 
+            const newQuotations = (request.items || []).some(item => 
+                (item.quotations || []).some(quotation => 
                     quotation.uploadedAt >= new Date(currentYear, currentMonth - 1, 1) &&
                     quotation.uploadedAt < new Date(currentYear, currentMonth, 1)
                 )
@@ -3085,7 +3093,7 @@ exports.getFinancePendingApprovals = async (req, res) => {
             }
             
             return {
-                ...request.toObject(),
+                ...request,
                 changes,
                 hasChanges: changes.length > 0,
                 needsApproval: true,
@@ -3099,10 +3107,10 @@ exports.getFinancePendingApprovals = async (req, res) => {
             currentYear,
             totalPending: total,
             pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
+                currentPage: parseInt(page, 10) || 1,
+                totalPages: Math.ceil(total / limitNum),
                 totalItems: total,
-                itemsPerPage: parseInt(limit)
+                itemsPerPage: limitNum
             }
         });
     } catch (error) {

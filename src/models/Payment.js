@@ -44,6 +44,10 @@ const paymentSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    levies: {
+        type: Number,
+        default: 0
+    },
     amount: {
         type: Number,
         default: 0
@@ -51,7 +55,7 @@ const paymentSchema = new mongoose.Schema({
     payments: [{
         type: {
             type: String,
-            enum: ['rent', 'admin', 'deposit'],
+            enum: ['rent', 'admin', 'deposit', 'levies'],
             required: true
         },
         amount: {
@@ -142,13 +146,13 @@ const paymentSchema = new mongoose.Schema({
 
 // Add virtual fields
 paymentSchema.virtual('calculatedAmount').get(function() {
-    return (this.rentAmount || 0) + (this.adminFee || 0) + (this.deposit || 0);
+    return (this.rentAmount || 0) + (this.adminFee || 0) + (this.deposit || 0) + (this.levies || 0);
 });
 
 // Pre-save middleware to automatically set amount
 paymentSchema.pre('save', function(next) {
-    if (this.isModified('rentAmount') || this.isModified('adminFee') || this.isModified('deposit')) {
-        this.amount = (this.rentAmount || 0) + (this.adminFee || 0) + (this.deposit || 0);
+    if (this.isModified('rentAmount') || this.isModified('adminFee') || this.isModified('deposit') || this.isModified('levies')) {
+        this.amount = (this.rentAmount || 0) + (this.adminFee || 0) + (this.deposit || 0) + (this.levies || 0);
     }
     next();
 });

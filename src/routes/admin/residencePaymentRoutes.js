@@ -35,7 +35,12 @@ const paymentConfigValidation = [
     body('paymentConfiguration.maintenance').optional().isObject().withMessage('Maintenance configuration must be an object'),
     body('paymentConfiguration.maintenance.enabled').optional().isBoolean().withMessage('Maintenance enabled must be boolean'),
     body('paymentConfiguration.maintenance.amount').optional().isFloat({ min: 0 }).withMessage('Maintenance amount must be non-negative'),
-    body('paymentConfiguration.maintenance.application').optional().isIn(['every_month', 'first_month', 'last_month', 'upfront']).withMessage('Invalid maintenance application')
+    body('paymentConfiguration.maintenance.application').optional().isIn(['every_month', 'first_month', 'last_month', 'upfront']).withMessage('Invalid maintenance application'),
+
+    body('paymentConfiguration.levies').optional().isObject().withMessage('Levies configuration must be an object'),
+    body('paymentConfiguration.levies.enabled').optional().isBoolean().withMessage('Levies enabled must be boolean'),
+    body('paymentConfiguration.levies.amount').optional().isFloat({ min: 0 }).withMessage('Levies amount must be non-negative'),
+    body('paymentConfiguration.levies.application').optional().isIn(['every_month', 'first_month', 'last_month', 'upfront']).withMessage('Invalid levies application')
 ];
 
 // Validation middleware for payment calculation

@@ -38,4 +38,10 @@ router.get('/income/residence',
     dashboardController.getIncomeByResidence
 );
 
+// Unified dashboard badge counts (replaces multiple pending-count calls)
+router.get('/badges',
+    checkRole('admin', 'finance', 'finance_admin', 'finance_user', 'ceo'),
+    dashboardController.getDashboardBadges
+);
+
 module.exports = router; 

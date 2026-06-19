@@ -9,6 +9,150 @@ const ALLOCATION_DEBUG = false;
 
 class EnhancedPaymentAllocationService {
   /**
+   * Order months for component allocation: true arrears (before paymentMonth) first,
+   * then the paymentMonth itself. Months after paymentMonth are excluded from FIFO
+   * (remainder becomes advance for the intended payment month).
+   */
+  static orderMonthsForComponentAllocation(outstandingBalances, paymentMonthKey, componentType = 'rent') {
+    const sorted = [...(outstandingBalances || [])].sort(
+      (a, b) => new Date(a.date) - new Date(b.date)
+    );
+    if (!paymentMonthKey) return sorted;
+
+    const before = sorted.filter((m) => m.monthKey < paymentMonthKey);
+    const target = sorted.find((m) => m.monthKey === paymentMonthKey);
+
+    // Levies on a payment tagged to a month settle that month first, then any earlier arrears
+    if (componentType === 'levies') {
+      return target ? [target, ...before] : before;
+    }
+
+    // Rent: true arrears first, then the payment month (never future months)
+    return target ? [...before, target] : before;
+  }
+
+  /**
+   * Build payment components with explicit `type` values.
+   * Mongoose payment subdocuments use a field named `type` that is NOT copied by object spread.
+   */
+  static normalizePaymentComponents(payments, paymentData) {
+    const totalAmount = Number(paymentData.totalAmount) || 0;
+    const date = paymentData.date;
+
+    const fromArray = (payments || [])
+      .map((p) => {
+        const type = p?.type ?? (typeof p?.get === 'function' ? p.get('type') : undefined);
+        return {
+          type,
+          amount: Number(p?.amount) || 0,
+          monthAllocated: p?.monthAllocated,
+          date: p?.date || date,
+        };
+      })
+      .filter((p) => p.type && p.amount > 0);
+
+    const fromFields = [
+      { type: 'rent', amount: Number(paymentData.rentAmount) || 0 },
+      { type: 'admin', amount: Number(paymentData.adminFee) || 0 },
+      { type: 'deposit', amount: Number(paymentData.deposit) || 0 },
+      { type: 'levies', amount: Number(paymentData.levies) || 0 },
+    ]
+      .filter((p) => p.amount > 0)
+      .map((p) => ({ ...p, date }));
+
+    const sum = (items) => items.reduce((s, p) => s + p.amount, 0);
+
+    if (fromArray.length > 0 && Math.abs(sum(fromArray) - totalAmount) <= 0.01) {
+      return fromArray;
+    }
+    if (fromFields.length > 0 && Math.abs(sum(fromFields) - totalAmount) <= 0.01) {
+      return fromFields;
+    }
+    if (fromArray.length > 0) return fromArray;
+    return fromFields;
+  }
+
+  /**
+   * Create a levy accrual (DR AR, CR 4010) for a month when missing.
+   * Levies payments must hit Levies Income (4010), not Advance Liability (2200).
+   */
+  static async ensureLevyAccrualForMonth(userId, monthKey, amount, paymentData, arAccountCode, debtorId) {
+    if (!monthKey || !arAccountCode || amount <= 0) return null;
+
+    const [year, month] = monthKey.split('-').map(Number);
+    const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
+    const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const existing = await TransactionEntry.findOne({
+      source: 'rental_accrual',
+      status: { $ne: 'reversed' },
+      'entries.accountCode': arAccountCode,
+      date: { $gte: monthStart, $lte: monthEnd },
+      $or: [
+        { 'metadata.type': 'monthly_levy_accrual', 'metadata.month': monthKey },
+        { 'metadata.type': 'lease_start', 'metadata.month': monthKey },
+      ],
+    }).lean();
+
+    if (existing) {
+      const levyIncome = (existing.entries || []).find(
+        (e) => e.accountCode === '4010' && Number(e.credit) > 0
+      );
+      if (Number(levyIncome?.credit || 0) >= amount - 0.01) {
+        return existing;
+      }
+    }
+
+    const userIdStr = userId?.toString ? userId.toString() : String(userId);
+    console.log(`➕ Creating levy accrual for ${monthKey}: $${amount}`);
+
+    const tx = new TransactionEntry({
+      transactionId: `TXN-LEVY-${monthKey}-${Date.now()}`,
+      date: monthEnd,
+      description: `Monthly levies accrual - ${monthKey}`,
+      reference: `LEVY-${monthKey}-${userIdStr}`,
+      entries: [
+        {
+          accountCode: arAccountCode,
+          accountName: 'Accounts Receivable - Student',
+          accountType: 'Asset',
+          debit: amount,
+          credit: 0,
+          description: `Levies due ${monthKey}`,
+        },
+        {
+          accountCode: '4010',
+          accountName: 'Levies Income',
+          accountType: 'Income',
+          debit: 0,
+          credit: amount,
+          description: `Levies income ${monthKey}`,
+        },
+      ],
+      totalDebit: amount,
+      totalCredit: amount,
+      source: 'rental_accrual',
+      sourceModel: debtorId ? 'Debtor' : 'Lease',
+      sourceId: debtorId || null,
+      residence: paymentData.residence || null,
+      createdBy: 'system',
+      status: 'posted',
+      metadata: {
+        type: 'monthly_levy_accrual',
+        studentId: userIdStr,
+        month: monthKey,
+        accrualMonth: month,
+        accrualYear: year,
+        levies: amount,
+        autoCreatedOnPayment: true,
+      },
+    });
+
+    await tx.save();
+    return tx;
+  }
+
+  /**
    * 🎯 ENHANCED Smart FIFO Payment Allocation with Business Rules
    * 
    * Business Rules:
@@ -27,7 +171,8 @@ class EnhancedPaymentAllocationService {
         console.log('📋 Payment Data:', JSON.stringify(paymentData, null, 2));
       }
       
-      const { studentId: userId, totalAmount, payments, accountCode } = paymentData;
+      const { studentId: userId, totalAmount, payments: rawPayments, accountCode } = paymentData;
+      const payments = this.normalizePaymentComponents(rawPayments, paymentData);
       
       // 🆕 FIX: Clear any potential caching issues by adding a small delay
       // This ensures we get the latest data from the database
@@ -125,17 +270,14 @@ class EnhancedPaymentAllocationService {
       console.log(`📅 Payment date: ${paymentDate.toISOString().split('T')[0]}`);
       
       // 🆕 CRITICAL: Check if payment date is before payment month (advance payment detection)
-      // If payment is made before the month it's allocated to, it's ALWAYS an advance payment
+      // Compare YYYY-MM keys to avoid timezone edge cases (e.g. Apr 6 local vs Apr 1 UTC).
       let isAdvancePaymentByDate = false;
       if (paymentData.paymentMonth) {
-        const paymentMonthDate = new Date(paymentData.paymentMonth + '-01');
-        const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
-        
-        if (paymentDateMonth < paymentMonthDate) {
+        const paymentDateMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
+
+        if (paymentDateMonthKey < paymentData.paymentMonth) {
           isAdvancePaymentByDate = true;
-          console.log(`⚠️ ADVANCE PAYMENT DETECTED: Payment date (${paymentDate.toISOString().split('T')[0]}) is before payment month (${paymentData.paymentMonth})`);
-          console.log(`   Payment Date Month: ${paymentDateMonth.toISOString().split('T')[0]}`);
-          console.log(`   Payment Month: ${paymentMonthDate.toISOString().split('T')[0]}`);
+          console.log(`⚠️ ADVANCE PAYMENT DETECTED: Payment date month (${paymentDateMonthKey}) is before payment month (${paymentData.paymentMonth})`);
           console.log(`   ✅ This will be treated as an ADVANCE PAYMENT - routing to deferred income`);
         }
       }
@@ -259,6 +401,7 @@ class EnhancedPaymentAllocationService {
                 rent: { owed: netAccrualAmount, paid: totalPaid, outstanding: outstanding }, // Use net accrual after negotiated discounts
               adminFee: { owed: 0, paid: 0, outstanding: 0 },
               deposit: { owed: 0, paid: 0, outstanding: 0 },
+              levies: { owed: 0, paid: 0, outstanding: 0 },
               totalOutstanding: outstanding,
               transactionId: accrualForMonth._id,
               date: accrualForMonth.date
@@ -893,9 +1036,11 @@ class EnhancedPaymentAllocationService {
         if (paymentType === 'rent') {
           console.log(`🏠 Processing rent payment: $${remainingAmount}`);
           
-          // Allocate rent to oldest outstanding months first (FIFO)
-          // RULE: When payment exceeds a month's outstanding, create TWO entries: (1) allocation capped at month owed, (2) advance for the remainder
-          for (const month of outstandingBalances) {
+          const rentMonths = this.orderMonthsForComponentAllocation(outstandingBalances, paymentMonthKey);
+          console.log(`📅 Rent allocation order: ${rentMonths.map((m) => m.monthKey).join(' → ') || 'none'} (payment month: ${paymentMonthKey})`);
+
+          // Arrears before paymentMonth, then paymentMonth; never auto-apply to future months
+          for (const month of rentMonths) {
             if (remainingAmount <= 0) break;
             
             // Skip months that already have full rent paid
@@ -965,7 +1110,7 @@ class EnhancedPaymentAllocationService {
               // Update month outstanding balance
               month.rent.outstanding = Math.max(0, month.rent.outstanding - amountToAllocate);
               month.rent.paid += amountToAllocate;
-              month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding;
+              month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding + month.levies.outstanding;
               
               remainingAmount -= amountToAllocate;
               totalAllocated += amountToAllocate;
@@ -974,11 +1119,192 @@ class EnhancedPaymentAllocationService {
             }
           }
           
-          // Second entry: any rent left after capping each month = advance (Deferred Income)
+          // Remainder → advance for the intended payment month (not future months)
           if (remainingAmount > 0) {
-            console.log(`💳 Creating advance entry: $${remainingAmount} rent → Deferred Income (excess over month(s) owed)`);
+            console.log(`💳 Creating advance entry: $${remainingAmount} rent → Deferred Income (payment month ${paymentMonthKey})`);
             const advanceResult = await this.handleAdvancePayment(
-              paymentData.paymentId, userId, remainingAmount, paymentData, 'rent'
+              paymentData.paymentId,
+              userId,
+              remainingAmount,
+              { ...paymentData, paymentMonth: paymentMonthKey },
+              'rent'
+            );
+            allocationResults.push(advanceResult);
+            totalAllocated += remainingAmount;
+          }
+        }
+
+        // Handle levies payments (monthly FIFO, same as rent)
+        if (paymentType === 'levies') {
+          console.log(`🏘️ Processing levies payment: $${remainingAmount}`);
+
+          const arCode = finalAccountCode || paymentData.debtorAccountCode;
+          const debtorIdForLevy = debtorDoc?._id?.toString();
+
+          // Ensure levy accrual exists for payment month so levies hit 4010, not 2200
+          if (paymentMonthKey && remainingAmount > 0 && arCode) {
+            let targetMonth = outstandingBalances.find((m) => m.monthKey === paymentMonthKey);
+            const levyOutstanding = targetMonth?.levies?.outstanding || 0;
+            if (levyOutstanding <= 0) {
+              const amountForMonth = remainingAmount;
+              const levyAccrual = await this.ensureLevyAccrualForMonth(
+                actualUserId,
+                paymentMonthKey,
+                amountForMonth,
+                paymentData,
+                arCode,
+                debtorIdForLevy
+              );
+              if (levyAccrual) {
+                if (targetMonth) {
+                  targetMonth.levies.owed = (targetMonth.levies.owed || 0) + amountForMonth;
+                  targetMonth.levies.outstanding = (targetMonth.levies.outstanding || 0) + amountForMonth;
+                  targetMonth.levyAccrualTransactionId = levyAccrual._id;
+                } else {
+                  const monthDate = new Date(`${paymentMonthKey}-01T00:00:00.000Z`);
+                  targetMonth = {
+                    monthKey: paymentMonthKey,
+                    year: monthDate.getFullYear(),
+                    month: monthDate.getMonth() + 1,
+                    monthName: monthDate.toLocaleString('default', { month: 'long' }),
+                    date: monthDate,
+                    rent: { owed: 0, paid: 0, outstanding: 0 },
+                    adminFee: { owed: 0, paid: 0, outstanding: 0 },
+                    deposit: { owed: 0, paid: 0, outstanding: 0 },
+                    levies: { owed: amountForMonth, paid: 0, outstanding: amountForMonth },
+                    totalOutstanding: amountForMonth,
+                    transactionId: levyAccrual._id,
+                    levyAccrualTransactionId: levyAccrual._id,
+                  };
+                  outstandingBalances.push(targetMonth);
+                }
+              }
+            }
+          }
+
+          const leviesMonths = this.orderMonthsForComponentAllocation(outstandingBalances, paymentMonthKey, 'levies');
+          console.log(`📅 Levies allocation order: ${leviesMonths.map((m) => m.monthKey).join(' → ') || 'none'} (payment month: ${paymentMonthKey})`);
+
+          for (const month of leviesMonths) {
+            if (remainingAmount <= 0) break;
+
+            if (month.levies.outstanding <= 0) {
+              console.log(`ℹ️ No outstanding levies for ${month.monthKey}, moving to next month`);
+              continue;
+            }
+
+            if (month.isVirtualMonth || !month.transactionId) {
+              console.log(`ℹ️ Skipping virtual month ${month.monthKey} (no actual AR transaction), moving to next month`);
+              continue;
+            }
+
+            const amountToAllocate = Math.min(remainingAmount, month.levies.outstanding);
+            const levyArTxId = month.levyAccrualTransactionId || month.transactionId;
+
+            if (amountToAllocate > 0) {
+              console.log(`🎯 Allocating $${amountToAllocate} levies to ${month.monthKey}`);
+
+              await this.createPaymentAllocationTransaction(
+                paymentData.paymentId,
+                userId,
+                amountToAllocate,
+                {
+                  ...paymentData,
+                  paymentType: 'levies',
+                  studentName: paymentData.studentName || 'Student',
+                  debtorAccountCode: finalAccountCode || paymentData.debtorAccountCode
+                },
+                'levies',
+                month.monthKey,
+                levyArTxId
+              );
+
+              await this.updateARTransaction(
+                levyArTxId,
+                amountToAllocate,
+                { ...paymentData, paymentType: 'levies', monthKey: month.monthKey },
+                month.levies.outstanding
+              );
+
+              const paymentDate = new Date(paymentData.date);
+              const allocationMonth = new Date(month.year, month.month - 1, 1);
+              const isAdvancePayment = allocationMonth > paymentDate;
+
+              allocationResults.push({
+                month: month.monthKey,
+                monthName: month.monthName,
+                year: month.year,
+                paymentType: 'levies',
+                amountAllocated: amountToAllocate,
+                originalOutstanding: month.levies.outstanding,
+                newOutstanding: month.levies.outstanding - amountToAllocate,
+                allocationType: isAdvancePayment ? 'advance_payment' : 'levies_settlement',
+                transactionId: levyArTxId
+              });
+
+              month.levies.outstanding = Math.max(0, month.levies.outstanding - amountToAllocate);
+              month.levies.paid += amountToAllocate;
+              month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding + month.levies.outstanding;
+
+              remainingAmount -= amountToAllocate;
+              totalAllocated += amountToAllocate;
+
+              console.log(`✅ Allocated $${amountToAllocate} levies to ${month.monthKey}, remaining: $${remainingAmount}`);
+            }
+          }
+
+          if (remainingAmount > 0) {
+            console.log(`💳 Levies remainder $${remainingAmount} for month ${paymentMonthKey} — ensuring accrual before advance`);
+            const arCodeRemainder = finalAccountCode || paymentData.debtorAccountCode;
+            if (paymentMonthKey && arCodeRemainder) {
+              const levyAccrual = await this.ensureLevyAccrualForMonth(
+                actualUserId,
+                paymentMonthKey,
+                remainingAmount,
+                paymentData,
+                arCodeRemainder,
+                debtorDoc?._id?.toString()
+              );
+              if (levyAccrual) {
+                await this.createPaymentAllocationTransaction(
+                  paymentData.paymentId,
+                  userId,
+                  remainingAmount,
+                  {
+                    ...paymentData,
+                    paymentType: 'levies',
+                    studentName: paymentData.studentName || 'Student',
+                    debtorAccountCode: arCodeRemainder
+                  },
+                  'levies',
+                  paymentMonthKey,
+                  levyAccrual._id
+                );
+                allocationResults.push({
+                  month: paymentMonthKey,
+                  monthName: new Date(`${paymentMonthKey}-01`).toLocaleString('default', { month: 'long' }),
+                  year: Number(paymentMonthKey.split('-')[0]),
+                  paymentType: 'levies',
+                  amountAllocated: remainingAmount,
+                  originalOutstanding: remainingAmount,
+                  newOutstanding: 0,
+                  allocationType: 'levies_settlement',
+                  transactionId: levyAccrual._id
+                });
+                totalAllocated += remainingAmount;
+                remainingAmount = 0;
+              }
+            }
+          }
+
+          if (remainingAmount > 0) {
+            console.log(`💳 Creating advance entry: $${remainingAmount} levies → Deferred Income (future periods)`);
+            const advanceResult = await this.handleAdvancePayment(
+              paymentData.paymentId,
+              userId,
+              remainingAmount,
+              { ...paymentData, paymentMonth: paymentMonthKey },
+              'levies'
             );
             allocationResults.push(advanceResult);
             totalAllocated += remainingAmount;
@@ -1326,7 +1652,8 @@ class EnhancedPaymentAllocationService {
       );
       
       const allUserTransactions = await TransactionEntry.find({
-        $or: queryConditions
+        $or: queryConditions,
+        status: { $ne: 'reversed' }
       }).lean().sort({ date: 1 });
 
       console.log(`📊 Found ${allUserTransactions.length} total transactions for user ${userId}`);
@@ -1409,7 +1736,8 @@ class EnhancedPaymentAllocationService {
         }
         const isLeaseStart = tx.metadata?.type === 'lease_start';
         const isMonthlyRent = tx.metadata?.type === 'monthly_rent_accrual';
-        if (!isLeaseStart && !isMonthlyRent) {
+        const isLevyAccrual = tx.metadata?.type === 'monthly_levy_accrual';
+        if (!isLeaseStart && !isMonthlyRent && !isLevyAccrual) {
           return false;
         }
         const hasMatchingAccount = tx.entries && tx.entries.some(entry =>
@@ -1548,6 +1876,7 @@ class EnhancedPaymentAllocationService {
             rent: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0, negotiatedDiscount: 0 }, // 🆕 Track original and negotiated separately
             adminFee: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0 }, // 🆕 Track original admin fee from accrual
             deposit: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0 }, // 🆕 Track original deposit from accrual
+            levies: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0 },
             totalOutstanding: 0,
             transactionId: accrual._id,
             source: accrual.source,
@@ -1555,6 +1884,28 @@ class EnhancedPaymentAllocationService {
           };
           console.log(`📅 Created monthly outstanding for ${monthKey} with transaction ID: ${accrual._id} (type: ${accrual.metadata?.type || accrual.source})`);
         } else {
+          const isDuplicateMonthly =
+            accrual.metadata?.type === 'monthly_rent_accrual' &&
+            monthlyOutstanding[monthKey].metadata?.type === 'monthly_rent_accrual';
+          if (isDuplicateMonthly) {
+            console.log(`⚠️ Skipping duplicate monthly accrual for ${monthKey}: ${accrual._id}`);
+            return;
+          }
+          if (accrual.metadata?.type === 'monthly_levy_accrual') {
+            const levyFromIncome = accrual.entries
+              .filter((e) => e.accountCode === '4010' && e.accountType === 'Income' && e.credit > 0)
+              .reduce((sum, e) => sum + e.credit, 0);
+            const levyAmount = levyFromIncome > 0
+              ? levyFromIncome
+              : accrual.entries
+                  .filter((e) => e.accountCode.startsWith('1100-') && e.debit > 0)
+                  .reduce((sum, e) => sum + e.debit, 0);
+            monthlyOutstanding[monthKey].levies.owed += levyAmount;
+            monthlyOutstanding[monthKey].levies.originalOwed =
+              (monthlyOutstanding[monthKey].levies.originalOwed || 0) + levyAmount;
+            console.log(`  → Merged levy accrual for ${monthKey}: +$${levyAmount}`);
+            return;
+          }
           console.log(`⚠️ WARNING: Multiple accruals found for ${monthKey}!`);
           console.log(`   Existing transaction: ${monthlyOutstanding[monthKey].transactionId} (type: ${monthlyOutstanding[monthKey].metadata?.type || monthlyOutstanding[monthKey].source})`);
           console.log(`   New transaction: ${accrual._id} (type: ${accrual.metadata?.type || accrual.source})`);
@@ -1600,19 +1951,34 @@ class EnhancedPaymentAllocationService {
               monthlyOutstanding[monthKey].rent.originalOwed = (monthlyOutstanding[monthKey].rent.originalOwed || 0) + entry.credit; // 🆕 Track original accrual amount
               console.log(`  → Found rent in lease start: $${entry.credit} (${description.includes('prorated') ? 'prorated' : 'full month'})`);
             }
+
+            // Levies entry (account 4010) - Income account
+            if (entry.accountCode === '4010' && entry.accountType === 'Income' && entry.credit > 0) {
+              monthlyOutstanding[monthKey].levies.owed += entry.credit;
+              monthlyOutstanding[monthKey].levies.originalOwed = (monthlyOutstanding[monthKey].levies.originalOwed || 0) + entry.credit;
+              console.log(`  → Found levies in lease start: $${entry.credit}`);
+            }
           });
           
-          console.log(`  ✅ Lease start breakdown: Rent=$${monthlyOutstanding[monthKey].rent.originalOwed || monthlyOutstanding[monthKey].rent.owed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.originalOwed || monthlyOutstanding[monthKey].adminFee.owed}, Deposit=$${monthlyOutstanding[monthKey].deposit.originalOwed || monthlyOutstanding[monthKey].deposit.owed}`);
+          console.log(`  ✅ Lease start breakdown: Rent=$${monthlyOutstanding[monthKey].rent.originalOwed || monthlyOutstanding[monthKey].rent.owed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.originalOwed || monthlyOutstanding[monthKey].adminFee.owed}, Deposit=$${monthlyOutstanding[monthKey].deposit.originalOwed || monthlyOutstanding[monthKey].deposit.owed}, Levies=$${monthlyOutstanding[monthKey].levies.originalOwed || monthlyOutstanding[monthKey].levies.owed}`);
           console.log(`  ✅ Original Owed: Rent=$${monthlyOutstanding[monthKey].rent.originalOwed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.originalOwed}, Deposit=$${monthlyOutstanding[monthKey].deposit.originalOwed}`);
         } else {
-          // For monthly_rent_accrual and other accrual types, categorize by AR debit entry description
+          // For monthly_rent_accrual and other accrual types, categorize by income/AR entries
           accrual.entries.forEach(entry => {
+            if (entry.accountCode === '4010' && entry.accountType === 'Income' && entry.credit > 0) {
+              monthlyOutstanding[monthKey].levies.owed += entry.credit;
+              monthlyOutstanding[monthKey].levies.originalOwed = (monthlyOutstanding[monthKey].levies.originalOwed || 0) + entry.credit;
+            }
+
             if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
               const description = (entry.description || '').toLowerCase();
               
               if (description.includes('admin fee') || description.includes('administrative')) {
                 monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
                 monthlyOutstanding[monthKey].adminFee.originalOwed = (monthlyOutstanding[monthKey].adminFee.originalOwed || 0) + entry.debit; // 🆕 Track original admin fee
+              } else if (description.includes('levies') || description.includes('levy')) {
+                monthlyOutstanding[monthKey].levies.owed += entry.debit;
+                monthlyOutstanding[monthKey].levies.originalOwed = (monthlyOutstanding[monthKey].levies.originalOwed || 0) + entry.debit;
               } else if (description.includes('security deposit') || description.includes('deposit')) {
                 monthlyOutstanding[monthKey].deposit.owed += entry.debit;
                 monthlyOutstanding[monthKey].deposit.originalOwed = (monthlyOutstanding[monthKey].deposit.originalOwed || 0) + entry.debit; // 🆕 Track original deposit
@@ -1687,6 +2053,8 @@ class EnhancedPaymentAllocationService {
             monthlyOutstanding[monthSettled].adminFee.paid += amount;
           } else if (paymentType === 'deposit') {
             monthlyOutstanding[monthSettled].deposit.paid += amount;
+          } else if (paymentType === 'levies') {
+            monthlyOutstanding[monthSettled].levies.paid += amount;
           } else if (paymentType === 'rent') {
             monthlyOutstanding[monthSettled].rent.paid += amount;
           } else {
@@ -1694,6 +2062,7 @@ class EnhancedPaymentAllocationService {
             const desc = (arEntry?.description || payment.description || '').toLowerCase();
             if (desc.includes('admin')) monthlyOutstanding[monthSettled].adminFee.paid += amount;
             else if (desc.includes('deposit')) monthlyOutstanding[monthSettled].deposit.paid += amount;
+            else if (desc.includes('levies') || desc.includes('levy')) monthlyOutstanding[monthSettled].levies.paid += amount;
             else monthlyOutstanding[monthSettled].rent.paid += amount;
           }
           return;
@@ -1714,13 +2083,15 @@ class EnhancedPaymentAllocationService {
           const owedRent = Math.max(0, b.rent.owed - b.rent.paid);
           const owedAdmin = Math.max(0, b.adminFee.owed - b.adminFee.paid);
           const owedDep = Math.max(0, b.deposit.owed - b.deposit.paid);
-          let need = owedRent + owedAdmin + owedDep;
+          const owedLevies = Math.max(0, b.levies.owed - b.levies.paid);
+          let need = owedRent + owedAdmin + owedDep + owedLevies;
           if (need <= 0) continue;
           const take = Math.min(remaining, need);
           let toApply = take;
           const takeRent = Math.min(toApply, owedRent); b.rent.paid += takeRent; toApply -= takeRent;
           const takeAdmin = Math.min(toApply, owedAdmin); b.adminFee.paid += takeAdmin; toApply -= takeAdmin;
           const takeDep = Math.min(toApply, owedDep); b.deposit.paid += takeDep; toApply -= takeDep;
+          const takeLevies = Math.min(toApply, owedLevies); b.levies.paid += takeLevies; toApply -= takeLevies;
           remaining -= take;
         }
       });
@@ -1821,6 +2192,8 @@ class EnhancedPaymentAllocationService {
               // Other manual adjustments
               if (description.includes('admin')) {
                 monthlyOutstanding[monthKey].adminFee.owed = Math.max(0, monthlyOutstanding[monthKey].adminFee.owed - amount);
+              } else if (description.includes('levies') || description.includes('levy')) {
+                monthlyOutstanding[monthKey].levies.owed = Math.max(0, monthlyOutstanding[monthKey].levies.owed - amount);
               } else if (description.includes('deposit')) {
                 monthlyOutstanding[monthKey].deposit.owed = Math.max(0, monthlyOutstanding[monthKey].deposit.owed - amount);
               } else {
@@ -1837,9 +2210,10 @@ class EnhancedPaymentAllocationService {
         month.rent.outstanding = Math.max(0, month.rent.owed - month.rent.paid);
         month.adminFee.outstanding = Math.max(0, month.adminFee.owed - month.adminFee.paid);
         month.deposit.outstanding = Math.max(0, month.deposit.owed - month.deposit.paid);
+        month.levies.outstanding = Math.max(0, month.levies.owed - month.levies.paid);
         
         // Calculate total outstanding for this month
-        month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding;
+        month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding + month.levies.outstanding;
         
         // 🆕 FIX: Mark months as fully settled if they have no outstanding amounts
         month.fullySettled = month.totalOutstanding === 0;
@@ -1857,6 +2231,7 @@ class EnhancedPaymentAllocationService {
 
         // Collect advance amounts (only those made before the first accrual month)
         const advanceBuckets = rawAdvancePayments
+          .filter(tx => tx.metadata?.paymentType !== 'deposit' && tx.metadata?.paymentType !== 'admin')
           .filter(tx => tx.date && new Date(tx.date) < earliestAccrualDate)
           .map(tx => {
             const arEntry = Array.isArray(tx.entries)
@@ -1887,7 +2262,7 @@ class EnhancedPaymentAllocationService {
               const applied = Math.min(remaining, rentGap);
               month.rent.paid += applied;
               month.rent.outstanding = Math.max(0, month.rent.owed - month.rent.paid);
-              month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding;
+              month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding + month.levies.outstanding;
               month.fullySettled = month.totalOutstanding === 0;
               remaining -= applied;
 
@@ -1911,6 +2286,7 @@ class EnhancedPaymentAllocationService {
         console.log(`    Rent: Original=$${originalRentOwed.toFixed(2)}, Negotiated Discount=$${negotiatedDiscount.toFixed(2)}, Net Owed=$${month.rent.owed.toFixed(2)}, Paid=$${month.rent.paid.toFixed(2)}, Outstanding=$${month.rent.outstanding.toFixed(2)}`);
         console.log(`    Admin Fee: Owed=$${month.adminFee.owed.toFixed(2)}, Paid=$${month.adminFee.paid.toFixed(2)}, Outstanding=$${month.adminFee.outstanding.toFixed(2)}`);
         console.log(`    Deposit: Owed=$${month.deposit.owed.toFixed(2)}, Paid=$${month.deposit.paid.toFixed(2)}, Outstanding=$${month.deposit.outstanding.toFixed(2)}`);
+        console.log(`    Levies: Owed=$${month.levies.owed.toFixed(2)}, Paid=$${month.levies.paid.toFixed(2)}, Outstanding=$${month.levies.outstanding.toFixed(2)}`);
         console.log(`    Total Outstanding: $${month.totalOutstanding.toFixed(2)}`);
       });
       
@@ -2073,7 +2449,7 @@ class EnhancedPaymentAllocationService {
    * @param {string} paymentType - Type of advance payment
    * @returns {Object} Advance payment transaction
    */
-  static async createAdvancePaymentTransaction(paymentId, userId, amount, paymentData, paymentType, monthSettled = null) {
+  static async createAdvancePaymentTransaction(paymentId, userId, amount, paymentData, paymentType, initialMonthSettled = null) {
     try {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
       
@@ -2100,9 +2476,9 @@ class EnhancedPaymentAllocationService {
       const paymentIdStr = paymentId?.toString ? paymentId.toString() : String(paymentId);
       const paymentDate = paymentData.date ? new Date(paymentData.date) : new Date();
 
-      const monthMatchClause = (monthSettled === null || monthSettled === undefined)
+      const monthMatchClause = (initialMonthSettled === null || initialMonthSettled === undefined)
         ? { $or: [{ 'metadata.monthSettled': null }, { 'metadata.monthSettled': { $exists: false } }] }
-        : { 'metadata.monthSettled': monthSettled };
+        : { 'metadata.monthSettled': initialMonthSettled };
       
       // Check 1: By payment ID + payment type (allow separate advance for rent vs deposit)
       // Same payment can have one advance for 'rent' and one for 'deposit' - they must be separate transactions
@@ -2170,10 +2546,9 @@ class EnhancedPaymentAllocationService {
       }
       
       // CRITICAL: Verify this is a student ID, not an application ID
-      // First check if it's an Application ID – BUT ONLY when we don't already have a debtorAccountCode.
-      // For cases like Tatenda, we trust the debtor's AR code from payment data and must NOT
-      // rewrite userId via an old application record.
-      if (!paymentData.debtorAccountCode) {
+      // Skip Application rewrite when we already have a debtor AR code on the payment.
+      const knownArCode = paymentData.debtorAccountCode || paymentData.accountCode;
+      if (!knownArCode || !String(knownArCode).startsWith('1100-')) {
         const Application = require('../models/Application');
         const application = await Application.findById(userIdStr);
         if (application) {
@@ -2230,11 +2605,10 @@ class EnhancedPaymentAllocationService {
           studentARCode = `1100-${debtorId}`;
           console.log(`⚠️ Debtor exists but no accountCode, using debtor ID for AR: ${studentARCode}`);
         }
-      } else if (paymentData.debtorAccountCode && paymentData.debtorAccountCode.startsWith('1100-')) {
+      } else if (knownArCode && String(knownArCode).startsWith('1100-')) {
         // 🆕 SAFE FALLBACK: use known debtor AR account code from payment data
-        // This is explicitly what you asked for (e.g. 1100-697c7ef878188f4a92c74b14 for Tatenda).
-        studentARCode = paymentData.debtorAccountCode;
-        const extractedId = paymentData.debtorAccountCode.slice('1100-'.length);
+        studentARCode = knownArCode;
+        const extractedId = knownArCode.slice('1100-'.length);
         debtorId = extractedId;
         console.log(`✅ Using debtorAccountCode from payment data for advance payment: ${studentARCode} (derived debtorId: ${debtorId})`);
       } else {
@@ -2284,10 +2658,10 @@ class EnhancedPaymentAllocationService {
 
       // Determine monthSettled for deposit: use lease_start month if available
       // Also determine intendedLeaseStartMonth from application if available
-      let monthSettled = null;
+      let monthSettled = initialMonthSettled || paymentData.paymentMonth || null;
       let intendedLeaseStartMonth = paymentData.intendedLeaseStartMonth || null;
       
-      if (isDeposit) {
+      if (isDeposit && !monthSettled) {
         try {
           const leaseStartAccrual = await TransactionEntry.findOne({
             source: 'rental_accrual',
@@ -2398,6 +2772,14 @@ class EnhancedPaymentAllocationService {
       
       await advanceTransaction.save();
       console.log(`✅ Advance payment transaction created: ${advanceTransaction._id}`);
+
+      if (isDeposit && debtor?._id) {
+        try {
+          await this.updateDebtorOnceOffCharge(debtor._id, 'deposit', amount, paymentId);
+        } catch (depositFlagError) {
+          console.error(`❌ Error updating deposit once-off charge: ${depositFlagError.message}`);
+        }
+      }
       
       // Log advance payment transaction creation to audit log
       await logSystemOperation('create', 'TransactionEntry', advanceTransaction._id, {
@@ -2517,14 +2899,24 @@ class EnhancedPaymentAllocationService {
       
       let hasAccrual = false;
       if (arTransactionId) {
-        // If arTransactionId is provided, check if it exists AND was created before/on payment date
         const existingAR = await TransactionEntry.findOne({
           _id: arTransactionId,
-          date: { $lte: paymentDate }, // Accrual must exist on or before payment date
+          source: 'rental_accrual',
+          status: { $ne: 'reversed' }
+        });
+        hasAccrual = !!existingAR;
+        if (hasAccrual) {
+          console.log(`✅ Using linked accrual ${arTransactionId} for ${monthSettled}`);
+        }
+      }
+      if (!hasAccrual && arTransactionId) {
+        const existingAR = await TransactionEntry.findOne({
+          _id: arTransactionId,
+          date: { $lte: paymentDate },
           status: 'posted'
         });
         hasAccrual = !!existingAR;
-      } else if (monthSettled) {
+      } else if (!hasAccrual && monthSettled) {
         // Check if any accrual exists for this month that was created ON OR BEFORE the payment date
         // This ensures we check if accrual existed at the time of payment, not now
         const [year, month] = monthSettled.split('-').map(Number);
@@ -2678,6 +3070,32 @@ class EnhancedPaymentAllocationService {
       let source = 'payment';
       
       if (!hasAccrual) {
+        // Levies without accrual: recognize Levies Income (4010) directly — never route to 2200
+        if (paymentType === 'levies') {
+          console.log(`💡 No levy accrual linked for ${monthSettled} — posting directly to Levies Income (4010)`);
+          entries = [
+            {
+              accountCode: cashAccountCode,
+              accountName: cashAccountName,
+              accountType: 'Asset',
+              debit: amount,
+              credit: 0,
+              description: `Levies payment received for ${monthSettled}`
+            },
+            {
+              accountCode: '4010',
+              accountName: 'Levies Income',
+              accountType: 'Income',
+              debit: 0,
+              credit: amount,
+              description: `Levies income - ${monthSettled}`
+            }
+          ];
+          totalDebit = amount;
+          totalCredit = amount;
+          description = `Payment allocation: levies for ${monthSettled}`;
+          source = 'payment';
+        } else {
         // 🆕 NO ACCRUAL: Treat as advance payment - route to deferred income
         // Use same 4-entry structure as advance payments to show in AR transaction history
         console.log(`⚠️ No accrual found for ${monthSettled} - treating as advance payment`);
@@ -2728,6 +3146,7 @@ class EnhancedPaymentAllocationService {
         totalCredit = amount * 2;
         description = `Advance ${paymentType} payment for ${monthSettled} (no accrual yet)`;
         source = 'advance_payment'; // Mark as advance payment
+        }
         
       } else {
         // ✅ ACCRUAL EXISTS: Normal payment allocation - credit AR directly
@@ -2915,9 +3334,11 @@ class EnhancedPaymentAllocationService {
     try {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
       
+      const monthSettled = paymentData.paymentMonth || null;
+
       // Create advance payment transaction
       const advanceTransaction = await this.createAdvancePaymentTransaction(
-        paymentId, userId, amount, paymentData, paymentType, null
+        paymentId, userId, amount, paymentData, paymentType, monthSettled
       );
       
       // Update debtor deferred income only for rent advances
@@ -3165,12 +3586,14 @@ class EnhancedPaymentAllocationService {
           rent: month.rent.outstanding,
           adminFee: month.adminFee.outstanding,
           deposit: month.deposit.outstanding,
+          levies: month.levies.outstanding,
           total: month.totalOutstanding
         })),
         summary: {
           totalRent: outstandingBalances.reduce((sum, month) => sum + month.rent.outstanding, 0),
           totalAdminFee: outstandingBalances.reduce((sum, month) => sum + month.adminFee.outstanding, 0),
           totalDeposit: outstandingBalances.reduce((sum, month) => sum + month.deposit.outstanding, 0),
+          totalLevies: outstandingBalances.reduce((sum, month) => sum + month.levies.outstanding, 0),
           totalOutstanding
         }
       };

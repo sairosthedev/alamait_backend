@@ -2,14 +2,19 @@ const Payment = require('../../models/Payment');
 const Expense = require('../../models/finance/Expense');
 const { Residence } = require('../../models/Residence');
 const User = require('../../models/User');
+const Application = require('../../models/Application');
+const Request = require('../../models/Request');
+const MonthlyRequest = require('../../models/MonthlyRequest');
+const cacheService = require('../../services/cacheService');
 const { validateMongoId } = require('../../utils/validators');
+
+const BADGE_CACHE_TTL = 120;
 
 // Get finance overview
 exports.getFinanceOverview = async (req, res) => {
     try {
         const { residence, startDate, endDate } = req.query;
         
-        // Build filter object
         const filter = {};
         const expenseFilter = {};
         
@@ -21,7 +26,6 @@ exports.getFinanceOverview = async (req, res) => {
             expenseFilter.residence = residence;
         }
         
-        // Date filtering
         if (startDate || endDate) {
             filter.date = {};
             expenseFilter.expenseDate = {};
@@ -37,44 +41,36 @@ exports.getFinanceOverview = async (req, res) => {
             }
         }
 
-        // Get income (payments)
         const incomeData = await Payment.aggregate([
             { $match: { ...filter, status: { $in: ['Confirmed', 'Verified'] } } },
             { $group: { _id: null, total: { $sum: '$totalAmount' } } }
         ]);
 
-        // Get expenses
         const expensesData = await Expense.aggregate([
             { $match: { ...expenseFilter, paymentStatus: 'Paid' } },
             { $group: { _id: null, total: { $sum: '$amount' } } }
         ]);
 
-        // Get pending payments
         const pendingPaymentsData = await Payment.aggregate([
             { $match: { ...filter, status: 'Pending' } },
             { $group: { _id: null, total: { $sum: '$totalAmount' }, count: { $sum: 1 } } }
         ]);
 
-        // Get unpaid expenses
         const unpaidExpensesData = await Expense.aggregate([
             { $match: { ...expenseFilter, paymentStatus: 'Pending' } },
             { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
         ]);
 
-        // Calculate totals
         const totalIncome = incomeData.length > 0 ? incomeData[0].total : 0;
         const totalExpenses = expensesData.length > 0 ? expensesData[0].total : 0;
         const netProfit = totalIncome - totalExpenses;
 
-        // Get residence counts
         const residenceCount = await Residence.countDocuments();
         const activeResidenceCount = await Residence.countDocuments({ status: 'Active' });
 
-        // Get student counts
         const studentCount = await User.countDocuments({ role: 'student' });
         const activeStudentCount = await User.countDocuments({ role: 'student', status: 'Active' });
 
-        // Format data for response
         const overview = {
             financialSummary: {
                 totalIncome,
@@ -109,12 +105,10 @@ exports.getFinanceOverview = async (req, res) => {
     }
 };
 
-// Get income by period
 exports.getIncomeByPeriod = async (req, res) => {
     try {
         const { residence, period = 'month', startDate, endDate } = req.query;
         
-        // Build filter object
         const filter = { status: { $in: ['Confirmed', 'Verified'] } };
         
         if (residence) {
@@ -124,14 +118,12 @@ exports.getIncomeByPeriod = async (req, res) => {
             filter.residence = residence;
         }
         
-        // Date filtering
         if (startDate || endDate) {
             filter.date = {};
             if (startDate) filter.date.$gte = new Date(startDate);
             if (endDate) filter.date.$lte = new Date(endDate);
         }
 
-        // Determine the time grouping based on period
         let timeGrouping;
         if (period === 'day') {
             timeGrouping = { $dateToString: { format: '%Y-%m-%d', date: '$date' } };
@@ -150,11 +142,10 @@ exports.getIncomeByPeriod = async (req, res) => {
                 year: { $year: '$date' },
                 quarter: { $ceil: { $divide: [{ $month: '$date' }, 3] } }
             };
-        } else { // year
+        } else {
             timeGrouping = { $year: '$date' };
         }
 
-        // Get income grouped by time period
         const incomeByPeriod = await Payment.aggregate([
             { $match: filter },
             { $group: { 
@@ -165,7 +156,6 @@ exports.getIncomeByPeriod = async (req, res) => {
             { $sort: { '_id': 1 } }
         ]);
 
-        // Format results based on period
         const formattedData = incomeByPeriod.map(item => {
             let label;
             
@@ -177,7 +167,7 @@ exports.getIncomeByPeriod = async (req, res) => {
                 label = `${item._id.year}-${item._id.month.toString().padStart(2, '0')}`;
             } else if (period === 'quarter') {
                 label = `${item._id.year}-Q${item._id.quarter}`;
-            } else { // year
+            } else {
                 label = item._id.toString();
             }
             
@@ -195,12 +185,10 @@ exports.getIncomeByPeriod = async (req, res) => {
     }
 };
 
-// Get expenses by period
 exports.getExpensesByPeriod = async (req, res) => {
     try {
         const { residence, period = 'month', startDate, endDate } = req.query;
         
-        // Build filter object
         const filter = { paymentStatus: 'Paid' };
         
         if (residence) {
@@ -210,14 +198,12 @@ exports.getExpensesByPeriod = async (req, res) => {
             filter.residence = residence;
         }
         
-        // Date filtering
         if (startDate || endDate) {
             filter.expenseDate = {};
             if (startDate) filter.expenseDate.$gte = new Date(startDate);
             if (endDate) filter.expenseDate.$lte = new Date(endDate);
         }
 
-        // Determine the time grouping based on period
         let timeGrouping;
         if (period === 'day') {
             timeGrouping = { $dateToString: { format: '%Y-%m-%d', date: '$expenseDate' } };
@@ -236,11 +222,10 @@ exports.getExpensesByPeriod = async (req, res) => {
                 year: { $year: '$expenseDate' },
                 quarter: { $ceil: { $divide: [{ $month: '$expenseDate' }, 3] } }
             };
-        } else { // year
+        } else {
             timeGrouping = { $year: '$expenseDate' };
         }
 
-        // Get expenses grouped by time period
         const expensesByPeriod = await Expense.aggregate([
             { $match: filter },
             { $group: { 
@@ -251,7 +236,6 @@ exports.getExpensesByPeriod = async (req, res) => {
             { $sort: { '_id': 1 } }
         ]);
 
-        // Format results based on period
         const formattedData = expensesByPeriod.map(item => {
             let label;
             
@@ -263,7 +247,7 @@ exports.getExpensesByPeriod = async (req, res) => {
                 label = `${item._id.year}-${item._id.month.toString().padStart(2, '0')}`;
             } else if (period === 'quarter') {
                 label = `${item._id.year}-Q${item._id.quarter}`;
-            } else { // year
+            } else {
                 label = item._id.toString();
             }
             
@@ -281,12 +265,10 @@ exports.getExpensesByPeriod = async (req, res) => {
     }
 };
 
-// Get expenses by category
 exports.getExpensesByCategory = async (req, res) => {
     try {
         const { residence, startDate, endDate } = req.query;
         
-        // Build filter object
         const filter = {};
         
         if (residence) {
@@ -296,14 +278,12 @@ exports.getExpensesByCategory = async (req, res) => {
             filter.residence = residence;
         }
         
-        // Date filtering
         if (startDate || endDate) {
             filter.expenseDate = {};
             if (startDate) filter.expenseDate.$gte = new Date(startDate);
             if (endDate) filter.expenseDate.$lte = new Date(endDate);
         }
 
-        // Get expenses by category
         const expensesByCategory = await Expense.aggregate([
             { $match: filter },
             { $group: { 
@@ -314,10 +294,8 @@ exports.getExpensesByCategory = async (req, res) => {
             { $sort: { 'totalAmount': -1 } }
         ]);
 
-        // Get total expenses
         const totalExpenses = expensesByCategory.reduce((sum, item) => sum + item.totalAmount, 0);
 
-        // Format results
         const formattedData = expensesByCategory.map(item => ({
             category: item._id,
             amount: item.totalAmount,
@@ -335,22 +313,18 @@ exports.getExpensesByCategory = async (req, res) => {
     }
 };
 
-// Get income by residence
 exports.getIncomeByResidence = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
         
-        // Build filter object
         const filter = { status: { $in: ['Confirmed', 'Verified'] } };
         
-        // Date filtering
         if (startDate || endDate) {
             filter.date = {};
             if (startDate) filter.date.$gte = new Date(startDate);
             if (endDate) filter.date.$lte = new Date(endDate);
         }
 
-        // Get income by residence
         const incomeByResidence = await Payment.aggregate([
             { $match: filter },
             { $group: { 
@@ -361,11 +335,9 @@ exports.getIncomeByResidence = async (req, res) => {
             { $sort: { 'totalAmount': -1 } }
         ]);
 
-        // Populate residence data
         const residenceIds = incomeByResidence.map(item => item._id);
         const residences = await Residence.find({ _id: { $in: residenceIds } }, 'name location');
         
-        // Create lookup for residence data
         const residenceLookup = {};
         residences.forEach(residence => {
             residenceLookup[residence._id.toString()] = {
@@ -374,10 +346,8 @@ exports.getIncomeByResidence = async (req, res) => {
             };
         });
 
-        // Get total income
         const totalIncome = incomeByResidence.reduce((sum, item) => sum + item.totalAmount, 0);
 
-        // Format results
         const formattedData = incomeByResidence.map(item => {
             const residenceId = item._id.toString();
             const residenceData = residenceLookup[residenceId] || { name: 'Unknown', location: 'Unknown' };
@@ -399,5 +369,114 @@ exports.getIncomeByResidence = async (req, res) => {
     } catch (error) {
         console.error('Error generating income by residence:', error);
         res.status(500).json({ error: 'Failed to generate income by residence data' });
+    }
+};
+
+/**
+ * Single endpoint for dashboard badge counts — replaces 3+ separate pending-count calls.
+ * GET /api/finance/dashboard/badges
+ */
+exports.getDashboardBadges = async (req, res) => {
+    try {
+        const month = parseInt(req.query.month, 10) || new Date().getMonth() + 1;
+        const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+        const cacheKey = `finance-dashboard-badges-${month}-${year}`;
+
+        const data = await cacheService.getOrSet(cacheKey, BADGE_CACHE_TTL, async () => {
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+            const [requestsFacet, monthlyFacet, applicationsPending] = await Promise.all([
+                Request.aggregate([
+                    {
+                        $facet: {
+                            byType: [
+                                { $match: { status: 'pending' } },
+                                { $group: { _id: '$type', count: { $sum: 1 } } },
+                            ],
+                            pendingAdmin: [
+                                { $match: { status: 'pending', 'approval.admin.approved': { $ne: true } } },
+                                { $count: 'count' },
+                            ],
+                            pendingFinance: [
+                                {
+                                    $match: {
+                                        status: 'pending',
+                                        'approval.admin.approved': true,
+                                        'approval.finance.approved': { $ne: true },
+                                    },
+                                },
+                                { $count: 'count' },
+                            ],
+                        },
+                    },
+                ]),
+                MonthlyRequest.aggregate([
+                    {
+                        $facet: {
+                            pendingMonthly: [
+                                { $match: { status: 'pending', isTemplate: false } },
+                                { $count: 'count' },
+                            ],
+                            pendingTemplates: [
+                                { $match: { status: 'pending', isTemplate: true, month, year } },
+                                { $count: 'count' },
+                            ],
+                            requestsWithChanges: [
+                                {
+                                    $match: {
+                                        status: 'pending',
+                                        isTemplate: false,
+                                        'requestHistory.date': { $gte: thirtyDaysAgo },
+                                    },
+                                },
+                                { $count: 'count' },
+                            ],
+                        },
+                    },
+                ]),
+                Application.countDocuments({ status: 'pending' }),
+            ]);
+
+            const reqResult = requestsFacet[0] || {};
+            const typeMap = {};
+            (reqResult.byType || []).forEach((item) => {
+                typeMap[item._id] = item.count;
+            });
+
+            const monResult = monthlyFacet[0] || {};
+
+            return {
+                requests: {
+                    pendingMaintenanceRequests: typeMap.maintenance || 0,
+                    pendingOperationalRequests: typeMap.operational || 0,
+                    pendingFinancialRequests: typeMap.financial || 0,
+                    pendingAdminApproval: reqResult.pendingAdmin?.[0]?.count || 0,
+                    pendingFinanceApproval: reqResult.pendingFinance?.[0]?.count || 0,
+                    total:
+                        (typeMap.maintenance || 0) +
+                        (typeMap.operational || 0) +
+                        (typeMap.financial || 0),
+                },
+                monthlyRequests: {
+                    pendingMonthlyRequests: monResult.pendingMonthly?.[0]?.count || 0,
+                    pendingTemplateApprovals: monResult.pendingTemplates?.[0]?.count || 0,
+                    requestsWithChanges: monResult.requestsWithChanges?.[0]?.count || 0,
+                    total:
+                        (monResult.pendingMonthly?.[0]?.count || 0) +
+                        (monResult.pendingTemplates?.[0]?.count || 0),
+                },
+                applications: {
+                    pending: applicationsPending,
+                },
+                month,
+                year,
+            };
+        });
+
+        res.set('Cache-Control', 'private, max-age=60');
+        res.status(200).json({ success: true, data });
+    } catch (error) {
+        console.error('Error getting dashboard badges:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };

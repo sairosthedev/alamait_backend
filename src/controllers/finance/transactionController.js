@@ -2511,7 +2511,7 @@ class TransactionController {
             }
 
             // Validate payment type
-            const validPaymentTypes = ['rent', 'admin_fee', 'deposit', 'utilities', 'other'];
+            const validPaymentTypes = ['rent', 'admin_fee', 'deposit', 'levies', 'utilities', 'other'];
             if (!validPaymentTypes.includes(paymentType)) {
                 return res.status(400).json({
                     success: false,
@@ -2833,6 +2833,28 @@ class TransactionController {
                         });
                         await incomeAccount.save();
                         console.log(`✅ Created tenant deposit account: ${incomeAccount.code}`);
+                    }
+                    break;
+
+                case 'levies':
+                    incomeAccount = await Account.findOne({
+                        $or: [
+                            { code: '4010', type: 'Income' },
+                            { name: /levies income/i, type: 'Income' },
+                            { name: /levies/i, type: 'Income' }
+                        ]
+                    });
+                    if (!incomeAccount) {
+                        incomeAccount = new Account({
+                            code: '4010',
+                            name: 'Levies Income',
+                            type: 'Income',
+                            category: 'Operating Revenue',
+                            description: 'Body corporate / estate levies charged to tenants',
+                            isActive: true
+                        });
+                        await incomeAccount.save();
+                        console.log(`✅ Created levies income account: ${incomeAccount.code}`);
                     }
                     break;
                     
@@ -3383,12 +3405,12 @@ class TransactionController {
             
             // 🆕 CRITICAL: Filter to only reverse ACCRUAL entries, NOT advance payment entries
             // Advance payments use account 2200 (Deferred Income) and should NOT be reversed
-            // Only reverse: AR entries (1100-*), Income entries (4001, 4002), and Deposit entries (2020)
+            // Only reverse: AR entries (1100-*), Income entries (4001, 4002, 4010), and Deposit entries (2020)
             // DO NOT reverse: Deferred Income entries (2200) - these are from advance payments
             const accrualEntries = originalTransaction.entries.filter(entry => {
                 const accountCode = entry.accountCode;
                 const isAR = accountCode && accountCode.startsWith('1100');
-                const isIncome = accountCode === '4001' || accountCode === '4002'; // Rent, Admin Fee
+                const isIncome = accountCode === '4001' || accountCode === '4002' || accountCode === '4010'; // Rent, Admin Fee, Levies
                 const isDeposit = accountCode === '2020'; // Security Deposit
                 const isDeferredIncome = accountCode === '2200'; // Advance Payment Liability
                 

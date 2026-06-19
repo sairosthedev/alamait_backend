@@ -59,13 +59,14 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
     date: { $gte: new Date(rental.startDate), $lte: new Date(rental.endDate) }
   });
 
-  let rentPaid = 0, adminFeePaid = 0, depositPaid = 0, utilitiesPaid = 0, maintenancePaid = 0;
+  let rentPaid = 0, adminFeePaid = 0, depositPaid = 0, utilitiesPaid = 0, maintenancePaid = 0, leviesPaid = 0;
   payments.forEach(p => {
     rentPaid += p.rentAmount || 0;
     adminFeePaid += p.adminFee || 0;
     depositPaid += p.deposit || 0;
     utilitiesPaid += p.utilities || 0;
     maintenancePaid += p.maintenance || 0;
+    leviesPaid += p.levies || 0;
   });
 
   // 7. Calculate what is due this month using configurable system
@@ -83,16 +84,17 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
   );
   
   const rentDue = room.price;
-  let adminFeeDue = 0, depositDue = 0, utilitiesDue = 0, maintenanceDue = 0;
+  let adminFeeDue = 0, depositDue = 0, utilitiesDue = 0, maintenanceDue = 0, leviesDue = 0;
   
   // Calculate remaining amounts after payments
   adminFeeDue = Math.max(paymentBreakdown.amounts.adminFee - adminFeePaid, 0);
   depositDue = Math.max(paymentBreakdown.amounts.deposit - depositPaid, 0);
   utilitiesDue = Math.max(paymentBreakdown.amounts.utilities - utilitiesPaid, 0);
   maintenanceDue = Math.max(paymentBreakdown.amounts.maintenance - maintenancePaid, 0);
+  leviesDue = Math.max((paymentBreakdown.amounts.levies || 0) - leviesPaid, 0);
 
   // 8. Total due
-  const totalDue = rentDue + adminFeeDue + depositDue + utilitiesDue + maintenanceDue;
+  const totalDue = rentDue + adminFeeDue + depositDue + utilitiesDue + maintenanceDue + leviesDue;
 
   // 9. Due date and overdue logic
   const dueDate = getDueDate(currentDate);
@@ -106,6 +108,7 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
     depositDue,
     utilitiesDue,
     maintenanceDue,
+    leviesDue,
     totalDue,
     dueDate,
     isOverdue,
@@ -116,7 +119,8 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
       depositDue,
       utilitiesDue,
       maintenanceDue,
-      alreadyPaid: { rentPaid, adminFeePaid, depositPaid, utilitiesPaid, maintenancePaid },
+      leviesDue,
+      alreadyPaid: { rentPaid, adminFeePaid, depositPaid, utilitiesPaid, maintenancePaid, leviesPaid },
       stayMonths,
       room: room.name || room.roomNumber,
       residence: residence.name,

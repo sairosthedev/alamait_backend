@@ -285,6 +285,11 @@ const debtorSchema = new mongoose.Schema({
       default: 0,
       min: 0
     },
+    levies: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
     totalOwed: {
       type: Number,
       default: 0,
@@ -372,6 +377,11 @@ const debtorSchema = new mongoose.Schema({
         default: 0,
         min: 0
       },
+      levies: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
       utilities: {
         type: Number,
         default: 0,
@@ -441,7 +451,7 @@ const debtorSchema = new mongoose.Schema({
       },
       paymentType: {
         type: String,
-        enum: ['rent', 'admin', 'deposit'],
+        enum: ['rent', 'admin', 'deposit', 'levies'],
         required: true
       },
       paymentDate: {
@@ -527,6 +537,11 @@ const debtorSchema = new mongoose.Schema({
         default: 0,
         min: 0
       },
+      levies: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
       utilities: {
         type: Number,
         default: 0,
@@ -563,6 +578,11 @@ const debtorSchema = new mongoose.Schema({
         default: 0,
         min: 0
       },
+      levies: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
       utilities: {
         type: Number,
         default: 0,
@@ -595,6 +615,11 @@ const debtorSchema = new mongoose.Schema({
         min: 0
       },
       deposit: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      levies: {
         type: Number,
         default: 0,
         min: 0
@@ -1189,6 +1214,7 @@ debtorSchema.methods.addPayment = async function(paymentData) {
         rent: expectedRent,
         admin: expectedAdmin,
         deposit: expectedDeposit,
+        levies: 0,
         utilities: 0,
         other: 0
       },
@@ -1197,6 +1223,7 @@ debtorSchema.methods.addPayment = async function(paymentData) {
         rent: 0,
         admin: 0,
         deposit: 0,
+        levies: 0,
         utilities: 0,
         other: 0
       },
@@ -1205,6 +1232,7 @@ debtorSchema.methods.addPayment = async function(paymentData) {
         rent: expectedRent,
         admin: expectedAdmin,
         deposit: expectedDeposit,
+        levies: 0,
         utilities: 0,
         other: 0
       },
@@ -1270,16 +1298,19 @@ debtorSchema.methods.addPayment = async function(paymentData) {
   monthlyPayment.paidComponents.rent += components.rent || 0;
   monthlyPayment.paidComponents.admin += components.adminFee || 0;
   monthlyPayment.paidComponents.deposit += components.deposit || 0;
+  monthlyPayment.paidComponents.levies += components.levies || 0;
   
   // Calculate outstanding amounts for each component
   monthlyPayment.outstandingComponents.rent = Math.max(0, monthlyPayment.expectedComponents.rent - monthlyPayment.paidComponents.rent);
   monthlyPayment.outstandingComponents.admin = Math.max(0, monthlyPayment.expectedComponents.admin - monthlyPayment.paidComponents.admin);
   monthlyPayment.outstandingComponents.deposit = Math.max(0, monthlyPayment.expectedComponents.deposit - monthlyPayment.paidComponents.deposit);
+  monthlyPayment.outstandingComponents.levies = Math.max(0, (monthlyPayment.expectedComponents.levies || 0) - (monthlyPayment.paidComponents.levies || 0));
   
   // Total outstanding amount
   monthlyPayment.outstandingAmount = monthlyPayment.outstandingComponents.rent + 
                                    monthlyPayment.outstandingComponents.admin + 
-                                   monthlyPayment.outstandingComponents.deposit;
+                                   monthlyPayment.outstandingComponents.deposit +
+                                   (monthlyPayment.outstandingComponents.levies || 0);
   
   monthlyPayment.paymentCount += 1;
   monthlyPayment.paymentIds.push(paymentId);
@@ -1289,7 +1320,8 @@ debtorSchema.methods.addPayment = async function(paymentData) {
   // Update status based on all components
   const totalExpected = monthlyPayment.expectedComponents.rent + 
                         monthlyPayment.expectedComponents.admin + 
-                        monthlyPayment.expectedComponents.deposit;
+                        monthlyPayment.expectedComponents.deposit +
+                        (monthlyPayment.expectedComponents.levies || 0);
   
   if (monthlyPayment.paidAmount >= totalExpected) {
     monthlyPayment.status = 'paid';
@@ -1390,6 +1422,7 @@ debtorSchema.methods.getMonthlyPaymentSummary = function(month) {
       rent: this.billingPeriod?.amount?.monthly || 0,
       admin: 0, // Admin fees are conditional, not monthly
       deposit: 0, // Deposits are typically one-time
+      levies: 0,
       utilities: 0,
       other: 0
     },
@@ -1398,6 +1431,7 @@ debtorSchema.methods.getMonthlyPaymentSummary = function(month) {
       rent: 0,
       admin: 0,
       deposit: 0,
+      levies: 0,
       utilities: 0,
       other: 0
     },
@@ -1406,6 +1440,7 @@ debtorSchema.methods.getMonthlyPaymentSummary = function(month) {
       rent: this.billingPeriod?.amount?.monthly || 0,
       admin: 0, // Admin fees are conditional, not monthly
       deposit: 0, // Deposits are typically one-time
+      levies: 0,
       utilities: 0,
       other: 0
     },

@@ -536,11 +536,15 @@ class DebtorLedgerService {
                     category = 'admin_fee';
                 } else if (transaction.metadata?.securityDeposit && amount === transaction.metadata.securityDeposit) {
                     category = 'deposit';
+                } else if (transaction.metadata?.levies && amount === transaction.metadata.levies) {
+                    category = 'levies';
                 }
             } else if (transaction.metadata?.type === 'monthly_rent_accrual') {
-                category = 'rent';
+                category = transaction.metadata?.levies && amount === transaction.metadata.levies ? 'levies' : 'rent';
             } else if (transaction.description?.toLowerCase().includes('admin')) {
                 category = 'admin_fee';
+            } else if (transaction.description?.toLowerCase().includes('levies') || transaction.description?.toLowerCase().includes('levy')) {
+                category = 'levies';
             } else if (transaction.description?.toLowerCase().includes('deposit')) {
                 category = 'deposit';
             } else if (transaction.description?.toLowerCase().includes('payment')) {

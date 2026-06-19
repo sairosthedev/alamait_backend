@@ -178,29 +178,46 @@ exports.createResidence = async (req, res) => {
 // Get all residences
 exports.getAllResidences = async (req, res) => {
     try {
-        const residences = await Residence.find()
-            .populate('manager', 'firstName lastName email')
-            .sort({ createdAt: -1 });
+        const cacheService = require('../../services/cacheService');
+        const cacheKey = 'admin-residences-v2';
 
-        // For each residence, for each room, add approvedCount
-        const residencesWithCounts = await Promise.all(residences.map(async (residence) => {
-            const roomsWithCounts = await Promise.all((residence.rooms || []).map(async (room) => {
-                const approvedCount = await Application.countDocuments({
-                    status: 'approved',
-                    allocatedRoom: room.roomNumber,
-                    residence: residence._id
-                });
-                return {
-                    ...room.toObject(),
-                    approvedCount
-                };
+        const residencesWithCounts = await cacheService.getOrSet(cacheKey, 300, async () => {
+            const [residences, approvedCounts] = await Promise.all([
+                Residence.find()
+                    .populate('manager', 'firstName lastName email')
+                    .sort({ createdAt: -1 })
+                    .lean(),
+                Application.aggregate([
+                    {
+                        $match: {
+                            status: 'approved',
+                            allocatedRoom: { $exists: true, $nin: [null, ''] },
+                        },
+                    },
+                    {
+                        $group: {
+                            _id: { residence: '$residence', room: '$allocatedRoom' },
+                            count: { $sum: 1 },
+                        },
+                    },
+                ]),
+            ]);
+
+            const countMap = new Map();
+            approvedCounts.forEach(({ _id, count }) => {
+                countMap.set(`${_id.residence}:${_id.room}`, count);
+            });
+
+            return residences.map((residence) => ({
+                ...residence,
+                rooms: (residence.rooms || []).map((room) => ({
+                    ...room,
+                    approvedCount: countMap.get(`${residence._id}:${room.roomNumber}`) || 0,
+                })),
             }));
-            return {
-                ...residence.toObject(),
-                rooms: roomsWithCounts
-            };
-        }));
+        });
 
+        res.set('Cache-Control', 'private, max-age=120');
         res.status(200).json({
             success: true,
             count: residencesWithCounts.length,

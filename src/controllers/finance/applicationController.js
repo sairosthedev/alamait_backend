@@ -9,11 +9,13 @@ exports.getAllApplications = async (req, res) => {
         const { 
             status, 
             type,
+            page = 1,
+            limit = 20,
+            includeRooms = 'false',
             sortBy = 'applicationDate',
             sortOrder = 'desc'
         } = req.query;
 
-        // Build filter object
         const filter = {};
         
         if (status) {
@@ -24,48 +26,61 @@ exports.getAllApplications = async (req, res) => {
             filter.requestType = type;
         }
 
-        // Debug log
-        console.log('Finance: Applications filter:', filter);
-
-        // Sorting
         const sortOptions = {};
         sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
-        // Get all applications (no pagination for now, but with projection for performance)
-        const applications = await Application.find(filter)
-            .select('firstName lastName email phone requestType status paymentStatus applicationDate startDate endDate preferredRoom alternateRooms currentRoom requestedRoom reason allocatedRoom waitlistedRoom roomOccupancy applicationCode residence')
-            .sort(sortOptions)
-            .lean();
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+        const skip = (pageNum - 1) * limitNum;
 
-        // Get all residences to check room status (lean + projection to reduce payload)
-        const residences = await Residence.find({}, 'name rooms address manager')
-            .lean();
-        
-        // Create a map of room statuses
-        const roomStatusMap = {};
-        residences.forEach(residence => {
-            residence.rooms.forEach(room => {
-                roomStatusMap[room.roomNumber] = {
-                    residence: residence.name,
-                    residenceId: residence._id,
-                    status: room.status,
-                    currentOccupancy: room.currentOccupancy,
-                    capacity: room.capacity,
-                    price: room.price,
-                    type: room.type
-                };
+        const [total, applications] = await Promise.all([
+            Application.countDocuments(filter),
+            Application.find(filter)
+                .select('firstName lastName email phone requestType status paymentStatus applicationDate startDate endDate preferredRoom alternateRooms currentRoom requestedRoom reason allocatedRoom waitlistedRoom roomOccupancy applicationCode residence')
+                .sort(sortOptions)
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        let roomStatusMap = {};
+        let residencesSummary = [];
+
+        if (includeRooms === 'true') {
+            const residences = await Residence.find({}, 'name rooms address manager').lean();
+            
+            residences.forEach(residence => {
+                residence.rooms.forEach(room => {
+                    roomStatusMap[room.roomNumber] = {
+                        residence: residence.name,
+                        residenceId: residence._id,
+                        status: room.status,
+                        currentOccupancy: room.currentOccupancy,
+                        capacity: room.capacity,
+                        price: room.price,
+                        type: room.type
+                    };
+                });
             });
-        });
 
-        // Transform applications to match admin format
+            residencesSummary = residences.map(residence => ({
+                id: residence._id,
+                name: residence.name,
+                address: residence.address,
+                manager: residence.manager,
+                totalRooms: residence.rooms.length,
+                availableRooms: residence.rooms.filter(room => room.status === 'available').length,
+                occupiedRooms: residence.rooms.filter(room => room.status === 'occupied').length,
+                reservedRooms: residence.rooms.filter(room => room.status === 'reserved').length
+            }));
+        }
+
         const transformedApplications = applications.map(app => {
-            // Get room details for current and requested rooms
             const currentRoomDetails = app.currentRoom ? roomStatusMap[app.currentRoom] : null;
             const requestedRoomDetails = app.requestedRoom ? roomStatusMap[app.requestedRoom] : null;
             const allocatedRoomDetails = app.allocatedRoom ? roomStatusMap[app.allocatedRoom] : null;
             const waitlistedRoomDetails = app.waitlistedRoom ? roomStatusMap[app.waitlistedRoom] : null;
             
-            // Calculate price difference for upgrades
             let priceDifference = null;
             if (app.requestType === 'upgrade' && currentRoomDetails && requestedRoomDetails) {
                 priceDifference = requestedRoomDetails.price - currentRoomDetails.price;
@@ -101,26 +116,25 @@ exports.getAllApplications = async (req, res) => {
             };
         });
 
-        // Return response in the format expected by frontend (similar to admin endpoint)
+        res.set('Cache-Control', 'private, max-age=30');
         res.json({
             success: true,
-            count: transformedApplications.length, // Total count of all applications matching the filter
+            count: total,
             applications: transformedApplications,
-            rooms: Object.entries(roomStatusMap).map(([roomNumber, details]) => ({
-                name: roomNumber,
-                ...details,
-                occupancyDisplay: `${details.currentOccupancy}/${details.capacity}`
-            })),
-            residences: residences.map(residence => ({
-                id: residence._id,
-                name: residence.name,
-                address: residence.address,
-                manager: residence.manager,
-                totalRooms: residence.rooms.length,
-                availableRooms: residence.rooms.filter(room => room.status === 'available').length,
-                occupiedRooms: residence.rooms.filter(room => room.status === 'occupied').length,
-                reservedRooms: residence.rooms.filter(room => room.status === 'reserved').length
-            }))
+            pagination: {
+                currentPage: pageNum,
+                totalPages: Math.ceil(total / limitNum),
+                totalItems: total,
+                itemsPerPage: limitNum
+            },
+            ...(includeRooms === 'true' && {
+                rooms: Object.entries(roomStatusMap).map(([roomNumber, details]) => ({
+                    name: roomNumber,
+                    ...details,
+                    occupancyDisplay: `${details.currentOccupancy}/${details.capacity}`
+                })),
+                residences: residencesSummary
+            })
         });
     } catch (error) {
         console.error('Finance: Error in getAllApplications:', error);

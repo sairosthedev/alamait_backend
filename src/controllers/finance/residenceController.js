@@ -17,6 +17,7 @@ exports.getAllResidences = async (req, res) => {
             return residences;
         });
         
+        res.set('Cache-Control', 'private, max-age=120');
         res.json(cached);
     } catch (error) {
         console.error('Finance: Error in getAllResidences:', error);

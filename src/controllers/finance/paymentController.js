@@ -884,7 +884,7 @@ exports.processPayment = async (req, res) => {
         console.log('🏗️ Creating payment directly in finance endpoint...');
         
         const Payment = require('../../models/Payment');
-        const { paymentId: requestedPaymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit } = req.body;
+        const { paymentId: requestedPaymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit, levies } = req.body;
         
         // 🆕 DUPLICATE PREVENTION: Check if paymentId already exists
         let finalPaymentId = requestedPaymentId;
@@ -936,6 +936,7 @@ exports.processPayment = async (req, res) => {
             rentAmount: rentAmount || 0,
             adminFee: adminFee || 0,
             deposit: deposit || 0,
+            levies: levies || 0,
             createdBy: req.user._id
         });
         
@@ -1009,16 +1010,27 @@ exports.processPayment = async (req, res) => {
             
             const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
             
-            // Normalize payments so sum(payments[]) matches totalAmount.
-            // If it doesn't, allocate the remainder as rent (common for lump-sum payments entered without a full breakdown).
-            let normalizedPayments = (payment.payments || []).map((p) => ({
-                ...p,
-                date: p?.date || payment.date
-            }));
+            // Normalize components — never spread Mongoose subdocs (drops `type` field)
+            let normalizedPayments = EnhancedPaymentAllocationService.normalizePaymentComponents(
+                payment.payments,
+                {
+                    totalAmount: payment.totalAmount,
+                    rentAmount: payment.rentAmount,
+                    adminFee: payment.adminFee,
+                    deposit: payment.deposit,
+                    levies: payment.levies,
+                    date: payment.date,
+                }
+            );
             const paymentsSum = normalizedPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
             const totalAmount = Number(payment.totalAmount) || 0;
+            const fieldsSum =
+                (Number(payment.rentAmount) || 0) +
+                (Number(payment.adminFee) || 0) +
+                (Number(payment.deposit) || 0) +
+                (Number(payment.levies) || 0);
             const unaccounted = Math.max(0, totalAmount - paymentsSum);
-            if (unaccounted > 0) {
+            if (unaccounted > 0 && fieldsSum < totalAmount - 0.01) {
                 normalizedPayments = [
                     ...normalizedPayments,
                     { type: 'rent', amount: unaccounted, date: payment.date }
@@ -1036,6 +1048,7 @@ exports.processPayment = async (req, res) => {
                 rentAmount: payment.rentAmount || 0,
                 adminFee: payment.adminFee || 0,
                 deposit: payment.deposit || 0,
+                levies: payment.levies || 0,
                 method: payment.method,
                 date: payment.date,
                 // 🆕 Pass through AR account so advance creation can safely use 1100-{debtorId}

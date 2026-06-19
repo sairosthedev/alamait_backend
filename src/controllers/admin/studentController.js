@@ -1177,7 +1177,8 @@ exports.manualAddStudent = async (req, res) => {
             endDate,
             monthlyRent,
             securityDeposit,
-            adminFee
+            adminFee,
+            levies
         } = req.body;
 
         let existingUser = await User.findOne({ email });
@@ -1336,17 +1337,7 @@ exports.manualAddStudent = async (req, res) => {
             });
         }
         
-        // Set default values for optional financial fields
-        const finalMonthlyRent = monthlyRent || 150; // Default monthly rent
-        const finalSecurityDeposit = securityDeposit || finalMonthlyRent; // Default to 1 month's rent
-        const finalAdminFee = adminFee || 0; // Default admin fee
-        
-        console.log('💰 Financial details (with defaults):');
-        console.log(`   Monthly Rent: $${finalMonthlyRent} ${monthlyRent ? '(provided)' : '(default)'}`);
-        console.log(`   Security Deposit: $${finalSecurityDeposit} ${securityDeposit ? '(provided)' : '(default)'}`);
-        console.log(`   Admin Fee: $${finalAdminFee} ${adminFee ? '(provided)' : '(default)'}`);
-        
-        // Parse and validate dates
+        // Parse and validate dates first (needed for residence payment preview)
         let parsedStartDate, parsedEndDate;
         try {
             parsedStartDate = new Date(startDate);
@@ -1364,6 +1355,46 @@ exports.manualAddStudent = async (req, res) => {
         } catch (dateError) {
             return res.status(400).json({ error: 'Date parsing error', details: dateError.message });
         }
+
+        // Set default values for optional financial fields (from body or residence config)
+        const finalMonthlyRent = monthlyRent || room.price || 150;
+        const finalSecurityDeposit = securityDeposit || finalMonthlyRent;
+        let resolvedAdminFee = adminFee ?? null;
+        let finalLevies = levies ?? null;
+
+        try {
+            const ResidencePaymentService = require('../../services/residencePaymentService');
+            const leaseStartMonth = parsedStartDate.getMonth() + 1;
+            const leaseStartYear = parsedStartDate.getFullYear();
+            const paymentPreview = await ResidencePaymentService.calculatePaymentAmounts(
+                residenceId,
+                { price: finalMonthlyRent },
+                parsedStartDate,
+                parsedEndDate,
+                leaseStartMonth,
+                leaseStartYear
+            );
+            if (resolvedAdminFee === null) {
+                resolvedAdminFee = paymentPreview.amounts.adminFee || 0;
+            }
+            if (finalLevies === null) {
+                finalLevies = paymentPreview.amounts.levies || 0;
+            }
+        } catch (previewError) {
+            console.warn('Could not calculate residence payment preview:', previewError.message);
+            resolvedAdminFee = resolvedAdminFee ?? 0;
+            finalLevies = finalLevies ?? 0;
+        }
+        resolvedAdminFee = resolvedAdminFee ?? 0;
+        finalLevies = finalLevies ?? 0;
+        
+        console.log('💰 Financial details (with defaults):');
+        console.log(`   Monthly Rent: $${finalMonthlyRent} ${monthlyRent ? '(provided)' : '(default)'}`);
+        console.log(`   Security Deposit: $${finalSecurityDeposit} ${securityDeposit ? '(provided)' : '(default)'}`);
+        console.log(`   Admin Fee: $${resolvedAdminFee} ${adminFee != null ? '(provided)' : '(from residence config)'}`);
+        console.log(`   Levies: $${finalLevies} ${levies != null ? '(provided)' : '(from residence config)'}`);
+        
+        // (dates already parsed above)
 
         if (existingUser) {
             const conflictingApp = await findOverlappingApprovedApplication(
@@ -1690,9 +1721,9 @@ exports.manualAddStudent = async (req, res) => {
             totalAmount: monthlyRent,
             paymentStatus: 'paid',
             status: 'confirmed',
-            paidAmount: monthlyRent + (adminFee || 0) + (securityDeposit || 0),
+            paidAmount: finalMonthlyRent + resolvedAdminFee + finalSecurityDeposit + finalLevies,
             payments: [{
-                amount: monthlyRent + (adminFee || 0) + (securityDeposit || 0),
+                amount: finalMonthlyRent + resolvedAdminFee + finalSecurityDeposit + finalLevies,
                 date: new Date(),
                 method: 'admin_manual',
                 status: 'completed',
@@ -1805,19 +1836,23 @@ exports.manualAddStudent = async (req, res) => {
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                             <div>
                                 <strong style="color: #495057;">🏠 Monthly Rent:</strong><br>
-                                <span style="color: #333; font-size: 14px;">$${monthlyRent}</span>
+                                <span style="color: #333; font-size: 14px;">$${finalMonthlyRent}</span>
                             </div>
                             <div>
                                 <strong style="color: #495057;">📋 Admin Fee:</strong><br>
-                                <span style="color: #333; font-size: 14px;">$${adminFee || 0}</span>
+                                <span style="color: #333; font-size: 14px;">$${resolvedAdminFee}</span>
                             </div>
                             <div>
                                 <strong style="color: #495057;">🔒 Security Deposit:</strong><br>
-                                <span style="color: #333; font-size: 14px;">$${securityDeposit || 0}</span>
+                                <span style="color: #333; font-size: 14px;">$${finalSecurityDeposit}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">🏘️ Levies:</strong><br>
+                                <span style="color: #333; font-size: 14px;">$${finalLevies}</span>
                             </div>
                             <div>
                                 <strong style="color: #495057;">💵 Total Initial Payment:</strong><br>
-                                <span style="color: #28a745; font-size: 16px; font-weight: 600;">$${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}</span>
+                                <span style="color: #28a745; font-size: 16px; font-weight: 600;">$${finalMonthlyRent + resolvedAdminFee + finalSecurityDeposit + finalLevies}</span>
                             </div>
                         </div>
                     </div>

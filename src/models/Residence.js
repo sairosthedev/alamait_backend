@@ -263,6 +263,26 @@ const residenceSchema = new mongoose.Schema({
                 default: 'every_month'
             }
         },
+        levies: {
+            enabled: {
+                type: Boolean,
+                default: false
+            },
+            amount: {
+                type: Number,
+                default: 0,
+                min: 0
+            },
+            description: {
+                type: String,
+                default: 'Levies'
+            },
+            application: {
+                type: String,
+                enum: ['every_month', 'first_month', 'last_month', 'upfront'],
+                default: 'every_month'
+            }
+        },
         // Rent Proration configuration
         rentProration: {
             enabled: {

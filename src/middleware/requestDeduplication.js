@@ -12,14 +12,18 @@
 
 const pendingRequests = new Map();
 
+const crypto = require('crypto');
+
 /**
  * Generate a unique key for a request
  */
 function getRequestKey(req) {
-    // Use method + path + query params + user ID (if authenticated)
-    const user = req.user?._id || req.user?.id || 'anonymous';
+    const authToken = req.headers.authorization || '';
+    const authScope = authToken
+        ? crypto.createHash('sha256').update(authToken).digest('hex').slice(0, 16)
+        : 'anonymous';
     const queryString = JSON.stringify(req.query);
-    return `${req.method}:${req.path}:${queryString}:${user}`;
+    return `${req.method}:${req.path}:${queryString}:${authScope}`;
 }
 
 /**
