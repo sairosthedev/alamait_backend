@@ -4,14 +4,14 @@ const { auth, checkRole } = require('../../middleware/auth');
 const { registerPaymentRoutes } = require('../shared/registerPaymentRoutes');
 
 router.use(auth);
-router.use(checkRole('admin'));
+router.use(checkRole('ceo'));
 
 registerPaymentRoutes(router, {
-    readRoles: ['admin'],
-    createRoles: ['admin'],
-    updateRoles: ['admin'],
-    deleteRoles: ['admin'],
-    totalIncomeRoles: ['admin']
+    readRoles: ['ceo'],
+    createRoles: ['ceo'],
+    updateRoles: ['ceo'],
+    deleteRoles: ['ceo'],
+    totalIncomeRoles: ['ceo']
 });
 
 module.exports = router;

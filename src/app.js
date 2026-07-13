@@ -58,6 +58,7 @@ const adminDeletionLogRoutes = require('./routes/admin/deletionLogRoutes');
 
 // CEO routes
 const ceoRoutes = require('./routes/ceo/index');
+const ceoPaymentRoutes = require('./routes/ceo/paymentRoutes');
 const ceoReportUploadRoutes = require('./routes/ceo/reportUploadRoutes');
 const ceoDeletionLogRoutes = require('./routes/ceo/deletionLogRoutes');
 
@@ -428,6 +429,7 @@ app.use('/api/admin/reports', adminReportUploadRoutes);
 app.use('/api/admin/deletions', adminDeletionLogRoutes);
 
 // CEO routes
+app.use('/api/ceo/payments', ceoPaymentRoutes);
 app.use('/api/ceo', ceoRoutes);
 
 // CEO report upload routes
