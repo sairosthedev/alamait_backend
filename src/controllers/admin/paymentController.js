@@ -15,6 +15,7 @@ const Account = require('../../models/Account');
 const Debtor = require('../../models/Debtor');
 const Receipt = require('../../models/Receipt');
 const { sendEmail } = require('../../utils/email');
+const { invalidateFinancialReports } = require('../../utils/financialCache');
 
 // Configure multer for S3 file uploads
 const upload = multer({
@@ -1882,6 +1883,7 @@ const createPayment = async (req, res) => {
             console.warn(`   Post-save hook will create fallback transaction if smartFIFOAllocation didn't create one`);
         }
 
+        invalidateFinancialReports();
         res.status(201).json(response);
     } catch (error) {
         console.error('Error creating payment:', error);

@@ -56,12 +56,14 @@ exports.getAllBalanceSheets = async (req, res) => {
         
         // Get balance sheets with pagination
         const balanceSheets = await BalanceSheet.find(filter)
+            .select('asOf status residence generatedBy approvedBy createdAt updatedAt')
             .sort(sortOptions)
             .skip(skip)
             .limit(parseInt(limit))
             .populate('residence', 'name')
             .populate('generatedBy', 'firstName lastName email')
-            .populate('approvedBy', 'firstName lastName email');
+            .populate('approvedBy', 'firstName lastName email')
+            .lean();
 
         // Get total count for pagination
         const totalBalanceSheets = await BalanceSheet.countDocuments(filter);

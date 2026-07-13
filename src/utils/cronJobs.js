@@ -3,6 +3,7 @@ const { handleExpiredApplications, sendExpiryWarnings } = require('./application
 const emailOutboxService = require('../services/emailOutboxService');
 const TenantAccrualCheckService = require('../services/tenantAccrualCheckService');
 const AccrualIntegrityService = require('../services/accrualIntegrityService');
+const FinancialReportPrecomputeService = require('../services/financialReportPrecomputeService');
 
 // Schedule tasks to be run on the server
 const initCronJobs = () => {
@@ -40,12 +41,44 @@ const initCronJobs = () => {
         timezone: "Africa/Harare"
     });
 
+    // Pre-warm heavy financial report caches every hour
+    cron.schedule('15 * * * *', async () => {
+        try {
+            await FinancialReportPrecomputeService.warmCurrentReports();
+        } catch (error) {
+            console.error('❌ Error in financial report pre-compute job:', error);
+        }
+    }, {
+        scheduled: true,
+        timezone: 'Africa/Harare'
+    });
+
+    // Full nightly warm-up for dashboard and finance pages
+    cron.schedule('30 1 * * *', async () => {
+        try {
+            console.log('📦 Running nightly financial report pre-compute...');
+            await FinancialReportPrecomputeService.warmCurrentReports();
+        } catch (error) {
+            console.error('❌ Error in nightly financial report pre-compute:', error);
+        }
+    }, {
+        scheduled: true,
+        timezone: 'Africa/Harare'
+    });
+
     // Start email outbox retries every 60s in production
     try {
         emailOutboxService.start();
     } catch (err) {
         console.error('Failed to start EmailOutboxService:', err);
     }
+
+    // Warm caches shortly after startup
+    setTimeout(() => {
+        FinancialReportPrecomputeService.warmCurrentReports().catch((error) => {
+            console.error('❌ Error warming financial report cache on startup:', error);
+        });
+    }, 15000);
 };
 
 module.exports = {

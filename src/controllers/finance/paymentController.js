@@ -6,6 +6,7 @@ const Application = require('../../models/Application');
 const Lease = require('../../models/Lease');
 const Debtor = require('../../models/Debtor');
 const cacheService = require('../../services/cacheService');
+const { invalidateFinancialReports } = require('../../utils/financialCache');
 
 /**
  * Get all student payments with pagination and filtering
@@ -208,6 +209,7 @@ exports.updatePaymentStatus = async (req, res) => {
         payment.status = status;
         payment.updatedBy = req.user._id;
         await payment.save();
+        invalidateFinancialReports();
 
         // Auto-generate receipt when payment status is updated to successful
         if (status === 'Paid' || status === 'confirmed' || status === 'completed') {

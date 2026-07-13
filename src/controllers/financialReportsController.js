@@ -6,6 +6,12 @@ const BalanceSheetService = require('../services/balanceSheetService');
 const SimpleBalanceSheetService = require('../services/simpleBalanceSheetService');
 const Account = require('../models/Account');
 const { validateToken } = require('../middleware/auth');
+const cacheService = require('../services/cacheService');
+const { financialCacheKey, TTL } = require('../utils/financialCache');
+
+function isReportDebugMode() {
+    return process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+}
 
 const DEPOSIT_LIABILITY_CODES = ['2201', '2020', '20002', '2002', '2028', '20020', '21001'];
 const INCOME_SECURITY_DEPOSIT_ALIASES = new Set(['deposits', 'security_deposits', 'securitydeposits']);
@@ -577,26 +583,31 @@ class FinancialReportsController {
                     message: 'Basis must be either "cash" or "accrual"'
                 });
             }
+
+            const cacheKey = financialCacheKey('income-statement', { period, basis, residence: residence || null });
+            const cached = cacheService.get(cacheKey);
+            if (cached) {
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Income statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
+                });
+            }
             
             let incomeStatement;
             if (residence) {
-                // Use residence-filtered method with basis and monthly breakdown
                 incomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
             } else {
-                // Use FinancialReportingService with basis parameter and monthly breakdown
                 incomeStatement = await FinancialReportingService.generateIncomeStatement(period, basis);
             }
-            
-            // Add cache-busting headers to prevent 304 responses
-            res.set({
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-            });
+
+            cacheService.set(cacheKey, incomeStatement, TTL.REPORT);
             
             res.json({
                 success: true,
                 data: incomeStatement,
+                cached: false,
                 message: `Income statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
@@ -631,30 +642,38 @@ class FinancialReportsController {
                     message: 'Basis must be either "cash" or "accrual"'
                 });
             }
+
+            const cacheKey = financialCacheKey('monthly-income-statement', {
+                period,
+                basis,
+                residence: residence || null,
+                month: month || null
+            });
+            const cached = cacheService.get(cacheKey);
+            if (cached) {
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Monthly income statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
+                });
+            }
             
             let monthlyIncomeStatement;
             if (month) {
-                // Specific month requested with basis
                 monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
-                // Note: You may need to add month filtering to FinancialReportingService
             } else if (residence) {
-                // Use residence-filtered method with basis
                 monthlyIncomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
             } else {
-                // Use the comprehensive method but with fixed data structure parsing
                 monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
             }
-            
-            // Add cache-busting headers to prevent 304 responses
-            res.set({
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-            });
+
+            cacheService.set(cacheKey, monthlyIncomeStatement, TTL.REPORT);
             
             res.json({
                 success: true,
                 data: monthlyIncomeStatement,
+                cached: false,
                 message: `Monthly income statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
@@ -680,6 +699,21 @@ class FinancialReportsController {
                 return res.status(400).json({
                     success: false,
                     message: 'Period parameter is required (e.g., 2025)'
+                });
+            }
+
+            const cacheKey = financialCacheKey('monthly-breakdown', {
+                period,
+                basis,
+                residence: residence || null
+            });
+            const cachedBreakdown = cacheService.get(cacheKey);
+            if (cachedBreakdown) {
+                return res.json({
+                    success: true,
+                    data: cachedBreakdown,
+                    cached: true,
+                    message: `Monthly breakdown generated for ${period} (${basis} basis)`
                 });
             }
             
@@ -812,10 +846,13 @@ class FinancialReportsController {
                     totalAnnualNetIncome
                 }
             };
+
+            cacheService.set(cacheKey, result, TTL.REPORT);
             
             res.json({
                 success: true,
                 data: result,
+                cached: false,
                 message: `Monthly breakdown generated for ${period} (${basis} basis)`
             });
             
@@ -1077,62 +1114,67 @@ class FinancialReportsController {
                 });
             }
 
-            console.log(`📊 Generating monthly income & expenses for DASHBOARD - ${period} (${basis} basis)${residence ? `, residence: ${residence}` : ''}`);
-            console.log(`💡 Note: This endpoint defaults to CASH BASIS for dashboard display (actual money received/spent)`);
+            const cacheKey = financialCacheKey('monthly-income-expenses', {
+                period,
+                basis,
+                residence: residence || null
+            });
+            const cachedDashboard = cacheService.get(cacheKey);
+            if (cachedDashboard) {
+                return res.json({
+                    success: true,
+                    data: cachedDashboard,
+                    cached: true
+                });
+            }
 
-            // Generate monthly breakdown for all 12 months
+            if (isReportDebugMode()) {
+                console.log(`📊 Generating monthly income & expenses for DASHBOARD - ${period} (${basis} basis)${residence ? `, residence: ${residence}` : ''}`);
+            }
+
             const monthlyBreakdown = {};
             let totalAnnualRevenue = 0;
             let totalAnnualExpenses = 0;
             let totalAnnualNetIncome = 0;
 
-            // Process each month
-            for (let month = 1; month <= 12; month++) {
-                try {
-                    const monthData = await AccountingService.generateMonthlyIncomeStatement(month, parseInt(period), residence);
-                    
-                    if (monthData && monthData.success) {
-                        const monthName = new Date(2025, month - 1, 1).toLocaleString('en-US', { month: 'long' });
-                        
-                        monthlyBreakdown[month] = {
-                            month,
-                            monthName,
-                            revenue: monthData.revenue || { total: 0 },
-                            expenses: monthData.expenses || { total: 0 },
-                            netIncome: monthData.netIncome || 0,
-                            summary: {
-                                totalRevenue: monthData.revenue?.total || 0,
-                                totalExpenses: monthData.expenses?.total || 0,
-                                totalNetIncome: monthData.netIncome || 0
+            const monthResults = await Promise.all(
+                Array.from({ length: 12 }, (_, index) => {
+                    const month = index + 1;
+                    return AccountingService.generateMonthlyIncomeStatement(month, parseInt(period, 10), residence)
+                        .then((monthData) => ({ month, monthData }))
+                        .catch((monthError) => {
+                            if (isReportDebugMode()) {
+                                console.error(`  ❌ Error processing month ${month}:`, monthError.message);
                             }
-                        };
+                            return { month, monthData: null };
+                        });
+                })
+            );
 
-                        // Accumulate annual totals
-                        totalAnnualRevenue += monthData.revenue?.total || 0;
-                        totalAnnualExpenses += monthData.expenses?.total || 0;
-                        totalAnnualNetIncome += monthData.netIncome || 0;
+            monthResults.forEach(({ month, monthData }) => {
+                const monthName = new Date(parseInt(period, 10), month - 1, 1).toLocaleString('en-US', { month: 'long' });
 
-                        console.log(`  ✅ Month ${month} (${monthName}): Revenue $${monthData.revenue?.total || 0}, Expenses $${monthData.expenses?.total || 0}, Net $${monthData.netIncome || 0}`);
-                    } else {
-                        monthlyBreakdown[month] = {
-                            month,
-                            monthName: new Date(2025, month - 1, 1).toLocaleString('en-US', { month: 'long' }),
-                            revenue: { total: 0 },
-                            expenses: { total: 0 },
-                            netIncome: 0,
-                            summary: {
-                                totalRevenue: 0,
-                                totalExpenses: 0,
-                                totalNetIncome: 0
-                            }
-                        };
-                        console.log(`  ⚠️ Month ${month}: No data available`);
-                    }
-                } catch (monthError) {
-                    console.error(`  ❌ Error processing month ${month}:`, monthError.message);
+                if (monthData && monthData.success) {
                     monthlyBreakdown[month] = {
                         month,
-                        monthName: new Date(2025, month - 1, 1).toLocaleString('en-US', { month: 'long' }),
+                        monthName,
+                        revenue: monthData.revenue || { total: 0 },
+                        expenses: monthData.expenses || { total: 0 },
+                        netIncome: monthData.netIncome || 0,
+                        summary: {
+                            totalRevenue: monthData.revenue?.total || 0,
+                            totalExpenses: monthData.expenses?.total || 0,
+                            totalNetIncome: monthData.netIncome || 0
+                        }
+                    };
+
+                    totalAnnualRevenue += monthData.revenue?.total || 0;
+                    totalAnnualExpenses += monthData.expenses?.total || 0;
+                    totalAnnualNetIncome += monthData.netIncome || 0;
+                } else {
+                    monthlyBreakdown[month] = {
+                        month,
+                        monthName,
                         revenue: { total: 0 },
                         expenses: { total: 0 },
                         netIncome: 0,
@@ -1143,33 +1185,31 @@ class FinancialReportsController {
                         }
                     };
                 }
-            }
+            });
 
-            // Create annual summary
-            const annualSummary = {
-                totalAnnualRevenue,
-                totalAnnualExpenses,
-                totalAnnualNetIncome,
-                averageMonthlyRevenue: totalAnnualRevenue / 12,
-                averageMonthlyExpenses: totalAnnualExpenses / 12,
-                averageMonthlyNetIncome: totalAnnualNetIncome / 12
+            const dashboardData = {
+                period,
+                basis,
+                residence: residence || null,
+                monthlyBreakdown,
+                annualSummary: {
+                    totalAnnualRevenue,
+                    totalAnnualExpenses,
+                    totalAnnualNetIncome,
+                    averageMonthlyRevenue: totalAnnualRevenue / 12,
+                    averageMonthlyExpenses: totalAnnualExpenses / 12,
+                    averageMonthlyNetIncome: totalAnnualNetIncome / 12
+                },
+                message: `Monthly income & expenses generated for ${period} (${basis} basis)${residence ? `, residence: ${residence}` : ''}`
             };
 
-            const response = {
+            cacheService.set(cacheKey, dashboardData, TTL.DASHBOARD);
+
+            res.json({
                 success: true,
-                data: {
-                    period,
-                    basis,
-                    residence: residence || null,
-                    monthlyBreakdown,
-                    annualSummary,
-                    message: `Monthly income & expenses generated for ${period} (${basis} basis)${residence ? `, residence: ${residence}` : ''}`
-                }
-            };
-
-            console.log(`🎉 Generated monthly breakdown: $${totalAnnualRevenue} revenue, $${totalAnnualExpenses} expenses, $${totalAnnualNetIncome} net income`);
-            
-            res.json(response);
+                data: dashboardData,
+                cached: false
+            });
             
         } catch (error) {
             console.error('❌ Error generating monthly income & expenses:', error);
@@ -2286,12 +2326,26 @@ class FinancialReportsController {
                     message: 'Basis must be either "cash" or "accrual"'
                 });
             }
+
+            const cacheKey = financialCacheKey('comprehensive-monthly-income', { period, basis });
+            const cached = cacheService.get(cacheKey);
+            if (cached) {
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Comprehensive monthly income statement generated for ${period} (${basis} basis)`
+                });
+            }
             
             const monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
+
+            cacheService.set(cacheKey, monthlyIncomeStatement, TTL.REPORT);
             
             res.json({
                 success: true,
                 data: monthlyIncomeStatement,
+                cached: false,
                 message: `Comprehensive monthly income statement generated for ${period} (${basis} basis)`
             });
             
@@ -2326,12 +2380,26 @@ class FinancialReportsController {
                     message: 'Basis must be either "cash" or "accrual"'
                 });
             }
+
+            const cacheKey = financialCacheKey('comprehensive-monthly-cash-flow', { period, basis });
+            const cached = cacheService.get(cacheKey);
+            if (cached) {
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Comprehensive monthly cash flow statement generated for ${period} (${basis} basis)`
+                });
+            }
             
             const monthlyCashFlow = await FinancialReportingService.generateComprehensiveMonthlyCashFlow(period, basis);
+
+            cacheService.set(cacheKey, monthlyCashFlow, TTL.REPORT);
             
             res.json({
                 success: true,
                 data: monthlyCashFlow,
+                cached: false,
                 message: `Comprehensive monthly cash flow statement generated for ${period} (${basis} basis)`
             });
             
@@ -2366,19 +2434,30 @@ class FinancialReportsController {
                     message: 'Basis must be either "cash" or "accrual"'
                 });
             }
+
+            const cacheKey = financialCacheKey('comprehensive-monthly-balance-sheet', {
+                period,
+                basis,
+                residence: residence || null
+            });
+            const cached = cacheService.get(cacheKey);
+            if (cached) {
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Comprehensive monthly balance sheet generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
+                });
+            }
             
             const monthlyBalanceSheet = await FinancialReportingService.generateComprehensiveMonthlyBalanceSheet(period, basis, residence);
-            
-            // Add cache-busting headers to prevent 304 responses
-            res.set({
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-            });
+
+            cacheService.set(cacheKey, monthlyBalanceSheet, TTL.REPORT);
             
             res.json({
                 success: true,
                 data: monthlyBalanceSheet,
+                cached: false,
                 message: `Comprehensive monthly balance sheet generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
@@ -2419,39 +2498,51 @@ class FinancialReportsController {
                     message: 'Type must be either "cumulative" (balance as of month end) or "monthly" (monthly changes)'
                 });
             }
+
+            const cacheKey = financialCacheKey('simple-monthly-balance-sheet', {
+                period,
+                residence: residence || null,
+                type
+            });
+            const cached = cacheService.get(cacheKey);
+            if (cached) {
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Simple monthly balance sheet generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${type} type)`
+                });
+            }
             
-            console.log(`🚀 Generating Simple Monthly Balance Sheet for ${period}${residence ? ` (residence: ${residence})` : ''} (${type})`);
+            if (isReportDebugMode()) {
+                console.log(`🚀 Generating Simple Monthly Balance Sheet for ${period}${residence ? ` (residence: ${residence})` : ''} (${type})`);
+            }
             const startTime = Date.now();
             
-            // Use the simple balance sheet service
             const monthlyBalanceSheet = await SimpleBalanceSheetService.generateMonthlyBalanceSheet(
                 parseInt(period), 
                 residence, 
                 type
             );
             
-            const endTime = Date.now();
-            const duration = (endTime - startTime) / 1000;
-            console.log(`✅ Simple balance sheet generation completed in ${duration.toFixed(2)} seconds`);
+            const duration = (Date.now() - startTime) / 1000;
+            if (isReportDebugMode()) {
+                console.log(`✅ Simple balance sheet generation completed in ${duration.toFixed(2)} seconds`);
+            }
             
-            // Add performance metrics
             monthlyBalanceSheet.performance = {
                 generationTime: duration,
                 timestamp: new Date().toISOString(),
                 service: 'SimpleBalanceSheetService',
                 type: type
             };
-            
-            // Add cache-busting headers
-            res.set({
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-            });
+
+            cacheService.set(cacheKey, monthlyBalanceSheet, TTL.REPORT);
             
             res.json({
                 success: true,
                 data: monthlyBalanceSheet,
+                cached: false,
                 message: `Simple monthly balance sheet generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${type} type)`
             });
             

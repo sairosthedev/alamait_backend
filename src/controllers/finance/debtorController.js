@@ -10,6 +10,7 @@ const Application = require('../../models/Application');
 const Booking = require('../../models/Booking');
 const { createDebtorForStudent } = require('../../services/debtorService');
 const DebtorTransactionSyncService = require('../../services/debtorTransactionSyncService');
+const cacheService = require('../../services/cacheService');
 
 // Create a new debtor account for a student/tenant
 exports.createDebtor = async (req, res) => {
@@ -136,14 +137,12 @@ exports.getAllDebtors = async (req, res) => {
             overdue
         } = req.query;
 
-        // Build query
         const query = {};
 
         if (status) query.status = status;
         if (residence) query.residence = residence;
         if (overdue === 'true') query.currentBalance = { $gt: 0 };
 
-        // Search functionality
         if (search) {
             query.$or = [
                 { 'contactInfo.name': { $regex: search, $options: 'i' } },
@@ -153,70 +152,78 @@ exports.getAllDebtors = async (req, res) => {
             ];
         }
 
-        // Calculate pagination
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        const total = await Debtor.countDocuments(query);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const skip = (pageNum - 1) * limitNum;
+        const sortDirection = sortOrder === 'desc' ? -1 : 1;
 
-        // Get debtors with full population
-        const debtors = await Debtor.find(query)
-            .populate('user', 'firstName lastName email phone')
-            .populate('residence', 'name address roomPrice')
-            .populate('application', 'startDate endDate roomNumber status')
-            .populate('payments', 'date amount rentAmount adminFee deposit status')
-            .populate('createdBy', 'firstName lastName email')
-            .sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 })
-            .skip(skip)
-            .limit(parseInt(limit));
+        const listCacheKey = search
+            ? null
+            : `debtors-list:${JSON.stringify({ query, page: pageNum, limit: limitNum, sortBy, sortOrder })}`;
 
-        // Enhance debtor data with student information (including expired students)
-        const { getStudentInfo } = require('../../utils/studentUtils');
-        const enhancedDebtors = await Promise.all(debtors.map(async (debtor) => {
-            const debtorObj = debtor.toObject();
-            
-            // Get student info (including expired students)
-            if (debtor.user) {
-                const studentInfo = await getStudentInfo(debtor.user._id);
-                if (studentInfo) {
-                    debtorObj.studentInfo = studentInfo;
-                    // If student is expired, add expiration info
-                    if (studentInfo.isExpired) {
-                        debtorObj.isExpired = true;
-                        debtorObj.expiredAt = studentInfo.expiredAt;
-                        debtorObj.expirationReason = studentInfo.expirationReason;
-                    } else {
-                        debtorObj.isExpired = false;
+        if (listCacheKey) {
+            const cacheService = require('../../services/cacheService');
+            const cached = cacheService.get(listCacheKey);
+            if (cached) {
+                return res.status(200).json({ ...cached, cached: true });
+            }
+        }
+
+        const [total, debtors, summaryAgg] = await Promise.all([
+            Debtor.countDocuments(query),
+            Debtor.find(query)
+                .select('debtorCode accountCode status currentBalance totalOwed totalPaid residence user application contactInfo deferredIncome roomNumber isExpired expiredAt expirationReason createdAt')
+                .populate('user', 'firstName lastName email phone')
+                .populate('residence', 'name')
+                .populate('application', 'startDate endDate roomNumber status')
+                .sort({ [sortBy]: sortDirection })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            Debtor.aggregate([
+                { $match: query },
+                {
+                    $group: {
+                        _id: null,
+                        totalOwed: { $sum: '$totalOwed' },
+                        totalPaid: { $sum: '$totalPaid' },
+                        totalBalance: { $sum: '$currentBalance' }
                     }
                 }
+            ])
+        ]);
+
+        const enhancedDebtors = debtors.map((debtorObj) => {
+            if (debtorObj.user) {
+                debtorObj.studentInfo = {
+                    firstName: debtorObj.user.firstName,
+                    lastName: debtorObj.user.lastName,
+                    email: debtorObj.user.email,
+                    phone: debtorObj.user.phone,
+                    isExpired: debtorObj.isExpired || false,
+                    expiredAt: debtorObj.expiredAt,
+                    expirationReason: debtorObj.expirationReason
+                };
             }
-            
-            // 🆕 Ensure deferredIncome.prepayments is explicitly included and add summary
+
             if (debtorObj.deferredIncome) {
-                // Ensure prepayments array is included (even if empty)
                 debtorObj.deferredIncome.prepayments = debtorObj.deferredIncome.prepayments || [];
-                
-                // Add summary for advance payments visibility
-                const pendingPrepayments = debtorObj.deferredIncome.prepayments.filter(p => p.status === 'pending');
-                const allocatedPrepayments = debtorObj.deferredIncome.prepayments.filter(p => p.status === 'allocated');
-                
+                const pendingPrepayments = debtorObj.deferredIncome.prepayments.filter((p) => p.status === 'pending');
+                const allocatedPrepayments = debtorObj.deferredIncome.prepayments.filter((p) => p.status === 'allocated');
                 const pendingAmount = pendingPrepayments.reduce((sum, p) => sum + (p.amount || 0), 0);
                 const allocatedAmount = allocatedPrepayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-                
+
                 debtorObj.deferredIncome.summary = {
                     totalAmount: debtorObj.deferredIncome.totalAmount || 0,
-                    pendingAmount: pendingAmount,
-                    allocatedAmount: allocatedAmount,
+                    pendingAmount,
+                    allocatedAmount,
                     pendingCount: pendingPrepayments.length,
                     allocatedCount: allocatedPrepayments.length,
                     totalCount: debtorObj.deferredIncome.prepayments.length
                 };
-                
-                // 🆕 Add effective balance that accounts for pending advance payments
-                // This shows what the balance would be if pending advance payments were applied
-                const effectiveBalance = Math.max(0, (debtorObj.currentBalance || 0) - pendingAmount);
-                debtorObj.effectiveBalance = effectiveBalance;
+                debtorObj.effectiveBalance = Math.max(0, (debtorObj.currentBalance || 0) - pendingAmount);
                 debtorObj.hasPendingAdvancePayments = pendingAmount > 0;
             } else {
-                // Initialize if missing
                 debtorObj.deferredIncome = {
                     totalAmount: 0,
                     prepayments: [],
@@ -232,42 +239,34 @@ exports.getAllDebtors = async (req, res) => {
                 debtorObj.effectiveBalance = debtorObj.currentBalance || 0;
                 debtorObj.hasPendingAdvancePayments = false;
             }
-            
+
             return debtorObj;
-        }));
+        });
 
-        // Calculate summary statistics
-        const totalOwed = await Debtor.aggregate([
-            { $match: query },
-            { $group: { _id: null, total: { $sum: '$totalOwed' } } }
-        ]);
-
-        const totalPaid = await Debtor.aggregate([
-            { $match: query },
-            { $group: { _id: null, total: { $sum: '$totalPaid' } } }
-        ]);
-
-        const totalBalance = await Debtor.aggregate([
-            { $match: query },
-            { $group: { _id: null, total: { $sum: '$currentBalance' } } }
-        ]);
-
-        res.status(200).json({
+        const summaryTotals = summaryAgg[0] || {};
+        const responsePayload = {
             success: true,
             debtors: enhancedDebtors,
             pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
+                currentPage: pageNum,
+                totalPages: Math.ceil(total / limitNum),
                 totalItems: total,
-                itemsPerPage: parseInt(limit)
+                itemsPerPage: limitNum
             },
             summary: {
-                totalOwed: totalOwed[0]?.total || 0,
-                totalPaid: totalPaid[0]?.total || 0,
-                totalBalance: totalBalance[0]?.total || 0,
+                totalOwed: summaryTotals.totalOwed || 0,
+                totalPaid: summaryTotals.totalPaid || 0,
+                totalBalance: summaryTotals.totalBalance || 0,
                 totalDebtors: total
             }
-        });
+        };
+
+        if (listCacheKey) {
+            const cacheService = require('../../services/cacheService');
+            cacheService.set(listCacheKey, responsePayload, 120);
+        }
+
+        res.status(200).json(responsePayload);
 
     } catch (error) {
         console.error('Error fetching debtors:', error);
