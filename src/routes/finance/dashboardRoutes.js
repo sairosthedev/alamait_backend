@@ -2,11 +2,15 @@ const express = require('express');
 const router = express.Router();
 const dashboardController = require('../../controllers/finance/dashboardController');
 const { auth, checkRole, financeAccess } = require('../../middleware/auth');
+const { executiveDashboardHandler } = require('../../middleware/dashboardExecutiveGateway');
 
 // Apply authentication middleware to all routes
 router.use(auth);
 // Apply finance access middleware to all routes
 router.use(financeAccess);
+
+// Executive dashboard (finance portal)
+router.get('/executive', executiveDashboardHandler);
 
 // Finance overview (finance admin, admin, and CEO)
 router.get('/overview', 

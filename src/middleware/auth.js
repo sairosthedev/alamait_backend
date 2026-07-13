@@ -353,7 +353,7 @@ const verifyApplicationCode = async (req, res, next) => {
 
 const financeAccess = async (req, res, next) => {
     try {
-        const financeRoles = ['admin', 'finance_admin', 'finance_user', 'ceo'];
+        const financeRoles = ['admin', 'finance', 'finance_admin', 'finance_user', 'ceo'];
         
         if (!req.user) {
             console.error('Finance middleware - No user found');

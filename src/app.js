@@ -40,7 +40,8 @@ const adminResidenceRoutes = require('./routes/admin/residenceRoutes');
 const adminRoutes = require('./routes/admin/adminRoutes');
 const adminStudentRoutes = require('./routes/admin/studentRoutes');
 const adminApplicationRoutes = require('./routes/admin/applicationRoutes');
-const adminPaymentRoutes = require('./routes/admin/paymentRoutes');
+const legacyAdminPaymentRoutes = require('./routes/legacyAdminPaymentRoutes');
+const paymentsRoutes = require('./routes/paymentsRoutes');
 const adminProfileRoutes = require('./routes/admin/adminProfileRoutes');
 const adminMessageRoutes = require('./routes/admin/messageRoutes');
 const adminEventRoutes = require('./routes/admin/eventRoutes');
@@ -59,6 +60,7 @@ const adminDeletionLogRoutes = require('./routes/admin/deletionLogRoutes');
 // CEO routes
 const ceoRoutes = require('./routes/ceo/index');
 const ceoPaymentRoutes = require('./routes/ceo/paymentRoutes');
+const ceoDashboardRoutes = require('./routes/ceo/dashboardRoutes');
 const ceoReportUploadRoutes = require('./routes/ceo/reportUploadRoutes');
 const ceoDeletionLogRoutes = require('./routes/ceo/deletionLogRoutes');
 
@@ -402,7 +404,8 @@ const residencePaymentRoutes = require('./routes/admin/residencePaymentRoutes');
 app.use('/api/admin/residence-payments', residencePaymentRoutes);
 app.use('/api/admin/students', adminStudentRoutes);
 app.use('/api/admin/applications', adminApplicationRoutes);
-app.use('/api/admin/payments', adminPaymentRoutes);
+app.use('/api/admin/payments', legacyAdminPaymentRoutes);
+app.use('/api/payments', paymentsRoutes);
 app.use('/api/admin/profile', adminProfileRoutes);
 app.use('/api/admin/messages', adminMessageRoutes);
 app.use('/api/admin/events', adminEventRoutes);
@@ -430,6 +433,7 @@ app.use('/api/admin/deletions', adminDeletionLogRoutes);
 
 // CEO routes
 app.use('/api/ceo/payments', ceoPaymentRoutes);
+app.use('/api/ceo/dashboard', ceoDashboardRoutes);
 app.use('/api/ceo', ceoRoutes);
 
 // CEO report upload routes

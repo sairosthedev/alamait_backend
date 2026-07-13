@@ -4,12 +4,12 @@ const { auth, checkRole } = require('../../middleware/auth');
 const { 
     getDashboardStats
 } = require('../../controllers/admin/dashboardController');
-const { getExecutiveDashboard } = require('../../controllers/admin/executiveDashboardController');
+const { executiveDashboardHandler } = require('../../middleware/dashboardExecutiveGateway');
 
 // Get overall dashboard statistics
 router.get('/stats', auth, checkRole('admin'), getDashboardStats);
 
-// Get comprehensive executive dashboard data
-router.get('/executive', auth, checkRole(['admin', 'ceo', 'finance', 'finance_admin']), getExecutiveDashboard);
+// Admin executive dashboard (admin role; legacy /api/admin path also accepts finance/ceo via handler)
+router.get('/executive', auth, executiveDashboardHandler);
 
 module.exports = router; 
