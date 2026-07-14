@@ -983,12 +983,261 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
     }
 };
 
+// Fast path for Finance Payments / dashboards that only need month rows (balance + student name).
+// Skips invoice nesting, monthlyView tree, and per-student getStudentInfo N+1.
+async function computeLiteMonthlyOutstanding({ residence, limit = 100, sortBy = 'totalBalance', sortOrder = 'desc' }) {
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 100));
+
+    const transactionQuery = {
+        status: 'posted',
+        'entries.accountCode': { $regex: '^1100-' },
+        'entries.accountType': 'Asset'
+    };
+
+    if (residence) {
+        if (!mongoose.Types.ObjectId.isValid(residence)) {
+            const err = new Error('Invalid residence ID format');
+            err.statusCode = 400;
+            throw err;
+        }
+        const residenceId = new mongoose.Types.ObjectId(residence);
+        transactionQuery.$or = [
+            { residence: residenceId },
+            { 'metadata.residenceId': residence },
+            { 'metadata.residence': residenceId }
+        ];
+    }
+
+    const allARTransactions = await TransactionEntry.find(transactionQuery)
+        .select('date source residence metadata.residenceId metadata.residence metadata.type entries.accountCode entries.accountType entries.debit entries.credit')
+        .sort({ date: 1 })
+        .lean();
+
+    const eventsByStudent = new Map(); // studentId -> [{ date, acc, pay, count }]
+    const studentResidenceMap = new Map();
+    const allMonthKeysSet = new Set();
+
+    for (const transaction of allARTransactions) {
+        const txDate = new Date(transaction.date);
+        if (Number.isNaN(txDate.getTime())) continue;
+
+        const monthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+        allMonthKeysSet.add(monthKey);
+
+        const txResidence =
+            transaction.residence ||
+            transaction.metadata?.residenceId ||
+            transaction.metadata?.residence;
+
+        for (const entry of transaction.entries || []) {
+            if (!entry.accountCode?.startsWith('1100-') || entry.accountType !== 'Asset') continue;
+            const studentId = entry.accountCode.split('-')[1];
+            if (!studentId) continue;
+
+            if (txResidence && !studentResidenceMap.has(studentId)) {
+                studentResidenceMap.set(studentId, txResidence);
+            }
+
+            if (residence) {
+                const studentResidence = studentResidenceMap.get(studentId);
+                if (studentResidence && studentResidence.toString() !== residence.toString()) {
+                    continue;
+                }
+            }
+
+            let acc = 0;
+            let pay = 0;
+            if (transaction.source === 'rental_accrual' || transaction.source === 'lease_start') {
+                acc = entry.debit || 0;
+            } else if (transaction.source === 'payment' || transaction.source === 'accounts_receivable_collection') {
+                pay = entry.credit || 0;
+            } else if (transaction.source === 'manual') {
+                if (
+                    transaction.metadata?.type === 'negotiated_payment_adjustment' ||
+                    transaction.metadata?.type === 'security_deposit_reversal'
+                ) {
+                    acc = -(entry.credit || 0);
+                } else {
+                    acc = (entry.debit || 0) - (entry.credit || 0);
+                }
+            }
+
+            if (!eventsByStudent.has(studentId)) eventsByStudent.set(studentId, []);
+            eventsByStudent.get(studentId).push({
+                date: txDate,
+                monthKey,
+                acc,
+                pay,
+                count: 1
+            });
+        }
+    }
+
+    const allMonthKeys = Array.from(allMonthKeysSet).sort();
+
+    const studentBalances = [];
+    for (const [studentId, events] of eventsByStudent.entries()) {
+        events.sort((a, b) => a.date - b.date);
+
+        let eventIdx = 0;
+        let cumAcc = 0;
+        let cumPay = 0;
+        const monthlyBalances = [];
+        const monthTxnMeta = new Map(); // monthKey -> { count, latest }
+
+        for (const monthKey of allMonthKeys) {
+            const [year, month] = monthKey.split('-').map(Number);
+            const monthEndDate = new Date(year, month, 0, 23, 59, 59, 999);
+
+            while (eventIdx < events.length && events[eventIdx].date <= monthEndDate) {
+                const ev = events[eventIdx];
+                cumAcc += ev.acc;
+                cumPay += ev.pay;
+                if (!monthTxnMeta.has(ev.monthKey)) {
+                    monthTxnMeta.set(ev.monthKey, { count: 0, latest: null });
+                }
+                const meta = monthTxnMeta.get(ev.monthKey);
+                meta.count += ev.count;
+                meta.latest = ev.date;
+                eventIdx++;
+            }
+
+            if (cumAcc === 0 && cumPay === 0) continue;
+
+            const outstanding = Math.max(0, cumAcc - cumPay);
+            if (outstanding <= 0) continue;
+
+            const meta = monthTxnMeta.get(monthKey) || { count: 0, latest: null };
+            monthlyBalances.push({
+                monthKey,
+                year,
+                month,
+                balance: outstanding,
+                debits: cumAcc,
+                credits: cumPay,
+                transactionCount: meta.count,
+                latestTransaction: meta.latest
+            });
+        }
+
+        if (!monthlyBalances.length) continue;
+
+        monthlyBalances.sort((a, b) => (a.year !== b.year ? b.year - a.year : b.month - a.month));
+        const totalBalance = monthlyBalances.reduce((sum, m) => sum + m.balance, 0);
+        studentBalances.push({
+            studentId,
+            residence: studentResidenceMap.get(studentId) || null,
+            totalBalance,
+            totalTransactions: monthlyBalances.reduce((sum, m) => sum + m.transactionCount, 0),
+            latestTransaction: monthlyBalances[0]?.latestTransaction || null,
+            monthlyBalances
+        });
+    }
+
+    const sortMultiplier = sortOrder === 'desc' ? -1 : 1;
+    studentBalances.sort((a, b) => {
+        if (sortBy === 'totalTransactions') {
+            return (a.totalTransactions - b.totalTransactions) * sortMultiplier;
+        }
+        if (sortBy === 'latestTransaction') {
+            return (new Date(a.latestTransaction) - new Date(b.latestTransaction)) * sortMultiplier;
+        }
+        return (a.totalBalance - b.totalBalance) * sortMultiplier;
+    });
+
+    const limited = studentBalances.slice(0, limitNum);
+    const objectIds = limited
+        .map((s) => s.studentId)
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        .map((id) => new mongoose.Types.ObjectId(id));
+
+    const users = objectIds.length
+        ? await User.find({ _id: { $in: objectIds } })
+            .select('firstName lastName email phone')
+            .lean()
+        : [];
+    const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+
+    const students = limited.map((student) => {
+        const user = userMap.get(student.studentId);
+        return {
+            studentId: student.studentId,
+            residence: student.residence,
+            totalBalance: student.totalBalance,
+            totalTransactions: student.totalTransactions,
+            latestTransaction: student.latestTransaction,
+            hasDebtorAccount: false,
+            debtorCode: null,
+            monthlyBalances: student.monthlyBalances,
+            studentDetails: user
+                ? {
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    email: user.email,
+                    phone: user.phone,
+                    isExpired: false
+                }
+                : null
+        };
+    });
+
+    return {
+        students,
+        summary: {
+            totalStudents: students.length,
+            totalOutstanding: students.reduce((sum, s) => sum + s.totalBalance, 0),
+            averageOutstanding:
+                students.length > 0
+                    ? students.reduce((sum, s) => sum + s.totalBalance, 0) / students.length
+                    : 0,
+            lite: true
+        },
+        filters: {
+            residence: residence || 'all',
+            limit: limitNum,
+            sortBy,
+            sortOrder,
+            lite: true
+        }
+    };
+}
+
 // Get students with outstanding balances organized by month
 const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
     try {
-        const { residence, limit = 20, sortBy = 'totalBalance', sortOrder = 'desc' } = req.query;
+        const { residence, limit = 20, sortBy = 'totalBalance', sortOrder = 'desc', lite } = req.query;
+        const useLite = lite === '1' || lite === 'true' || lite === true;
 
-        console.log(`👥 Getting students with outstanding balances by month (using debtor logic)`);
+        console.log(`👥 Getting students with outstanding balances by month${useLite ? ' (lite)' : ''}`);
+
+        if (useLite) {
+            const cacheKey = `ar-monthly-outstanding-lite-${JSON.stringify({
+                residence: residence || 'all',
+                limit: Number(limit) || 100,
+                sortBy,
+                sortOrder
+            })}`;
+
+            try {
+                const data = await cacheService.getOrSet(cacheKey, 60, async () =>
+                    computeLiteMonthlyOutstanding({ residence, limit, sortBy, sortOrder })
+                );
+                return res.status(200).json({
+                    success: true,
+                    message: 'Students with monthly outstanding balances retrieved successfully (lite)',
+                    data
+                });
+            } catch (liteError) {
+                if (liteError.statusCode === 400) {
+                    return res.status(400).json({
+                        success: false,
+                        message: liteError.message,
+                        error: liteError.message
+                    });
+                }
+                throw liteError;
+            }
+        }
 
         // Cache key per residence + sorting options
         const cacheKey = `ar-monthly-outstanding-${JSON.stringify({
@@ -1036,7 +1285,10 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
             ];
         }
         
-        const allARTransactions = await TransactionEntry.find(transactionQuery).sort({ date: 1 }).lean();
+        const allARTransactions = await TransactionEntry.find(transactionQuery)
+            .select('date source residence metadata entries.accountCode entries.accountType entries.debit entries.credit')
+            .sort({ date: 1 })
+            .lean();
 
         console.log(`📊 Found ${allARTransactions.length} AR transactions${residence ? ` for residence ${residence}` : ''}`);
 
