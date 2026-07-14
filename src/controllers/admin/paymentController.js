@@ -45,12 +45,102 @@ const uploadReceipt = multer({
     fileFilter: fileFilter(['application/pdf'])
 }).single('file');
 
-// Get all payments
+const PAYMENT_LIST_SELECT =
+    'paymentId totalAmount rentAmount adminFee deposit amount levies date status method paymentMonth payments student user residence createdBy updatedBy proofOfPayment applicationStatus clarificationRequests room roomType description createdAt updatedAt';
+
+/**
+ * Resolve missing/expired students in a few bulk queries instead of per-payment N+1.
+ */
+async function batchResolveStudents(studentIds) {
+    const studentMap = new Map();
+    const uniqueIds = [...new Set(studentIds.map((id) => id?.toString()).filter(Boolean))];
+    if (uniqueIds.length === 0) return studentMap;
+
+    const objectIds = uniqueIds
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        .map((id) => new mongoose.Types.ObjectId(id));
+
+    const users = await User.find({ _id: { $in: objectIds } })
+        .select('firstName lastName email role')
+        .lean();
+    users.forEach((user) => studentMap.set(user._id.toString(), user));
+
+    const missingAfterUsers = uniqueIds.filter((id) => !studentMap.has(id));
+    if (missingAfterUsers.length === 0) return studentMap;
+
+    const missingObjectIds = missingAfterUsers
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        .map((id) => new mongoose.Types.ObjectId(id));
+
+    const ExpiredStudent = require('../../models/ExpiredStudent');
+    const expiredStudents = await ExpiredStudent.find({
+        $or: [
+            { 'student._id': { $in: missingObjectIds } },
+            { student: { $in: missingObjectIds } },
+            { 'application.student._id': { $in: missingObjectIds } }
+        ]
+    }).lean();
+
+    for (const expired of expiredStudents) {
+        const appStudent = expired.application?.student;
+        const nestedStudent =
+            expired.student &&
+            typeof expired.student === 'object' &&
+            expired.student.constructor?.name !== 'ObjectId'
+                ? expired.student
+                : null;
+        const source = appStudent || nestedStudent;
+        const rawId =
+            source?._id ||
+            expired.student?._id ||
+            expired.student ||
+            expired.application?.student?._id;
+        const id = rawId?.toString?.();
+        if (!id || studentMap.has(id)) continue;
+
+        studentMap.set(id, {
+            _id: id,
+            firstName: source?.firstName || 'Unknown',
+            lastName: source?.lastName || 'Student',
+            email: source?.email || 'expired@student.com',
+            phone: source?.phone,
+            role: source?.role || 'student',
+            isExpired: true,
+            expiredAt: expired.archivedAt,
+            expirationReason: expired.reason
+        });
+    }
+
+    const missingAfterExpired = uniqueIds.filter((id) => !studentMap.has(id));
+    if (missingAfterExpired.length === 0) return studentMap;
+
+    const applications = await Application.find({
+        _id: { $in: missingAfterExpired.filter((id) => mongoose.Types.ObjectId.isValid(id)) }
+    })
+        .select('firstName lastName email')
+        .lean();
+
+    applications.forEach((app) => {
+        studentMap.set(app._id.toString(), {
+            _id: app._id,
+            firstName: app.firstName,
+            lastName: app.lastName,
+            email: app.email
+        });
+    });
+
+    return studentMap;
+}
+
+// Get payments (paginated; lean; sorted/filtered on indexed `date`)
 const getPayments = async (req, res) => {
     try {
-        const { status, residence, period, date } = req.query;
-        
-        // Build query based on filters
+        const { status, residence, period, date, startDate, endDate, page = 1, limit = 50 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+        const skip = (pageNum - 1) * limitNum;
+
         const query = {};
 
         if (status) {
@@ -68,49 +158,63 @@ const getPayments = async (req, res) => {
             }
         }
 
+        // Schema/index use `date` (not paymentDate)
         if (date) {
-            const startDate = new Date(date);
-            startDate.setHours(0, 0, 0, 0);
-            const endDate = new Date(date);
-            endDate.setHours(23, 59, 59, 999);
-            query.paymentDate = { $gte: startDate, $lte: endDate };
-        }
-
-        if (period === 'weekly') {
+            const dayStart = new Date(date);
+            dayStart.setHours(0, 0, 0, 0);
+            const dayEnd = new Date(date);
+            dayEnd.setHours(23, 59, 59, 999);
+            query.date = { $gte: dayStart, $lte: dayEnd };
+        } else if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = new Date(startDate);
+            if (endDate) query.date.$lte = new Date(endDate);
+        } else if (period === 'weekly') {
             const oneWeekAgo = new Date();
             oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-            query.paymentDate = { $gte: oneWeekAgo };
+            query.date = { $gte: oneWeekAgo };
         } else if (period === 'monthly') {
             const oneMonthAgo = new Date();
             oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-            query.paymentDate = { $gte: oneMonthAgo };
+            query.date = { $gte: oneMonthAgo };
         }
 
-        const payments = await Payment.find(query)
-            .populate('residence', 'name')
-            .sort({ paymentDate: -1 });
+        const [payments, total] = await Promise.all([
+            Payment.find(query)
+                .select(PAYMENT_LIST_SELECT)
+                .populate('residence', 'name')
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            Payment.countDocuments(query)
+        ]);
 
-        // Transform payments to handle expired students
-        const { findStudentById } = require('../finance/paymentController');
-        const transformedPayments = await Promise.all(payments.map(async (payment) => {
-            // Get student information (including expired students)
-            let studentInfo = null;
-            if (payment.student || payment.user) {
-                const studentId = payment.student || payment.user;
-                const studentResult = await findStudentById(studentId);
-                if (studentResult) {
-                    studentInfo = studentResult.student;
-                }
-            }
+        // Keep raw student/user ids (populate would null out deleted refs)
+        const studentIds = payments
+            .map((payment) => (payment.student || payment.user)?.toString?.())
+            .filter(Boolean);
+
+        const studentMap = await batchResolveStudents(studentIds);
+
+        const transformedPayments = payments.map((payment) => {
+            const studentId = (payment.student || payment.user)?.toString?.();
+            const studentInfo = studentId ? studentMap.get(studentId) || null : null;
 
             return {
-                ...payment.toObject(),
+                ...payment,
                 student: studentInfo,
-                studentInfo: studentInfo // Include full student info for expired students
+                studentInfo
             };
-        }));
+        });
 
-        res.status(200).json(transformedPayments);
+        res.status(200).json({
+            payments: transformedPayments,
+            page: pageNum,
+            totalPages: Math.ceil(total / limitNum) || 0,
+            total,
+            limit: limitNum
+        });
     } catch (error) {
         console.error('Error fetching payments:', error);
         res.status(500).json({ message: error.message });
