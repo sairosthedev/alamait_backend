@@ -705,16 +705,18 @@ const getARInvoices = async (req, res) => {
         }
 
         // Calculate pagination
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const pageLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 100));
+        const skip = (pageNum - 1) * pageLimit;
 
-        // Get accrual transactions (lean + projection for performance)
+        // Lean + tight projection — full `entries` arrays were inflating payloads (~MB) and latency
         const [accrualTransactions, totalCount] = await Promise.all([
             TransactionEntry.find(query)
-                .select('transactionId date entries metadata residence description totalDebit status')
+                .select('transactionId date entries.accountCode entries.debit entries.credit metadata.studentId metadata.studentName metadata.monthKey residence description totalDebit status')
                 .populate('residence', 'name')
                 .sort({ date: -1 })
                 .skip(skip)
-                .limit(parseInt(limit))
+                .limit(pageLimit)
                 .lean(),
             TransactionEntry.countDocuments(query)
         ]);
@@ -747,10 +749,10 @@ const getARInvoices = async (req, res) => {
             data: {
                 invoices,
                 pagination: {
-                    currentPage: parseInt(page),
-                    totalPages: Math.ceil(totalCount / parseInt(limit)),
+                    currentPage: pageNum,
+                    totalPages: Math.ceil(totalCount / pageLimit),
                     totalCount,
-                    limit: parseInt(limit)
+                    limit: pageLimit
                 },
                 filters: {
                     studentId: studentId || 'all',
