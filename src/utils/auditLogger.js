@@ -44,8 +44,14 @@ exports.createAuditLog = async (logData) => {
     } = logData;
 
     try {
-        // Skip audit logging if no user ID provided
-        if (!userId) {
+        // Auth events may use the system user when no account exists (failed lookup)
+        if (!userId && action !== 'login_failed') {
+            console.log(`[AUDIT] Skipping audit log for ${action} on ${collection} - no user ID provided`);
+            return null;
+        }
+
+        const resolvedUserId = userId || (action === 'login_failed' ? '68b7909295210ad2fa2c5dcf' : null);
+        if (!resolvedUserId) {
             console.log(`[AUDIT] Skipping audit log for ${action} on ${collection} - no user ID provided`);
             return null;
         }
@@ -54,7 +60,7 @@ exports.createAuditLog = async (logData) => {
         const finalRequestId = requestId || uuidv4();
 
         const auditEntry = await AuditLog.create({
-            user: userId,
+            user: resolvedUserId,
             action,
             collection,
             recordId,
@@ -71,7 +77,7 @@ exports.createAuditLog = async (logData) => {
             errorMessage
         });
 
-        console.log(`[AUDIT] ${action} on ${collection} - ${recordId || 'N/A'} by user ${userId} (${finalRequestId})`);
+        console.log(`[AUDIT] ${action} on ${collection} - ${recordId || 'N/A'} by user ${resolvedUserId} (${finalRequestId})`);
         return auditEntry;
     } catch (error) {
         console.error('Failed to save audit log:', error);

@@ -1,11 +1,21 @@
 const AuditLog = require('../../models/AuditLog');
 
+/** Actions treated as “real” audit events (not page views / GET reads). */
+const WRITE_ACTIONS = {
+  $nin: ['read']
+};
+
 exports.getAuditLogs = async (req, res) => {
   try {
     const { collection, action, user, startDate, endDate } = req.query;
     const filter = {};
     if (collection) filter.collection = collection;
-    if (action) filter.action = action;
+    if (action) {
+      filter.action = action;
+    } else {
+      // Default: hide historical read noise; only show create/update/delete/login/etc.
+      filter.action = WRITE_ACTIONS;
+    }
     if (user) filter.user = user;
     if (startDate || endDate) {
       filter.timestamp = {};
@@ -21,4 +31,4 @@ exports.getAuditLogs = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Error fetching audit log', error: error.message });
   }
-}; 
+};

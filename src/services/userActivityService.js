@@ -16,21 +16,23 @@ class UserActivityService {
         try {
             const sessionId = req.sessionID || uuidv4();
             const requestId = req.requestId || uuidv4();
-            const ipAddress = req.ip || req.connection?.remoteAddress || null;
+            const ipAddress = req.ip || req.connection?.remoteAddress || deviceInfo.deviceIp || null;
             const userAgent = req.headers['user-agent'] || null;
+            const loginSource = deviceInfo.loginSource || req.body?.loginSource || 'web';
             
-            // Create UserActivity entry
+            // Create UserActivity entry (AuditLog is written by auth login handler)
             const activity = await UserActivity.create({
                 user: userId,
                 sessionId,
                 activityType: 'login',
-                page: '/login',
+                page: loginSource === 'internal' ? '/internal' : loginSource === 'student' ? '/auth/login' : '/login',
                 pageTitle: 'Login',
                 action: 'login',
                 actionDetails: {
                     method: 'POST',
                     endpoint: '/api/auth/login',
-                    success: true
+                    success: true,
+                    loginSource
                 },
                 ipAddress,
                 userAgent,
@@ -39,48 +41,12 @@ class UserActivityService {
                     deviceIdentifier: deviceInfo.deviceIdentifier || null,
                     deviceType: deviceInfo.deviceType || null,
                     deviceName: deviceInfo.deviceName || null,
+                    loginSource,
                     ...deviceInfo
                 },
                 requestId,
                 status: 'success',
                 timestamp: new Date()
-            });
-            
-            // Also log to AuditLog
-            await createAuditLog({
-                action: 'login',
-                collection: 'User',
-                recordId: userId,
-                userId: userId,
-                before: null,
-                after: {
-                    sessionId,
-                    loginTime: new Date(),
-                    deviceInfo: {
-                        deviceIp: deviceInfo.deviceIp || ipAddress,
-                        deviceIdentifier: deviceInfo.deviceIdentifier || null,
-                        deviceType: deviceInfo.deviceType || null,
-                        deviceName: deviceInfo.deviceName || null,
-                        ...deviceInfo
-                    }
-                },
-                details: JSON.stringify({
-                    event: 'user_login',
-                    sessionId,
-                    deviceInfo: {
-                        deviceIp: deviceInfo.deviceIp || ipAddress,
-                        deviceIdentifier: deviceInfo.deviceIdentifier || null,
-                        deviceType: deviceInfo.deviceType || null,
-                        deviceName: deviceInfo.deviceName || null,
-                        ...deviceInfo
-                    },
-                    activityId: activity._id
-                }),
-                ipAddress,
-                userAgent,
-                sessionId,
-                requestId,
-                statusCode: 200
             });
             
             return activity;
@@ -638,6 +604,12 @@ class UserActivityService {
                 timestamp: new Date()
             });
             
+            // Login/logout are recorded once by authController — never duplicate here
+            if (['login', 'logout', 'login_failed', 'register'].includes(String(actionName).toLowerCase())) {
+                console.log(`ℹ️ Skipping AuditLog for auth action "${actionName}" (owned by auth handler)`);
+                return activity;
+            }
+
             // Also log to AuditLog - map action to audit log action type
             let auditAction = actionName;
             if (actionName.includes('create') || actionName.includes('add')) {

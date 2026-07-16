@@ -431,16 +431,12 @@ app.use('/api/admin/reports', adminReportUploadRoutes);
 // Admin deletion log routes
 app.use('/api/admin/deletions', adminDeletionLogRoutes);
 
-// CEO routes
+// CEO routes — mount specific paths before the catch-all /api/ceo router
 app.use('/api/ceo/payments', ceoPaymentRoutes);
 app.use('/api/ceo/dashboard', ceoDashboardRoutes);
-app.use('/api/ceo', ceoRoutes);
-
-// CEO report upload routes
 app.use('/api/ceo/reports', ceoReportUploadRoutes);
-
-// CEO deletion log routes
 app.use('/api/ceo/deletions', ceoDeletionLogRoutes);
+app.use('/api/ceo', ceoRoutes);
 
 // General lease routes
 const leaseRoutes = require('./routes/leaseRoutes');

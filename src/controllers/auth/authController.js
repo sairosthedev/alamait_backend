@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const User = require('../../models/User');
 const { sendEmail } = require('../../utils/email');
 const { createDebtorForStudent } = require('../../services/debtorService');
-const { logAuthOperation, createAuditLog } = require('../../utils/auditLogger');
+const { recordLoginAudit } = require('../../utils/loginAuditHelper');
 
 /**
  * Get real client IP address (handles proxies and localhost)
@@ -85,41 +85,63 @@ const getDeviceIdentifier = (req) => {
     
     // Extract device type and name from User Agent
     let deviceType = 'unknown';
-    let deviceName = 'unknown';
+    let osName = 'unknown';
+    let browserName = 'unknown';
     
     if (userAgent) {
-        // Check for mobile devices
-        if (/mobile|android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent)) {
-            deviceType = 'mobile';
-        } else if (/tablet|ipad/i.test(userAgent)) {
+        // Form factor
+        if (/ipad|tablet/i.test(userAgent) && !/mobile/i.test(userAgent)) {
             deviceType = 'tablet';
+        } else if (/mobile|android|iphone|ipod|blackberry|iemobile|opera mini/i.test(userAgent)) {
+            deviceType = 'mobile';
         } else {
             deviceType = 'desktop';
         }
-        
-        // Extract browser and OS info
-        const browserMatch = userAgent.match(/(?:Chrome|Firefox|Safari|Edge|Opera|MSIE)\/([\d.]+)/i);
-        const osMatch = userAgent.match(/(?:Windows|Mac OS|Linux|Android|iOS|iPhone|iPad)/i);
-        
-        if (browserMatch && osMatch) {
-            deviceName = `${osMatch[0]} - ${browserMatch[0].split('/')[0]}`;
-        } else if (osMatch) {
-            deviceName = osMatch[0];
-        } else if (browserMatch) {
-            deviceName = browserMatch[0].split('/')[0];
+
+        // OS only (never the browser)
+        if (/windows nt|windows/i.test(userAgent)) {
+            osName = 'Windows';
+        } else if (/android/i.test(userAgent)) {
+            osName = 'Android';
+        } else if (/iphone|ipad|ipod|ios/i.test(userAgent)) {
+            osName = 'iOS';
+        } else if (/mac os x|macintosh/i.test(userAgent)) {
+            osName = 'macOS';
+        } else if (/linux/i.test(userAgent)) {
+            osName = 'Linux';
+        } else if (/cros/i.test(userAgent)) {
+            osName = 'Chrome OS';
+        }
+
+        // Browser separately
+        if (/edg\//i.test(userAgent)) {
+            browserName = 'Microsoft Edge';
+        } else if (/chrome\//i.test(userAgent) && !/edg\//i.test(userAgent)) {
+            browserName = 'Google Chrome';
+        } else if (/firefox\//i.test(userAgent)) {
+            browserName = 'Firefox';
+        } else if (/safari\//i.test(userAgent) && !/chrome\//i.test(userAgent)) {
+            browserName = 'Safari';
+        } else if (/opera|opr\//i.test(userAgent)) {
+            browserName = 'Opera';
         }
     }
+
+    // Readable label: "Desktop · Windows" — never the browser name
+    const deviceName = osName !== 'unknown' ? osName : deviceType;
     
     // Create readable device identifier
     const deviceIdentifier = `${ip}-${deviceType}-${deviceHash.substring(0, 8)}`;
     
     return {
-        deviceHash: deviceHash.substring(0, 16), // Short hash for display
-        deviceAddress: deviceHash, // Full hash for unique identification
-        deviceIdentifier: deviceIdentifier, // Readable identifier: IP-DeviceType-ShortHash
-        deviceIp: ip, // Actual IP address
+        deviceHash: deviceHash.substring(0, 16),
+        deviceAddress: deviceHash,
+        deviceIdentifier,
+        deviceIp: ip,
         deviceType,
         deviceName,
+        osName,
+        browserName,
         userAgent
     };
 };
@@ -238,7 +260,7 @@ exports.login = async (req, res) => {
     }
 
     try {
-        const { email, password } = req.body;
+        const { email, password, loginSource } = req.body;
         console.log('Login attempt for email:', email);
         
         // Check if password is SHA-256 hash (from client-side hashing)
@@ -269,29 +291,15 @@ exports.login = async (req, res) => {
             console.log('User Agent:', userAgent);
             console.log('-'.repeat(80));
             
-            // Fire-and-forget audit log (don't block login response)
-            createAuditLog({
-                action: 'login',
-                collection: 'User',
-                recordId: null,
-                userId: '68b7909295210ad2fa2c5dcf', // System user ID for failed attempts
-                details: JSON.stringify({
-                    event: 'failed_login_attempt',
-                    reason: 'user_not_found',
-                    email: email,
-                    timestamp: attemptTime,
-                    deviceIp: deviceInfo.deviceIp,
-                    deviceIdentifier: deviceInfo.deviceIdentifier,
-                    deviceAddress: deviceInfo.deviceAddress,
-                    deviceHash: deviceInfo.deviceHash,
-                    deviceType: deviceInfo.deviceType,
-                    deviceName: deviceInfo.deviceName
-                }),
-                ipAddress: deviceInfo.deviceIp, // Use real IP
-                userAgent: userAgent,
+            recordLoginAudit({
+                success: false,
+                user: null,
+                req,
+                loginSource,
+                reason: 'invalid_credentials',
                 statusCode: 401,
-                errorMessage: 'Invalid credentials - User not found'
-            }).catch(auditError => {
+                deviceInfo
+            }).catch((auditError) => {
                 console.error('Failed to log audit entry for failed login:', auditError);
             });
             
@@ -328,25 +336,15 @@ exports.login = async (req, res) => {
                 console.log('User Agent:', userAgent);
                 console.log('-'.repeat(80));
                 
-                // Fire-and-forget audit log (don't block login response)
-                logAuthOperation(
-                    'login',
-                    user._id,
-                    JSON.stringify({
-                        event: 'failed_login_attempt',
-                        reason: 'invalid_password',
-                        email: user.email,
-                        timestamp: attemptTime,
-                        deviceIp: deviceInfo.deviceIp,
-                        deviceIdentifier: deviceInfo.deviceIdentifier,
-                        deviceAddress: deviceInfo.deviceAddress,
-                        deviceHash: deviceInfo.deviceHash,
-                        deviceType: deviceInfo.deviceType,
-                        deviceName: deviceInfo.deviceName
-                    }),
-                    deviceInfo.deviceIp, // Use real IP
-                    userAgent
-                ).catch(auditError => {
+                recordLoginAudit({
+                    success: false,
+                    user,
+                    req,
+                    loginSource,
+                    reason: 'invalid_credentials',
+                    statusCode: 401,
+                    deviceInfo
+                }).catch((auditError) => {
                     console.error('Failed to log audit entry for failed login:', auditError);
                 });
                 
@@ -424,37 +422,17 @@ exports.login = async (req, res) => {
             }
         });
         
-        // Fire-and-forget logging and activity tracking (non-blocking)
-        logAuthOperation(
-            'login',
-            user._id,
-            JSON.stringify({
-                event: 'successful_login',
-                email: user.email,
-                role: user.role,
-                timestamp: loginTime,
-                deviceIp: deviceInfo.deviceIp,
-                deviceIdentifier: deviceInfo.deviceIdentifier,
-                deviceAddress: deviceInfo.deviceAddress,
-                deviceHash: deviceInfo.deviceHash,
-                deviceType: deviceInfo.deviceType,
-                deviceName: deviceInfo.deviceName
-            }),
-            deviceInfo.deviceIp, // Use real IP
-            userAgent
-        ).catch(auditError => {
+        // Single AuditLog row for this sign-in (frontend must not also post login activity)
+        recordLoginAudit({
+            success: true,
+            user,
+            req,
+            loginSource,
+            statusCode: 200,
+            deviceInfo
+        }).catch((auditError) => {
             console.error('Failed to log audit entry for successful login:', auditError);
         });
-        
-        // Track login in UserActivity (best-effort, non-blocking)
-        try {
-            const UserActivityService = require('../services/userActivityService');
-            UserActivityService.trackLogin(user._id, req, deviceInfo).catch(activityError => {
-                console.error('Failed to track login activity:', activityError);
-            });
-        } catch (activityInitError) {
-            console.error('Failed to initialise UserActivityService for login tracking:', activityInitError);
-        }
     } catch (error) {
         console.error('Error in login:', error);
         res.status(500).json({ error: 'Server error' });

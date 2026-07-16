@@ -1,11 +1,19 @@
 const AuditLog = require('../../models/AuditLog');
 
+const WRITE_ACTIONS = {
+  $nin: ['read']
+};
+
 exports.getAuditLogs = async (req, res) => {
   try {
     const { collection, action, user, startDate, endDate } = req.query;
     const filter = {};
     if (collection) filter.collection = collection;
-    if (action) filter.action = action;
+    if (action) {
+      filter.action = action;
+    } else {
+      filter.action = WRITE_ACTIONS;
+    }
     if (user) filter.user = user;
     if (startDate || endDate) {
       filter.timestamp = {};

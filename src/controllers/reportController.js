@@ -36,7 +36,7 @@ exports.uploadReport = async (req, res) => {
         }
 
         // Get user info
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user._id || req.user.id);
         if (!user) {
             return res.status(404).json({
                 success: false,
@@ -123,7 +123,7 @@ exports.uploadReport = async (req, res) => {
 exports.getAllReports = async (req, res) => {
     try {
         const { page = 1, limit = 20, category, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user._id || req.user.id);
         
         if (!user) {
             return res.status(404).json({
@@ -198,7 +198,7 @@ exports.getAllReports = async (req, res) => {
 exports.getReportById = async (req, res) => {
     try {
         const { id } = req.params;
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user._id || req.user.id);
         
         if (!user) {
             return res.status(404).json({
@@ -264,7 +264,7 @@ exports.getReportById = async (req, res) => {
 exports.deleteReport = async (req, res) => {
     try {
         const { id } = req.params;
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user._id || req.user.id);
         
         if (!user) {
             return res.status(404).json({
@@ -370,7 +370,7 @@ exports.updateReport = async (req, res) => {
     try {
         const { id } = req.params;
         const { title, description, category, tags } = req.body;
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user._id || req.user.id);
         
         if (!user) {
             return res.status(404).json({
@@ -454,7 +454,7 @@ exports.updateReport = async (req, res) => {
 exports.getDownloadUrl = async (req, res) => {
     try {
         const { id } = req.params;
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user._id || req.user.id);
         
         if (!user) {
             return res.status(404).json({

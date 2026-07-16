@@ -39,6 +39,21 @@ const auditMiddleware = async (req, res, next) => {
         '/templates'
     ];
     
+    // Audit trail is for write actions (create/update/delete/approve/etc.), not reads
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+        return next();
+    }
+
+    // Auth owns login/logout audit entries — avoid duplicate login rows
+    if (
+        req.path.includes('/auth/login') ||
+        req.path.includes('/auth/logout') ||
+        req.path.includes('/auth/register') ||
+        req.path.includes('/auth/magic-login')
+    ) {
+        return next();
+    }
+
     if (skipPaths.some(path => req.path.startsWith(path))) {
         return next();
     }
@@ -128,6 +143,11 @@ async function logAPIAudit({ request, response, originalReq }) {
     try {
         // Determine action based on HTTP method and path
         const action = determineAction(request.method, request.path);
+
+        // Never persist read/view traffic in AuditLog
+        if (action === 'read' || action === 'unknown' && request.method === 'GET') {
+            return;
+        }
         
         // Determine collection based on path
         const collection = determineCollection(request.path);
