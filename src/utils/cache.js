@@ -60,6 +60,18 @@ class SimpleCache {
     }
 
     /**
+     * Delete all keys matching a regex pattern
+     */
+    deletePattern(pattern) {
+        const regex = new RegExp(pattern.replace(/\*/g, '.*'));
+        for (const key of this.cache.keys()) {
+            if (regex.test(key)) {
+                this.delete(key);
+            }
+        }
+    }
+
+    /**
      * Clear all cache
      */
     clear() {

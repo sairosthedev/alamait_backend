@@ -372,4 +372,34 @@ transactionEntrySchema.index({ 'metadata.accrualYear': 1, 'metadata.accrualMonth
 // Speed: payment allocation month filter
 transactionEntrySchema.index({ 'metadata.monthSettled': 1, date: 1 });
 
+// Keep cashflow/financial reports fresh after any transaction write
+const invalidateReportsOnChange = () => {
+  try {
+    const { invalidateFinancialReports } = require('../utils/financialCache');
+    invalidateFinancialReports();
+  } catch (err) {
+    console.error('Failed to invalidate financial report cache:', err.message);
+  }
+};
+
+transactionEntrySchema.post('save', function() {
+  invalidateReportsOnChange();
+});
+
+transactionEntrySchema.post('findOneAndUpdate', function() {
+  invalidateReportsOnChange();
+});
+
+transactionEntrySchema.post('findOneAndDelete', function() {
+  invalidateReportsOnChange();
+});
+
+transactionEntrySchema.post('deleteOne', function() {
+  invalidateReportsOnChange();
+});
+
+transactionEntrySchema.post('deleteMany', function() {
+  invalidateReportsOnChange();
+});
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 
