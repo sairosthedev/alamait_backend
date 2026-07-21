@@ -103,6 +103,51 @@ function normalizeRequestAmounts(request) {
     return normalized;
 }
 
+function enrichApprovalStage(stage) {
+    if (!stage || typeof stage !== 'object') {
+        return stage;
+    }
+
+    const enriched = { ...stage };
+
+    if (!enriched.approvedByEmail && enriched.approvedBy?.email) {
+        enriched.approvedByEmail = enriched.approvedBy.email;
+    }
+    if (!enriched.rejectedByEmail && enriched.rejectedBy?.email) {
+        enriched.rejectedByEmail = enriched.rejectedBy.email;
+    }
+    if (!enriched.waitlistedByEmail && enriched.waitlistedBy?.email) {
+        enriched.waitlistedByEmail = enriched.waitlistedBy.email;
+    }
+
+    return enriched;
+}
+
+function enrichRequestApprovals(request) {
+    const enriched = { ...request };
+
+    if (enriched.approval) {
+        enriched.approval = {
+            ...enriched.approval,
+            admin: enrichApprovalStage(enriched.approval.admin),
+            finance: enrichApprovalStage(enriched.approval.finance),
+            ceo: enrichApprovalStage(enriched.approval.ceo)
+        };
+    }
+
+    if (Array.isArray(enriched.requestHistory)) {
+        enriched.requestHistory = enriched.requestHistory.map((entry) => ({
+            ...entry,
+            userEmail: entry.user?.email || entry.userEmail || null,
+            userName: entry.user
+                ? `${entry.user.firstName || ''} ${entry.user.lastName || ''}`.trim() || entry.user.email
+                : entry.userName || null
+        }));
+    }
+
+    return enriched;
+}
+
 function applyApprovedAmountToRequestItems(request, approvedAmount) {
     const parsed = Number(approvedAmount);
     if (!Number.isFinite(parsed) || parsed < 0) return;
@@ -226,11 +271,12 @@ exports.getAllRequests = async (req, res) => {
         
         // Optimize query: Use lean() for better performance, select only needed fields
         const requests = await Request.find(query)
-            .select('title description type status priority category residence submittedBy student assignedTo quotations items approval amount approvedAmount financeStatus totalEstimatedCost createdAt updatedAt')
+            .select('title description type status priority category residence submittedBy student assignedTo quotations items approval amount approvedAmount financeStatus totalEstimatedCost dateRequested requestedBy deliveryLocation department requestHistory createdAt updatedAt')
             .populate('submittedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')
             .populate('residence', 'name')
+            .populate('requestHistory.user', 'firstName lastName email')
             .populate('quotations.uploadedBy', 'firstName lastName email')
             .populate('quotations.approvedBy', 'firstName lastName email')
             .populate('quotations.selectedBy', 'firstName lastName email')
@@ -241,6 +287,8 @@ exports.getAllRequests = async (req, res) => {
             .populate('items.quotations.deselectedBy', 'firstName lastName email')
             .populate('approval.admin.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email')
+            .populate('approval.finance.rejectedBy', 'firstName lastName email')
+            .populate('approval.finance.waitlistedBy', 'firstName lastName email')
             .populate('approval.ceo.approvedBy', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .skip(skip)
@@ -252,7 +300,9 @@ exports.getAllRequests = async (req, res) => {
         const total = await Request.countDocuments(query);
         
         // Normalize amounts for list preview so finance-approved amount is reflected consistently.
-        const normalizedRequests = requests.map((request) => normalizeRequestAmounts(request));
+        const normalizedRequests = requests.map((request) =>
+            enrichRequestApprovals(normalizeRequestAmounts(request))
+        );
 
         // Map statuses for students
         let mappedRequests = normalizedRequests;
@@ -285,6 +335,7 @@ exports.getRequestById = async (req, res) => {
             .populate('student', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')
             .populate('residence', 'name')
+            .populate('requestHistory.user', 'firstName lastName email')
             .populate('quotations.uploadedBy', 'firstName lastName email')
             .populate('quotations.approvedBy', 'firstName lastName email')
             .populate('quotations.selectedBy', 'firstName lastName email')
@@ -295,6 +346,8 @@ exports.getRequestById = async (req, res) => {
             .populate('items.quotations.deselectedBy', 'firstName lastName email')
             .populate('approval.admin.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email')
+            .populate('approval.finance.rejectedBy', 'firstName lastName email')
+            .populate('approval.finance.waitlistedBy', 'firstName lastName email')
             .populate('approval.ceo.approvedBy', 'firstName lastName email');
 
         if (!request) {
@@ -307,7 +360,7 @@ exports.getRequestById = async (req, res) => {
         }
 
         // Map status for students
-        let mappedRequest = normalizeRequestAmounts(request.toObject());
+        let mappedRequest = enrichRequestApprovals(normalizeRequestAmounts(request.toObject()));
         if (user.role === 'student') {
             mappedRequest = mapRequestForStudent(mappedRequest);
         }
@@ -1898,6 +1951,8 @@ exports.adminApproval = async (req, res) => {
             date: new Date(),
             action: 'Admin approval',
             user: user._id,
+            userEmail: user.email,
+            userName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email,
             changes: [`Admin ${approved ? 'approved' : 'rejected'} the request`]
         });
         
@@ -1906,9 +1961,12 @@ exports.adminApproval = async (req, res) => {
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
             .populate('residence', 'name')
-            .populate('approval.admin.approvedBy', 'firstName lastName email');
+            .populate('requestHistory.user', 'firstName lastName email')
+            .populate('approval.admin.approvedBy', 'firstName lastName email')
+            .populate('approval.finance.approvedBy', 'firstName lastName email')
+            .populate('approval.ceo.approvedBy', 'firstName lastName email');
         
-        res.status(200).json(updatedRequest);
+        res.status(200).json(enrichRequestApprovals(updatedRequest.toObject()));
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

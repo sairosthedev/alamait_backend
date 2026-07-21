@@ -163,19 +163,22 @@ const getStudentARBalances = async (req, res) => {
             const originalRentOwed = item.rent.originalOwed || 0; // Use originalOwed from accrual (not current owed which may be reduced)
             const originalAdminFeeOwed = item.adminFee.originalOwed || 0; // Use originalOwed from accrual
             const originalDepositOwed = item.deposit.originalOwed || 0; // Use originalOwed from accrual
+            const originalLeviesOwed = item.levies?.originalOwed || 0;
             const negotiatedDiscount = item.rent.negotiatedDiscount || 0; // Get negotiated discount amount
-            const originalDebt = originalRentOwed + originalAdminFeeOwed + originalDepositOwed; // Only what was in the original accrual transaction
+            const originalDebt = originalRentOwed + originalAdminFeeOwed + originalDepositOwed + originalLeviesOwed;
             
             // 🆕 Log breakdown for debugging
             console.log(`📊 ${item.monthKey} Original Debt Breakdown (from accrual transaction):`);
             console.log(`   Original Rent (from accrual): $${originalRentOwed.toFixed(2)}`);
             console.log(`   Original Admin Fee (from accrual): $${originalAdminFeeOwed.toFixed(2)}`);
             console.log(`   Original Deposit (from accrual): $${originalDepositOwed.toFixed(2)}`);
+            console.log(`   Original Levies (from accrual): $${originalLeviesOwed.toFixed(2)}`);
             console.log(`   Total Original Debt (from accrual): $${originalDebt.toFixed(2)}`);
             console.log(`   Negotiated Discount (rent only): $${negotiatedDiscount.toFixed(2)}`);
             console.log(`   Current Rent Owed: $${item.rent.owed.toFixed(2)}`);
             console.log(`   Current Admin Fee Owed: $${item.adminFee.owed.toFixed(2)}`);
             console.log(`   Current Deposit Owed: $${item.deposit.owed.toFixed(2)}`);
+            console.log(`   Current Levies Owed: $${(item.levies?.owed || 0).toFixed(2)}`);
             console.log(`   Net Balance: $${item.totalOutstanding.toFixed(2)}`);
             
             return {
@@ -186,7 +189,7 @@ const getStudentARBalances = async (req, res) => {
                 balance: item.totalOutstanding, // Net balance after discounts and payments
                 originalDebt: originalDebt, // Original accrual amount (only what was in the accrual transaction)
                 negotiatedDiscount: negotiatedDiscount, // 🆕 Negotiated discount amount (applies to rent only)
-                paidAmount: item.rent.paid + item.adminFee.paid + item.deposit.paid,
+                paidAmount: item.rent.paid + item.adminFee.paid + item.deposit.paid + (item.levies?.paid || 0),
                 transactionId: item.transactionId,
                 date: item.date,
                 accountCode: debtorAccountCode, // 🆕 CRITICAL: Use debtor account code (1100-{debtorId})

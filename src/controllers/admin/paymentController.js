@@ -138,8 +138,14 @@ const getPayments = async (req, res) => {
         const { status, residence, period, date, startDate, endDate, page = 1, limit = 50 } = req.query;
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
-        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
-        const skip = (pageNum - 1) * limitNum;
+        // Support limit=all (or a high explicit limit) so list UIs can load the full set.
+        // Cap protects accidental huge pulls; 373 payments is well within this.
+        const wantAll = String(limit).toLowerCase() === 'all' || String(limit) === '0' || String(limit) === '-1';
+        const parsedLimit = parseInt(limit, 10);
+        const limitNum = wantAll
+            ? 5000
+            : Math.min(2000, Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 50));
+        const skip = wantAll ? 0 : (pageNum - 1) * limitNum;
 
         const query = {};
 
@@ -179,11 +185,13 @@ const getPayments = async (req, res) => {
             query.date = { $gte: oneMonthAgo };
         }
 
+        // Sort by when the payment was recorded (createdAt), not the business date.
+        // Backdated payments (e.g. recorded in July with date=March) must still appear first.
         const [payments, total] = await Promise.all([
             Payment.find(query)
                 .select(PAYMENT_LIST_SELECT)
                 .populate('residence', 'name')
-                .sort({ date: -1 })
+                .sort({ createdAt: -1, date: -1 })
                 .skip(skip)
                 .limit(limitNum)
                 .lean(),
@@ -210,10 +218,10 @@ const getPayments = async (req, res) => {
 
         res.status(200).json({
             payments: transformedPayments,
-            page: pageNum,
-            totalPages: Math.ceil(total / limitNum) || 0,
+            page: wantAll ? 1 : pageNum,
+            totalPages: wantAll ? 1 : (Math.ceil(total / limitNum) || 0),
             total,
-            limit: limitNum
+            limit: wantAll ? total : limitNum
         });
     } catch (error) {
         console.error('Error fetching payments:', error);

@@ -1963,32 +1963,67 @@ class EnhancedPaymentAllocationService {
           console.log(`  ✅ Lease start breakdown: Rent=$${monthlyOutstanding[monthKey].rent.originalOwed || monthlyOutstanding[monthKey].rent.owed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.originalOwed || monthlyOutstanding[monthKey].adminFee.owed}, Deposit=$${monthlyOutstanding[monthKey].deposit.originalOwed || monthlyOutstanding[monthKey].deposit.owed}, Levies=$${monthlyOutstanding[monthKey].levies.originalOwed || monthlyOutstanding[monthKey].levies.owed}`);
           console.log(`  ✅ Original Owed: Rent=$${monthlyOutstanding[monthKey].rent.originalOwed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.originalOwed}, Deposit=$${monthlyOutstanding[monthKey].deposit.originalOwed}`);
         } else {
-          // For monthly_rent_accrual and other accrual types, categorize by income/AR entries
-          accrual.entries.forEach(entry => {
-            if (entry.accountCode === '4010' && entry.accountType === 'Income' && entry.credit > 0) {
-              monthlyOutstanding[monthKey].levies.owed += entry.credit;
-              monthlyOutstanding[monthKey].levies.originalOwed = (monthlyOutstanding[monthKey].levies.originalOwed || 0) + entry.credit;
-            }
+          // For monthly_rent_accrual and other accrual types, categorize by income/AR entries.
+          // Prefer income-side amounts (4001/4002/4010/2020) so we do not double-count when
+          // the same charge also appears as an AR debit with a matching description.
+          let rentFromIncome = 0;
+          let adminFromIncome = 0;
+          let depositFromIncome = 0;
+          let leviesFromIncome = 0;
 
-            if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
-              const description = (entry.description || '').toLowerCase();
-              
-              if (description.includes('admin fee') || description.includes('administrative')) {
-                monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
-                monthlyOutstanding[monthKey].adminFee.originalOwed = (monthlyOutstanding[monthKey].adminFee.originalOwed || 0) + entry.debit; // 🆕 Track original admin fee
-              } else if (description.includes('levies') || description.includes('levy')) {
-                monthlyOutstanding[monthKey].levies.owed += entry.debit;
-                monthlyOutstanding[monthKey].levies.originalOwed = (monthlyOutstanding[monthKey].levies.originalOwed || 0) + entry.debit;
-              } else if (description.includes('security deposit') || description.includes('deposit')) {
-                monthlyOutstanding[monthKey].deposit.owed += entry.debit;
-                monthlyOutstanding[monthKey].deposit.originalOwed = (monthlyOutstanding[monthKey].deposit.originalOwed || 0) + entry.debit; // 🆕 Track original deposit
-              } else {
-                // Default to rent for monthly accruals
-                monthlyOutstanding[monthKey].rent.owed += entry.debit;
-                monthlyOutstanding[monthKey].rent.originalOwed = (monthlyOutstanding[monthKey].rent.originalOwed || 0) + entry.debit; // 🆕 Track original accrual amount
-              }
+          accrual.entries.forEach(entry => {
+            if (entry.accountCode === '4001' && entry.accountType === 'Income' && entry.credit > 0) {
+              rentFromIncome += entry.credit;
+            } else if (entry.accountCode === '4002' && entry.accountType === 'Income' && entry.credit > 0) {
+              adminFromIncome += entry.credit;
+            } else if (entry.accountCode === '4010' && entry.accountType === 'Income' && entry.credit > 0) {
+              leviesFromIncome += entry.credit;
+            } else if (entry.accountCode === '2020' && entry.accountType === 'Liability' && entry.credit > 0) {
+              depositFromIncome += entry.credit;
             }
           });
+
+          const hasIncomeBreakdown =
+            rentFromIncome > 0 || adminFromIncome > 0 || depositFromIncome > 0 || leviesFromIncome > 0;
+
+          if (hasIncomeBreakdown) {
+            monthlyOutstanding[monthKey].rent.owed += rentFromIncome;
+            monthlyOutstanding[monthKey].rent.originalOwed =
+              (monthlyOutstanding[monthKey].rent.originalOwed || 0) + rentFromIncome;
+            monthlyOutstanding[monthKey].adminFee.owed += adminFromIncome;
+            monthlyOutstanding[monthKey].adminFee.originalOwed =
+              (monthlyOutstanding[monthKey].adminFee.originalOwed || 0) + adminFromIncome;
+            monthlyOutstanding[monthKey].deposit.owed += depositFromIncome;
+            monthlyOutstanding[monthKey].deposit.originalOwed =
+              (monthlyOutstanding[monthKey].deposit.originalOwed || 0) + depositFromIncome;
+            monthlyOutstanding[monthKey].levies.owed += leviesFromIncome;
+            monthlyOutstanding[monthKey].levies.originalOwed =
+              (monthlyOutstanding[monthKey].levies.originalOwed || 0) + leviesFromIncome;
+          } else {
+            accrual.entries.forEach(entry => {
+              if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
+                const description = (entry.description || '').toLowerCase();
+
+                if (description.includes('admin fee') || description.includes('administrative')) {
+                  monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
+                  monthlyOutstanding[monthKey].adminFee.originalOwed =
+                    (monthlyOutstanding[monthKey].adminFee.originalOwed || 0) + entry.debit;
+                } else if (description.includes('levies') || description.includes('levy')) {
+                  monthlyOutstanding[monthKey].levies.owed += entry.debit;
+                  monthlyOutstanding[monthKey].levies.originalOwed =
+                    (monthlyOutstanding[monthKey].levies.originalOwed || 0) + entry.debit;
+                } else if (description.includes('security deposit') || description.includes('deposit')) {
+                  monthlyOutstanding[monthKey].deposit.owed += entry.debit;
+                  monthlyOutstanding[monthKey].deposit.originalOwed =
+                    (monthlyOutstanding[monthKey].deposit.originalOwed || 0) + entry.debit;
+                } else {
+                  monthlyOutstanding[monthKey].rent.owed += entry.debit;
+                  monthlyOutstanding[monthKey].rent.originalOwed =
+                    (monthlyOutstanding[monthKey].rent.originalOwed || 0) + entry.debit;
+                }
+              }
+            });
+          }
         }
       });
       

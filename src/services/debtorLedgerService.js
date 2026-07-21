@@ -230,40 +230,31 @@ class DebtorLedgerService {
                 }
             }
             
-            // Calculate owing amounts with carry-forward logic
-            // If a month has no accrual but has payments, those payments reduce the next month's balance
-            const sortedMonths = Object.keys(ledgerData.monthlyBreakdown).sort();
-            let carryForwardCredit = 0; // Excess payments from months without accruals (negative = credit available)
-            
-            sortedMonths.forEach(monthKey => {
+            // Apply unassigned advance payments FIFO to accrual months (oldest first).
+            // Advance payments without monthSettled land in the 'advance' bucket and must not
+            // appear as a separate paid month while accrual months still show full owing.
+            const unallocatedAdvance = this.applyUnassignedAdvanceFIFO(ledgerData.monthlyBreakdown);
+
+            Object.keys(ledgerData.monthlyBreakdown).forEach((monthKey) => {
                 const month = ledgerData.monthlyBreakdown[monthKey];
-                
-                if (month.expected > 0) {
-                    // Month has an accrual - calculate owing considering carry-forward credit
-                    // carryForwardCredit is negative when we have credit, so subtract it (which adds it)
-                    month.owing = Math.max(month.expected - month.paid + carryForwardCredit, 0);
-                    // Update carry-forward: if payment + credit exceeds expected, carry forward the excess as credit
-                    carryForwardCredit = Math.min(carryForwardCredit + month.expected - month.paid, 0);
-                } else if (month.paid > 0) {
-                    // Month has no accrual but has payments - these create credit for future months
-                    month.owing = 0; // No accrual means nothing owed for this month
-                    carryForwardCredit = carryForwardCredit - month.paid; // Increase credit (more negative)
-                } else {
-                    // No accrual and no payment
+                if (/^\d{4}-\d{2}$/.test(monthKey)) {
+                    month.owing = Math.max(0, (month.expected || 0) - (month.paid || 0));
+                } else if (monthKey === 'advance') {
                     month.owing = 0;
+                } else {
+                    month.owing = Math.max(0, (month.expected || 0) - (month.paid || 0));
                 }
             });
-            
-            ledgerData.totalOwing = Math.max(ledgerData.totalExpected - ledgerData.totalPaid, 0);
 
-            // Expose unassigned advance payments separately (so UI can show “Advance balance”).
-            // These are payments that were received but not tied to a specific monthSettled.
+            ledgerData.totalOwing = Object.values(ledgerData.monthlyBreakdown)
+                .reduce((sum, month) => sum + (month.owing || 0), 0);
+
             const advanceBucket = ledgerData.monthlyBreakdown['advance'];
             ledgerData.advanceBalance = {
-                paid: advanceBucket?.paid || 0,
-                expected: advanceBucket?.expected || 0,
-                owing: advanceBucket?.owing || 0,
-                transactionCount: advanceBucket?.transactions?.length || 0
+                paid: unallocatedAdvance,
+                expected: 0,
+                owing: 0,
+                transactionCount: advanceBucket?.transactions?.length || (unallocatedAdvance > 0 ? 1 : 0)
             };
             
             console.log(`📊 Ledger computed: Expected=$${ledgerData.totalExpected}, Paid=$${ledgerData.totalPaid}, Owing=$${ledgerData.totalOwing}`);
@@ -276,6 +267,53 @@ class DebtorLedgerService {
         }
     }
     
+    /**
+     * Apply unassigned advance payments (monthKey 'advance') FIFO to accrual months.
+     * @param {Object} monthlyBreakdown
+     * @returns {number} Remaining unallocated advance balance
+     */
+    static applyUnassignedAdvanceFIFO(monthlyBreakdown) {
+        const advanceBucket = monthlyBreakdown.advance;
+        let remainingAdvance = advanceBucket?.paid || 0;
+
+        if (remainingAdvance <= 0) {
+            if (advanceBucket) {
+                delete monthlyBreakdown.advance;
+            }
+            return 0;
+        }
+
+        const accrualMonthKeys = Object.keys(monthlyBreakdown)
+            .filter((monthKey) => /^\d{4}-\d{2}$/.test(monthKey))
+            .sort();
+
+        for (const monthKey of accrualMonthKeys) {
+            const month = monthlyBreakdown[monthKey];
+            const outstanding = Math.max(0, (month.expected || 0) - (month.paid || 0));
+            if (outstanding <= 0) {
+                continue;
+            }
+
+            const applied = Math.min(outstanding, remainingAdvance);
+            month.paid = (month.paid || 0) + applied;
+            remainingAdvance -= applied;
+
+            if (remainingAdvance <= 0) {
+                break;
+            }
+        }
+
+        if (remainingAdvance > 0 && advanceBucket) {
+            advanceBucket.paid = remainingAdvance;
+            advanceBucket.expected = 0;
+            advanceBucket.owing = 0;
+        } else {
+            delete monthlyBreakdown.advance;
+        }
+
+        return remainingAdvance;
+    }
+
     /**
      * Process a single transaction for ledger computation
      * @param {Object} transaction - Transaction entry
