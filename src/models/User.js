@@ -76,6 +76,17 @@ const userSchema = new mongoose.Schema({
   lastLogin: {
     type: Date
   },
+  activeSessionToken: {
+    type: String,
+    default: null
+  },
+  activeSessionDeviceHash: {
+    type: String,
+    default: null
+  },
+  sessionLoginOtp: String,
+  sessionLoginOtpExpires: Date,
+  sessionLoginToken: String,
   residence: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Residence'

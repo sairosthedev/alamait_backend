@@ -4,6 +4,7 @@ const { check } = require('express-validator');
 const {
     register,
     login,
+    verifySessionLoginOtp,
     magicLogin,
     verifyEmail,
     forgotPassword,
@@ -57,6 +58,11 @@ const resetPasswordValidation = [
 // Routes
 router.post('/register', registerValidation, register);
 router.post('/login', loginValidation, login);
+router.post('/verify-session-login-otp', [
+    check('email', 'Please include a valid email').isEmail(),
+    check('otp', 'OTP is required and must be 6 digits').isLength({ min: 6, max: 6 }).isNumeric(),
+    check('sessionLoginToken', 'Session login token is required').notEmpty()
+], verifySessionLoginOtp);
 router.get('/magic-login', magicLogin);
 router.get('/verify-email/:token', verifyEmail);
 router.post('/forgot-password', forgotPasswordValidation, forgotPassword);

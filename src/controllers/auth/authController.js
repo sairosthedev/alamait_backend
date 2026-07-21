@@ -146,6 +146,64 @@ const getDeviceIdentifier = (req) => {
     };
 };
 
+const generateAuthToken = (user) => jwt.sign({
+    user: {
+        id: user.id,
+        role: user.role
+    }
+}, process.env.JWT_SECRET, { expiresIn: '24h' });
+
+const finalizeLoginSession = async (user, token, deviceInfo) => {
+    user.lastLogin = Date.now();
+    user.activeSessionToken = token.slice(-32);
+    user.activeSessionDeviceHash = deviceInfo?.deviceHash || null;
+    user.sessionLoginOtp = undefined;
+    user.sessionLoginOtpExpires = undefined;
+    user.sessionLoginToken = undefined;
+
+    if (user._plainPasswordLogin && user._plainPasswordForMigration) {
+        try {
+            const { hashPasswordSha256 } = require('../../utils/clientPasswordHash');
+            const sha256Hash = hashPasswordSha256(user._plainPasswordForMigration);
+            const salt = await bcrypt.genSalt(10);
+            user.password = await bcrypt.hash(sha256Hash, salt);
+            console.log('✅ Migrated user password from old format to new format (bcrypt(SHA256))');
+            delete user._plainPasswordLogin;
+            delete user._plainPasswordForMigration;
+        } catch (migrationError) {
+            console.error('⚠️ Failed to migrate password:', migrationError);
+        }
+    }
+
+    await user.save();
+};
+
+const sendSessionOtpEmail = async (user, otp, deviceInfo) => {
+    const deviceLabel = [deviceInfo?.deviceType, deviceInfo?.deviceName].filter(Boolean).join(' · ') || 'new device';
+    await sendEmail({
+        to: user.email,
+        subject: 'Login verification code - Alamait Student Accommodation',
+        text: `A sign-in from another device was detected for your account.\n\nYour verification code is: ${otp}\n\nDevice: ${deviceLabel}\nIP: ${deviceInfo?.deviceIp || 'unknown'}\n\nThis code expires in 10 minutes.`,
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+                    <h2 style="color: #333;">Verify new device sign-in</h2>
+                    <p>We detected a sign-in attempt while your account is already active on another device.</p>
+                    <p>Enter this OTP to continue and replace the current session:</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <div style="background-color: #1a365d; color: white; padding: 20px; border-radius: 10px; font-size: 32px; font-weight: bold; letter-spacing: 10px; display: inline-block;">
+                            ${otp}
+                        </div>
+                    </div>
+                    <p><strong>Device:</strong> ${deviceLabel}</p>
+                    <p><strong>IP:</strong> ${deviceInfo?.deviceIp || 'unknown'}</p>
+                    <p><strong>Important:</strong> This code expires in 10 minutes.</p>
+                </div>
+            </div>
+        `
+    });
+};
+
 // Register new user
 exports.register = async (req, res) => {
     const errors = validationResult(req);
@@ -225,15 +283,36 @@ exports.register = async (req, res) => {
             // Continue with registration even if email fails
         }
 
-        // Generate JWT
-        const payload = {
-            user: {
-                id: user.id,
-                role: user.role
-            }
-        };
+        const hasExistingSessionOnAnotherDevice = Boolean(
+            user.activeSessionToken &&
+            user.activeSessionDeviceHash !== deviceInfo.deviceHash
+        );
 
-        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '24h' });
+        if (hasExistingSessionOnAnotherDevice) {
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const sessionLoginToken = crypto.randomBytes(20).toString('hex');
+
+            user.sessionLoginOtp = otp;
+            user.sessionLoginOtpExpires = Date.now() + 600000;
+            user.sessionLoginToken = sessionLoginToken;
+            await user.save();
+
+            try {
+                await sendSessionOtpEmail(user, otp, deviceInfo);
+            } catch (emailError) {
+                console.error('Failed to send login OTP email:', emailError);
+                return res.status(500).json({ error: 'Failed to send OTP email' });
+            }
+
+            return res.status(409).json({
+                error: 'This account is already active on another device. Enter the OTP sent to your email to continue.',
+                code: 'SESSION_OTP_REQUIRED',
+                requiresOtp: true,
+                sessionLoginToken
+            });
+        }
+
+        const token = generateAuthToken(user);
 
         res.status(201).json({
             token,
@@ -355,15 +434,36 @@ exports.login = async (req, res) => {
             return res.status(500).json({ error: 'Error verifying credentials' });
         }
 
-        // Generate JWT
-        const payload = {
-            user: {
-                id: user.id,
-                role: user.role
-            }
-        };
+        const hasExistingSessionOnAnotherDevice = Boolean(
+            user.activeSessionToken &&
+            user.activeSessionDeviceHash !== deviceInfo.deviceHash
+        );
 
-        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '24h' });
+        if (hasExistingSessionOnAnotherDevice) {
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const sessionLoginToken = crypto.randomBytes(20).toString('hex');
+
+            user.sessionLoginOtp = otp;
+            user.sessionLoginOtpExpires = Date.now() + 600000;
+            user.sessionLoginToken = sessionLoginToken;
+            await user.save();
+
+            try {
+                await sendSessionOtpEmail(user, otp, deviceInfo);
+            } catch (emailError) {
+                console.error('Failed to send login OTP email:', emailError);
+                return res.status(500).json({ error: 'Failed to send OTP email' });
+            }
+
+            return res.status(409).json({
+                error: 'This account is already active on another device. Enter the OTP sent to your email to continue.',
+                code: 'SESSION_OTP_REQUIRED',
+                requiresOtp: true,
+                sessionLoginToken
+            });
+        }
+
+        const token = generateAuthToken(user);
 
         const loginTime = new Date().toISOString();
         const userAgent = req.headers['user-agent'] || 'unknown';
@@ -386,28 +486,7 @@ exports.login = async (req, res) => {
         console.log('User Agent:', userAgent);
         console.log('='.repeat(80));
 
-        // Update last login
-        user.lastLogin = Date.now();
-        
-        // Migrate password if user logged in with plain text (old format)
-        // Convert to new format (bcrypt(SHA256)) for future logins with client-side hashing
-        if (user._plainPasswordLogin && user._plainPasswordForMigration) {
-            try {
-                const { hashPasswordSha256 } = require('../../utils/clientPasswordHash');
-                const sha256Hash = hashPasswordSha256(user._plainPasswordForMigration);
-                const salt = await bcrypt.genSalt(10);
-                user.password = await bcrypt.hash(sha256Hash, salt);
-                console.log('✅ Migrated user password from old format to new format (bcrypt(SHA256))');
-                // Clear migration flags
-                delete user._plainPasswordLogin;
-                delete user._plainPasswordForMigration;
-            } catch (migrationError) {
-                console.error('⚠️ Failed to migrate password:', migrationError);
-                // Don't fail login if migration fails
-            }
-        }
-        
-        await user.save();
+        await finalizeLoginSession(user, token, deviceInfo);
         
         // Send response immediately after critical work (auth + user save)
         res.json({
@@ -439,6 +518,60 @@ exports.login = async (req, res) => {
     }
 };
 
+exports.verifySessionLoginOtp = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+        const { email, otp, sessionLoginToken, loginSource } = req.body;
+        const user = await User.findOne({
+            email: email.toLowerCase(),
+            sessionLoginToken,
+            sessionLoginOtpExpires: { $gt: Date.now() }
+        });
+
+        if (!user) {
+            return res.status(400).json({ error: 'Invalid or expired login verification request' });
+        }
+
+        if (user.sessionLoginOtp !== otp) {
+            return res.status(400).json({ error: 'Invalid OTP' });
+        }
+
+        const deviceInfo = getDeviceIdentifier(req);
+        const token = generateAuthToken(user);
+        await finalizeLoginSession(user, token, deviceInfo);
+
+        recordLoginAudit({
+            success: true,
+            user,
+            req,
+            loginSource,
+            statusCode: 200,
+            deviceInfo
+        }).catch((auditError) => {
+            console.error('Failed to log audit entry for OTP login:', auditError);
+        });
+
+        return res.json({
+            token,
+            user: {
+                _id: user.id,
+                email: user.email,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                role: user.role,
+                isVerified: user.isVerified
+            }
+        });
+    } catch (error) {
+        console.error('Error in verifySessionLoginOtp:', error);
+        return res.status(500).json({ error: 'Server error' });
+    }
+};
+
 // Magic login for request emails
 exports.magicLogin = async (req, res) => {
     try {
@@ -457,14 +590,9 @@ exports.magicLogin = async (req, res) => {
             return res.status(404).json({ error: 'User not found for magic login token' });
         }
 
-        // Generate normal auth token
-        const payload = {
-            user: {
-                id: user.id,
-                role: user.role
-            }
-        };
-        const authToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '24h' });
+        const deviceInfo = getDeviceIdentifier(req);
+        const authToken = generateAuthToken(user);
+        await finalizeLoginSession(user, authToken, deviceInfo);
 
         // Redirect to frontend requests page with auth token + request context
         const frontendBase = (process.env.FRONTEND_URL || process.env.CLIENT_URL || 'https://alamait.vercel.app').replace(/\/$/, '');

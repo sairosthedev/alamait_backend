@@ -4,7 +4,7 @@ const Application = require('../models/Application');
 const mongoose = require('mongoose');
 
 const AUTH_DEBUG = process.env.AUTH_DEBUG === 'true';
-const USER_AUTH_SELECT = 'email role firstName lastName status isVerified applicationCode';
+const USER_AUTH_SELECT = 'email role firstName lastName status isVerified applicationCode activeSessionToken';
 
 const auth = async (req, res, next) => {
     try {
@@ -63,6 +63,14 @@ const auth = async (req, res, next) => {
 
         if (!user) {
             return res.status(401).json({ error: 'Please authenticate' });
+        }
+
+        // Enforce single-session: reject if another device logged in after this token was issued.
+        if (user.activeSessionToken && user.activeSessionToken !== token.slice(-32)) {
+            return res.status(401).json({
+                error: 'Your session has been terminated because your account was logged in on another device.',
+                code: 'SESSION_REPLACED'
+            });
         }
 
         req.token = token;
