@@ -38,6 +38,12 @@ const connectDB = async (retryCount = 0) => {
             socketTimeoutMS: conn.connection.config.socketTimeoutMS
         });
 
+        // Create/update indexes in background (do not block HTTP listen)
+        setImmediate(() => {
+            const { ensureCriticalIndexes } = require('../utils/ensureIndexes');
+            ensureCriticalIndexes().catch(() => {});
+        });
+
         // Handle connection events
         mongoose.connection.on('error', (err) => {
             console.error('MongoDB connection error:', {

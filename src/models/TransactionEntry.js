@@ -313,6 +313,15 @@ transactionEntrySchema.index({ date: 1, source: 1, status: 1, residence: 1 });
 transactionEntrySchema.index({ date: 1, 'metadata.isForfeiture': 1, status: 1 });
 transactionEntrySchema.index({ 'entries.accountCode': 1, date: 1, status: 1 }); // For cash balance calculations
 
+// Payment allocation month settlement (AR)
+transactionEntrySchema.index(
+  { 'entries.accountCode': 1, source: 1, 'metadata.monthSettled': 1, status: 1 },
+  { name: 'ar_source_monthSettled_status' }
+);
+transactionEntrySchema.index({ 'metadata.requestId': 1, source: 1, status: 1 });
+transactionEntrySchema.index({ 'metadata.expenseId': 1, source: 1, status: 1 });
+transactionEntrySchema.index({ reference: 1, status: 1 });
+
 // Dashboard optimization indexes
 transactionEntrySchema.index({ date: 1, source: 1, 'entries.accountType': 1 }); // For expense breakdown
 transactionEntrySchema.index({ date: 1, source: 1, residence: 1, status: 1 }); // For cash received queries

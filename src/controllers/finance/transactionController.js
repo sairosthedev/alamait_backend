@@ -22,7 +22,8 @@ class TransactionController {
      */
     static async getAllTransactions(req, res) {
         try {
-            const { page = 1, limit = 50, type, startDate, endDate, residence, source, userId, studentId } = req.query;
+            const { page = 1, type, startDate, endDate, residence, source, userId, studentId } = req.query;
+            const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
             
             console.log('🔍 Fetching all transactions with filters:', req.query);
             
@@ -79,20 +80,13 @@ class TransactionController {
                 const orConditions = [];
                 
                 idStrings.forEach(idStr => {
-                    const shortId = idStr.length >= 8 ? idStr.substring(0, 8) : idStr;
-                    
-                    // AR account code matches
-                    orConditions.push({ 'entries.accountCode': { $regex: `^1100-${idStr}` } });
-                    if (shortId !== idStr) {
-                        orConditions.push({ 'entries.accountCode': { $regex: `^1100-${shortId}` } });
-                    }
+                    // AR account code — equality uses index (avoid regex)
+                    orConditions.push({ 'entries.accountCode': `1100-${idStr}` });
                     
                     // Metadata and reference matches (string)
                     orConditions.push({ 'metadata.studentId': idStr });
                     orConditions.push({ 'metadata.userId': idStr });
                     orConditions.push({ sourceId: idStr });
-                    orConditions.push({ reference: { $regex: idStr, $options: 'i' } });
-                    orConditions.push({ transactionId: { $regex: idStr, $options: 'i' } });
                 });
                 
                 idObjects.forEach(objId => {

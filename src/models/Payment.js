@@ -160,37 +160,33 @@ paymentSchema.pre('save', function(next) {
 // Add indexes for common queries
 paymentSchema.index({ paymentId: 1 });
 paymentSchema.index({ student: 1 });
-paymentSchema.index({ user: 1 });         // ← NEW: Index for user field
+paymentSchema.index({ user: 1 });
 paymentSchema.index({ residence: 1 });
 paymentSchema.index({ date: -1 });
 
-// 🚨 DUPLICATE PREVENTION INDEX
-// Compound index to prevent duplicate payments within a time window
+// Duplicate-prevention compound — NEVER use expireAfterSeconds here (that would TTL-delete payments!)
 paymentSchema.index({
-    student: 1, 
-    totalAmount: 1, 
-    paymentMonth: 1, 
+    student: 1,
+    totalAmount: 1,
+    paymentMonth: 1,
     method: 1,
     createdAt: 1
-}, { 
-    expireAfterSeconds: 300 // 5 minutes
 });
 
-// 🆕 NEW: Compound index for user-based queries
-paymentSchema.index({
-    user: 1,
-    date: -1
-});
+// User-based queries
+paymentSchema.index({ user: 1, date: -1 });
+paymentSchema.index({ user: 1, residence: 1, date: -1 });
 
-// Optimize: Compound index for cash flow queries (date range + status + residence)
+// Cash flow / list queries
 paymentSchema.index({ date: 1, status: 1, residence: 1 });
 
-// 🆕 NEW: Compound index for user + residence queries
-paymentSchema.index({
-    user: 1,
-    residence: 1,
-    date: -1
-});
+// HIGH — payments list default sort (createdAt first) + status filters
+paymentSchema.index({ status: 1, residence: 1, createdAt: -1 });
+paymentSchema.index({ status: 1, date: -1 });
+paymentSchema.index({ createdAt: -1, date: -1 });
+paymentSchema.index({ paymentMonth: 1, status: 1 });
+paymentSchema.index({ student: 1, date: -1 });
+paymentSchema.index({ student: 1, paymentMonth: 1 });
 
 // Add pagination plugin
 paymentSchema.plugin(mongoosePaginate);

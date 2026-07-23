@@ -419,9 +419,10 @@ const getPaymentAllocationHistory = async (req, res) => {
 
         console.log(`📜 Getting payment allocation history for student: ${studentId}`);
 
-        // Build query for allocation transactions
+        // Build query for allocation transactions (exact AR code — uses index)
+        const { arAccountCodeForStudent } = require('../../utils/accountQueryHelpers');
         const query = {
-            'entries.accountCode': { $regex: `^1100-${studentId}` },
+            'entries.accountCode': arAccountCodeForStudent(studentId),
             source: { $in: ['payment', 'manual'] }
         };
 

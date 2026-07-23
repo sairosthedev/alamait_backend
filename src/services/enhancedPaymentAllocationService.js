@@ -974,7 +974,7 @@ class EnhancedPaymentAllocationService {
                   source: 'rental_accrual',
                   'metadata.type': 'lease_start',
                   'metadata.studentId': userId,
-                  'entries.accountCode': { $regex: `^1100-${userId}` }
+                  'entries.accountCode': `1100-${userId}`
                 }).sort({ date: 1 });
                 if (leaseStartAccrual && remainingAmount > 0) {
                   const lsDate = new Date(leaseStartAccrual.date);
@@ -1370,47 +1370,17 @@ class EnhancedPaymentAllocationService {
       // Resolve debtor to get exact AR account code - use User ID consistently
       const Debtor = require('../models/Debtor');
       let debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id user');
-      
-      // 🆕 CRITICAL FIX: If not found by exact match, try fuzzy matching for common ID typos
+
+      // Also try ObjectId if string lookup missed
+      if (!debtorDoc && mongoose.Types.ObjectId.isValid(userIdString)) {
+        debtorDoc = await Debtor.findOne({ user: new mongoose.Types.ObjectId(userIdString) })
+          .select('accountCode _id user');
+      }
+
+      // Never fuzzy-scan all debtors — that loads the full collection on every miss
       if (!debtorDoc) {
-        console.log(`⚠️ Debtor not found by exact user ID match, trying fuzzy match...`);
-        
-        // Try finding debtors with similar user IDs using similarity percentage
-        const allDebtors = await Debtor.find({}).select('accountCode _id user debtorCode').lean();
-        let bestMatch = null;
-        let bestSimilarity = 0;
-        
-        for (const d of allDebtors) {
-          if (d.user) {
-            const dUserId = d.user.toString();
-            // Check if IDs are same length
-            if (dUserId.length === userIdString.length) {
-              // Calculate similarity percentage
-              let matches = 0;
-              for (let i = 0; i < dUserId.length; i++) {
-                if (dUserId[i] === userIdString[i]) matches++;
-              }
-              const similarity = matches / dUserId.length;
-              
-              // If similarity is high enough (90%+), consider it a match
-              if (similarity > 0.9 && similarity > bestSimilarity) {
-                bestMatch = d;
-                bestSimilarity = similarity;
-              }
-            }
-          }
-        }
-        
-        if (bestMatch) {
-          console.log(`✅ Found debtor via fuzzy user ID match (${(bestSimilarity * 100).toFixed(1)}% similar):`);
-          console.log(`   Query ID: ${userIdString}`);
-          console.log(`   Debtor User ID: ${bestMatch.user.toString()}`);
-          console.log(`   Debtor Code: ${bestMatch.debtorCode || bestMatch._id}`);
-          console.log(`   Account Code: ${bestMatch.accountCode}`);
-          debtorDoc = bestMatch;
-        } else {
-          console.log(`⚠️ No debtor found via fuzzy matching (tried ${allDebtors.length} debtors)`);
-        }
+        debtorDoc = await Debtor.findOne({ accountCode: `1100-${userIdString}` })
+          .select('accountCode _id user');
       }
       
       // 🆕 CRITICAL: If debtor not found by user ID, try to find by transactions' sourceId or metadata.debtorId
@@ -2542,9 +2512,10 @@ class EnhancedPaymentAllocationService {
       // This prevents creating multiple advance payments for the same student/amount/date combination.
       // IMPORTANT: Only use userIdStr here; debtor is resolved later and must not be
       // referenced before initialization (would cause a ReferenceError).
+      const { cashAccountCodeMatch } = require('../utils/accountQueryHelpers');
       const existingByStudentAmountDate = await TransactionEntry.findOne({
         'metadata.studentId': userIdStr,
-        'entries.accountCode': { $regex: '^100' }, // Has cash entry
+        'entries.accountCode': cashAccountCodeMatch(),
         'entries.debit': amount, // Same amount
         date: {
           $gte: new Date(paymentDate.getFullYear(), paymentDate.getMonth(), paymentDate.getDate()),

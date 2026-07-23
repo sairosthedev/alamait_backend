@@ -114,7 +114,7 @@ exports.getStudentPayments = async (req, res) => {
                     .populate('updatedBy', 'firstName lastName')
                     .populate('proofOfPayment.verifiedBy', 'firstName lastName')
                     .populate('student', 'firstName lastName email role')
-                    .sort({ date: -1 })
+                    .sort({ createdAt: -1, date: -1 })
                     .skip(skip)
                     .limit(limitNum)
                     .lean(),

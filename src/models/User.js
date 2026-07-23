@@ -178,6 +178,9 @@ userSchema.index({ role: 1 });
 userSchema.index({ status: 1 });
 userSchema.index({ residence: 1 });
 userSchema.index({ currentRoom: 1 });
+userSchema.index({ role: 1, status: 1 });
+userSchema.index({ role: 1, residence: 1 });
+userSchema.index({ applicationCode: 1 }, { sparse: true });
 
 // Virtual for full name
 userSchema.virtual('fullName').get(function() {

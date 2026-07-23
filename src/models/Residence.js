@@ -351,6 +351,8 @@ const residenceSchema = new mongoose.Schema({
 
 // Index for location-based queries
 residenceSchema.index({ location: '2dsphere' });
+residenceSchema.index({ name: 1 });
+residenceSchema.index({ status: 1 });
 
 // Virtual for total rooms
 residenceSchema.virtual('totalRooms').get(function() {

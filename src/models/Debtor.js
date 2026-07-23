@@ -1115,6 +1115,12 @@ debtorSchema.index({ residence: 1, status: 1 }); // Find debtors by residence an
 debtorSchema.index({ status: 1, currentBalance: 1 }); // Find debtors by status and balance
 debtorSchema.index({ user: 1, residence: 1 }); // Find debtor by user and residence
 
+// HIGH — payment allocation lookups + outstanding lists
+debtorSchema.index({ application: 1 });
+debtorSchema.index({ status: 1, currentBalance: -1, residence: 1 });
+debtorSchema.index({ 'contactInfo.email': 1 });
+debtorSchema.index({ 'contactInfo.name': 1 });
+
 // Pre-save middleware to update timestamps
 debtorSchema.pre('save', function(next) {
   this.updatedAt = new Date();

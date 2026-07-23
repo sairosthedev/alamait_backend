@@ -246,6 +246,12 @@ expenseSchema.index({ quotationId: 1 });
 // Optimize: Compound index for cash flow queries (expenseDate + paymentStatus + residence)
 expenseSchema.index({ expenseDate: 1, paymentStatus: 1, residence: 1 });
 
+// HIGH — finance dashboard category / status filters
+expenseSchema.index({ paymentStatus: 1, residence: 1, expenseDate: -1 });
+expenseSchema.index({ category: 1, paymentStatus: 1, expenseDate: -1 });
+expenseSchema.index({ maintenanceRequestId: 1 });
+expenseSchema.index({ monthlyRequestId: 1, itemIndex: 1 });
+
 // Virtual for total amount from items
 expenseSchema.virtual('totalFromItems').get(function() {
     if (this.items && this.items.length > 0) {

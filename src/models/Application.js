@@ -358,10 +358,16 @@ applicationSchema.index({ status: 1, endDate: 1 }); // For accrual correction se
 applicationSchema.index({ status: 1, endDate: 1, updatedAt: -1 }); // For finding updated leases
 applicationSchema.index({ student: 1, status: 1 }); // For finding student applications
 
-// Dashboard optimization indexes
-applicationSchema.index({ residenceId: 1, status: 1, startDate: 1, endDate: 1 }); // For occupancy calculations
-applicationSchema.index({ 'allocatedRoomDetails.residenceId': 1, status: 1 }); // For allocated room queries
-applicationSchema.index({ status: 1, residence: 1, allocatedRoom: 1 }); // For residence room occupancy counts
-applicationSchema.index({ status: 1, applicationDate: -1 }); // For paginated finance application lists
+// Dashboard / occupancy (use real schema field `residence`, not residenceId)
+applicationSchema.index({ status: 1, residence: 1, startDate: 1, endDate: 1 });
+applicationSchema.index({ 'allocatedRoomDetails.residenceId': 1, status: 1 });
+applicationSchema.index({ status: 1, residence: 1, allocatedRoom: 1 });
+applicationSchema.index({ status: 1, applicationDate: -1 });
+
+// HIGH — finance application list filters
+applicationSchema.index({ status: 1, requestType: 1, applicationDate: -1 });
+applicationSchema.index({ createdAt: -1 });
+applicationSchema.index({ paymentStatus: 1, status: 1 });
+applicationSchema.index({ debtor: 1 });
 
 module.exports = mongoose.model('Application', applicationSchema); 

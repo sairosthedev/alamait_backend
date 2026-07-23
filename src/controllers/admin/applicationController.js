@@ -14,26 +14,37 @@ const Payment = require('../../models/Payment');
 const { getStudentInfo } = require('../../utils/studentUtils');
 const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
 
-// Get all applications with room status
+// Get all applications with room status (paginated — never dump full collection)
 exports.getApplications = async (req, res) => {
     try {
         const { type, status } = req.query;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+        const skip = (page - 1) * limit;
         const query = {};
 
         if (type) query.requestType = type;
         if (status) query.status = status;
 
-        // Get applications
-        const applications = await Application.find(query)
-            .sort({ applicationDate: -1 });
+        const [applications, total] = await Promise.all([
+            Application.find(query)
+                .select(
+                    'firstName lastName email phone requestType status paymentStatus applicationDate startDate endDate preferredRoom alternateRooms currentRoom requestedRoom reason allocatedRoom waitlistedRoom roomOccupancy applicationCode residence'
+                )
+                .sort({ applicationDate: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Application.countDocuments(query)
+        ]);
 
-        // Get all residences to check room status
-        const residences = await Residence.find({}, 'name rooms');
+        // Residences are small — cache-friendly slim projection
+        const residences = await Residence.find({}, 'name rooms.roomNumber rooms.status rooms.currentOccupancy rooms.capacity rooms.price rooms.type').lean();
         
         // Create a map of room statuses
         const roomStatusMap = {};
         residences.forEach(residence => {
-            residence.rooms.forEach(room => {
+            (residence.rooms || []).forEach(room => {
                 roomStatusMap[room.roomNumber] = {
                     residence: residence.name,
                     residenceId: residence._id,
@@ -68,7 +79,7 @@ exports.getApplications = async (req, res) => {
             requestType: app.requestType,
             status: app.status,
             paymentStatus: app.paymentStatus,
-            applicationDate: app.applicationDate.toISOString().split('T')[0],
+            applicationDate: app.applicationDate ? app.applicationDate.toISOString().split('T')[0] : null,
             startDate: app.startDate ? app.startDate.toISOString().split('T')[0] : null,
             endDate: app.endDate ? app.endDate.toISOString().split('T')[0] : null,
             preferredRoom: app.preferredRoom,
@@ -91,9 +102,15 @@ exports.getApplications = async (req, res) => {
         });
 
         // Return response in the format expected by frontend (similar to residences API)
+        res.set('Cache-Control', 'private, max-age=30');
         res.json({
             success: true,
             count: transformedApplications.length,
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit) || 1,
+            data: transformedApplications,
             applications: transformedApplications,
             rooms: Object.entries(roomStatusMap).map(([roomNumber, details]) => ({
                 name: roomNumber,
@@ -103,7 +120,7 @@ exports.getApplications = async (req, res) => {
             residences: residences.map(residence => ({
                 id: residence._id,
                 name: residence.name,
-                roomCount: residence.rooms.length
+                roomCount: (residence.rooms || []).length
             }))
         });
     } catch (error) {

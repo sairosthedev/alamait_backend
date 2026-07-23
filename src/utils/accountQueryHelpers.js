@@ -14,6 +14,11 @@ function arAccountCodeMatch() {
     return { $gte: '1100-', $lt: '1101' };
 }
 
+/** Exact AR account for one student (index-friendly equality) */
+function arAccountCodeForStudent(studentId) {
+    return `1100-${studentId}`;
+}
+
 function cashAccountCodeMatch() {
     return { $in: CASH_ACCOUNT_CODES };
 }
@@ -28,6 +33,7 @@ function debugLog(...args) {
 module.exports = {
     CASH_ACCOUNT_CODES,
     arAccountCodeMatch,
+    arAccountCodeForStudent,
     cashAccountCodeMatch,
     debugLog
 };

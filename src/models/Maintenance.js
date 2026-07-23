@@ -225,6 +225,9 @@ maintenanceSchema.index({ assignedTo: 1 });
 
 // Dashboard optimization indexes
 maintenanceSchema.index({ residence: 1, createdAt: 1 }); // For maintenance by residence by month
+maintenanceSchema.index({ createdAt: -1 });
+maintenanceSchema.index({ status: 1, createdAt: -1 });
+maintenanceSchema.index({ residence: 1, status: 1, createdAt: -1 });
 
 // Add compound index for duplicate detection
 // This prevents multiple active requests for the same issue in the same room

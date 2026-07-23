@@ -14,9 +14,19 @@ exports.getDashboardStats = async (req, res) => {
         const totalMaintenance = await Maintenance.countDocuments();
         const totalResidences = await Residence.countDocuments();
 
-        // Calculate total income from payments
-        const payments = await Payment.find({ status: 'completed' });
-        const totalIncome = payments.reduce((sum, payment) => sum + payment.totalAmount, 0);
+        // Calculate total income from payments (aggregation — never load all payments)
+        const [incomeAgg] = await Payment.aggregate([
+            { $match: { status: { $in: ['completed', 'Completed', 'Confirmed', 'Verified'] } } },
+            {
+                $group: {
+                    _id: null,
+                    totalIncome: {
+                        $sum: { $ifNull: ['$totalAmount', { $ifNull: ['$amount', 0] }] }
+                    }
+                }
+            }
+        ]);
+        const totalIncome = incomeAgg?.totalIncome || 0;
 
         // Get recent activities
         const recentBookings = await Booking.find()
