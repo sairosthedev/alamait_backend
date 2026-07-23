@@ -5,8 +5,19 @@ const TenantAccrualCheckService = require('../services/tenantAccrualCheckService
 const AccrualIntegrityService = require('../services/accrualIntegrityService');
 const FinancialReportPrecomputeService = require('../services/financialReportPrecomputeService');
 
+let cronJobsInitialized = false;
+
 // Schedule tasks to be run on the server
 const initCronJobs = () => {
+    // app.js and index.js both used to call this — guard against double schedules
+    if (cronJobsInitialized) {
+        console.log('⚠️ Cron jobs already initialized — skipping duplicate registration');
+        return;
+    }
+    cronJobsInitialized = true;
+
+    const isDev = process.env.NODE_ENV === 'development';
+
     // Run expired applications check every day at midnight
     cron.schedule('0 0 * * *', async () => {
         console.log('Running expired applications check...');
@@ -15,8 +26,9 @@ const initCronJobs = () => {
         await sendExpiryWarnings();
     });
 
-    // Check all current tenants for missing accruals every 5 minutes
-    cron.schedule('*/5 * * * *', async () => {
+    // Full tenant accrual sweep — daily (hourly monthlyAccrualCron already covers new months).
+    // Running every 5 minutes on Atlas Flex saturates shared IOPS and slows every API.
+    cron.schedule(isDev ? '0 */6 * * *' : '0 3 * * *', async () => {
         try {
             console.log('🔄 Running tenant accrual check...');
             await TenantAccrualCheckService.checkAllTenantsForMissingAccruals();
@@ -25,7 +37,7 @@ const initCronJobs = () => {
         }
     }, {
         scheduled: true,
-        timezone: "Africa/Harare"
+        timezone: 'Africa/Harare'
     });
 
     // Strong accrual integrity job (daily): ensure lease_start + monthly, then reverse duplicates.
@@ -38,33 +50,46 @@ const initCronJobs = () => {
         }
     }, {
         scheduled: true,
-        timezone: "Africa/Harare"
-    });
-
-    // Pre-warm heavy financial report caches every hour
-    cron.schedule('15 * * * *', async () => {
-        try {
-            await FinancialReportPrecomputeService.warmCurrentReports();
-        } catch (error) {
-            console.error('❌ Error in financial report pre-compute job:', error);
-        }
-    }, {
-        scheduled: true,
         timezone: 'Africa/Harare'
     });
 
-    // Full nightly warm-up for dashboard and finance pages
-    cron.schedule('30 1 * * *', async () => {
-        try {
-            console.log('📦 Running nightly financial report pre-compute...');
-            await FinancialReportPrecomputeService.warmCurrentReports();
-        } catch (error) {
-            console.error('❌ Error in nightly financial report pre-compute:', error);
-        }
-    }, {
-        scheduled: true,
-        timezone: 'Africa/Harare'
-    });
+    // Pre-warm financial reports sparingly on Render (same process as the API).
+    // Hourly full recomputes of cashflow/IS/BS saturate shared CPU + Flex IOPS.
+    if (!isDev && process.env.ENABLE_REPORT_PRECOMPUTE !== 'false') {
+        cron.schedule('0 */6 * * *', async () => {
+            try {
+                await FinancialReportPrecomputeService.warmCurrentReports();
+            } catch (error) {
+                console.error('❌ Error in financial report pre-compute job:', error);
+            }
+        }, {
+            scheduled: true,
+            timezone: 'Africa/Harare'
+        });
+
+        cron.schedule('30 1 * * *', async () => {
+            try {
+                console.log('📦 Running nightly financial report pre-compute...');
+                await FinancialReportPrecomputeService.warmCurrentReports();
+            } catch (error) {
+                console.error('❌ Error in nightly financial report pre-compute:', error);
+            }
+        }, {
+            scheduled: true,
+            timezone: 'Africa/Harare'
+        });
+
+        // Delay startup warm so first requests are not blocked
+        const warmDelayMs = Number(process.env.REPORT_WARM_STARTUP_DELAY_MS) || 180000;
+        setTimeout(() => {
+            FinancialReportPrecomputeService.warmCurrentReports().catch((error) => {
+                console.error('❌ Error warming financial report cache on startup:', error);
+            });
+        }, warmDelayMs);
+        console.log(`ℹ️ Report pre-compute: every 6h + nightly; startup warm in ${Math.round(warmDelayMs / 1000)}s`);
+    } else {
+        console.log('ℹ️ Skipping financial report pre-compute crons');
+    }
 
     // Start email outbox retries every 60s in production
     try {
@@ -72,15 +97,8 @@ const initCronJobs = () => {
     } catch (err) {
         console.error('Failed to start EmailOutboxService:', err);
     }
-
-    // Warm caches shortly after startup
-    setTimeout(() => {
-        FinancialReportPrecomputeService.warmCurrentReports().catch((error) => {
-            console.error('❌ Error warming financial report cache on startup:', error);
-        });
-    }, 15000);
 };
 
 module.exports = {
     initCronJobs
-}; 
+};

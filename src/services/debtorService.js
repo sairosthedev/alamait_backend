@@ -55,7 +55,7 @@ async function ensureStudentARAccount(debtorId, studentName, originalUserId = nu
         studentName: studentName,
         parentAccount: '1100',
         accountCode: code
-    });
+    }, null, acc);
     
     return acc;
 }

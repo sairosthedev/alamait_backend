@@ -402,4 +402,9 @@ transactionEntrySchema.post('deleteMany', function() {
   invalidateReportsOnChange();
 });
 
+// insertMany bypasses save hooks — clear cashflow/report caches after bulk inserts
+transactionEntrySchema.post('insertMany', function() {
+  invalidateReportsOnChange();
+});
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

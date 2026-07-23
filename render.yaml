@@ -2,6 +2,7 @@ services:
   - type: web
     name: alamait-backend
     runtime: node
+    plan: starter
     buildCommand: npm install
     startCommand: npm start
     envVars:
@@ -17,6 +18,13 @@ services:
         sync: false
       - key: EMAIL_APP_PASSWORD
         sync: false
+      # Keep API responsive on a single Render web dyno
+      - key: ENABLE_REPORT_PRECOMPUTE
+        value: "false"
+      - key: RUN_ACCRUAL_CHECK_ON_STARTUP
+        value: "false"
+      - key: MONGO_MAX_POOL_SIZE
+        value: "15"
     headers:
       - path: /*
         name: Access-Control-Allow-Origin
@@ -27,4 +35,4 @@ services:
         destination: /api-docs
       - type: rewrite
         source: /*
-        destination: / 
+        destination: /

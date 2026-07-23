@@ -6,7 +6,6 @@ const compression = require('compression');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
-const { initCronJobs } = require('./utils/cronJobs');
 const { auditMiddleware } = require('./middleware/auditMiddleware');
 const { performanceMonitor } = require('./middleware/performanceMiddleware');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
@@ -108,15 +107,7 @@ const monthlyRequestRoutes = require('./routes/monthlyRequestRoutes');
 
 const app = express();
 
-// Initialize cron jobs
-initCronJobs();
-
-// Initialize student status job
-const StudentStatusJob = require('./jobs/studentStatusJob');
-StudentStatusJob.initialize();
-
-// Start monthly accrual cron service
-const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
+// Cron jobs are started from index.js AFTER DB connect (do not init here — was double-registering)
 
 // CORS configuration
 const allowedOrigins = [

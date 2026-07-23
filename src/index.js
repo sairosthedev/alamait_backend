@@ -19,6 +19,15 @@ const startServer = async () => {
             console.error('❌ Failed to initialize cron jobs:', err);
         }
 
+        // Student status job (lease expiry / status updates)
+        try {
+            const StudentStatusJob = require('./jobs/studentStatusJob');
+            StudentStatusJob.initialize();
+            console.log('✅ Student status job initialized');
+        } catch (error) {
+            console.error('❌ Failed to initialize student status job:', error);
+        }
+
         // Start monthly accrual cron service after database connection
         const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
         try {

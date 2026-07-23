@@ -7,6 +7,7 @@ const Application = require('../../models/Application');
 const EnhancedCashFlowService = require('../../services/enhancedCashFlowService');
 const AccountingService = require('../../services/accountingService');
 const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
+const FastExecutiveDashboardService = require('../../services/fastExecutiveDashboardService');
 
 // OPTIMIZED: Use centralized cache service instead of local Map
 const cacheService = require('../../services/cacheService');
@@ -18,6 +19,7 @@ function getCacheKey(year, month) {
 /**
  * Get comprehensive executive dashboard data by month
  * GET /api/admin/dashboard/executive?year=2025&month=11
+ * Fast path: aggregations only (no full cashflow rebuild).
  */
 exports.getExecutiveDashboard = async (req, res) => {
     try {
@@ -25,80 +27,52 @@ exports.getExecutiveDashboard = async (req, res) => {
         const yearNum = parseInt(year);
         const monthNum = parseInt(month);
 
-        // Check cache first (5 minute TTL)
         const cacheKey = getCacheKey(yearNum, monthNum);
         const cached = cacheService.get(cacheKey);
         if (cached) {
+            res.set('X-Cache', 'HIT');
+            res.set('Cache-Control', 'private, max-age=60');
             return res.json(cached);
         }
 
-        // Get all residences
-        const residences = await Residence.find().lean();
+        // Slim residence list for dashboard (rooms count only)
+        const residences = await Residence.find()
+            .select('name rooms.roomNumber rooms.status')
+            .lean();
 
-        // OPTIMIZATION: Run all independent operations in parallel
-        // 1. Revenue and Expense Summary - Parallelize all 12 months
-        const monthlyBreakdownPromises = Array.from({ length: 12 }, (_, i) => {
-            const m = i + 1;
-            return AccountingService.generateMonthlyIncomeStatement(m, yearNum)
-                .then(monthData => ({
-                    month: m,
-                    monthName: new Date(yearNum, m - 1, 1).toLocaleString('en-US', { month: 'short' }),
-                    revenue: monthData?.revenue?.total || 0,
-                    expenses: monthData?.expenses?.total || 0,
-                    netIncome: monthData?.netIncome || 0
-                }))
-                .catch(error => {
-                    // Silently fail and return zeros
-                    return {
-                        month: m,
-                        monthName: new Date(yearNum, m - 1, 1).toLocaleString('en-US', { month: 'short' }),
-                        revenue: 0,
-                        expenses: 0,
-                        netIncome: 0
-                    };
-                });
-        });
-
-        // OPTIMIZED: Cache cash flow data separately (it's expensive and used by multiple functions)
-        const cashFlowCacheKey = `cash-flow:${yearNum}:all`;
-        let cashFlowData = cacheService.get(cashFlowCacheKey);
-        if (!cashFlowData) {
-            cashFlowData = await EnhancedCashFlowService.generateDetailedCashFlowStatement(String(yearNum), 'cash', null).catch(() => ({ monthly_breakdown: {} }));
-            // Cache cash flow for 10 minutes (it's expensive to generate)
-            cacheService.set(cashFlowCacheKey, cashFlowData, 600);
-        }
-
-        // Run all independent operations in parallel
-        // OPTIMIZED: Removed cashBalanceSummary, occupancyByResidence, transactions, roomPrices
-        // OPTIMIZED: Use cached cash flow data instead of regenerating
-        // NOTE: propertyPerformance must be resolved first before getAlertsAndNotifications can use it
         const [
-            monthlyBreakdownResults,
-            propertyPerformance,
+            monthlyPnL,
+            cashFlowMonthlyData,
+            residencePnL,
+            cashByResidence,
+            expenseBreakdown,
+            occupancyByResidence,
+            maintenancesByResidence,
             recentMaintenances,
-            operationalOverview,
             applications,
             debtorSummary
         ] = await Promise.all([
-            Promise.all(monthlyBreakdownPromises),
-            getPropertyPerformance(residences, yearNum, monthNum),
-            getRecentMaintenances(10),
-            getOperationalOverview(residences, yearNum, monthNum),
-            getApplications(yearNum, monthNum),
-            getDebtorSummary()
+            FastExecutiveDashboardService.getYearMonthlyPnL(yearNum),
+            FastExecutiveDashboardService.getYearMonthlyCashFlow(yearNum),
+            FastExecutiveDashboardService.getResidenceMonthPnL(yearNum, monthNum),
+            FastExecutiveDashboardService.getCashReceivedByResidence(yearNum, monthNum),
+            FastExecutiveDashboardService.getExpenseBreakdown(yearNum, monthNum, residences),
+            FastExecutiveDashboardService.getOccupancyByResidence(residences),
+            FastExecutiveDashboardService.getMaintenancesByResidence(yearNum, monthNum, residences),
+            FastExecutiveDashboardService.getRecentMaintenances(10),
+            FastExecutiveDashboardService.getApplications(yearNum, monthNum),
+            FastExecutiveDashboardService.getDebtorSummary()
         ]);
 
-        // Get alerts after propertyPerformance is resolved (it depends on propertyPerformance)
-        const alerts = await getAlertsAndNotifications(residences, propertyPerformance);
-
-        // Build monthly breakdown object
         const monthlyBreakdown = {};
-        monthlyBreakdownResults.forEach(result => {
-            monthlyBreakdown[result.month] = result;
+        Object.values(monthlyPnL).forEach((row) => {
+            monthlyBreakdown[row.month] = row;
         });
-        
-        // Get current month data
-        const currentMonthData = monthlyBreakdown[monthNum] || {};
+        const currentMonthData = monthlyBreakdown[monthNum] || {
+            revenue: 0,
+            expenses: 0,
+            netIncome: 0
+        };
         const revenueExpenseSummary = {
             revenue: currentMonthData.revenue || 0,
             expenses: currentMonthData.expenses || 0,
@@ -106,155 +80,126 @@ exports.getExecutiveDashboard = async (req, res) => {
             monthlyBreakdown
         };
 
-        // 2. Net Profit Margin
+        const propertyPerformance = residences.map((residence) => {
+            const resId = residence._id.toString();
+            const pnl = residencePnL[resId] || { revenue: 0, expenses: 0, net: 0 };
+            const occ = occupancyByResidence[resId] || {
+                occupiedRooms: new Set(),
+                totalOccupants: 0,
+                totalRooms: 0
+            };
+            const totalRooms = occ.totalRooms || (residence.rooms || []).length;
+            const occupiedRooms = occ.occupiedRooms?.size || 0;
+            const occupancyRate = totalRooms > 0 ? (occupiedRooms / totalRooms) * 100 : 0;
+            return {
+                residenceId: residence._id,
+                name: residence.name,
+                revenue: pnl.revenue,
+                expenses: pnl.expenses,
+                net: pnl.net,
+                occupancy: Math.round(occupancyRate),
+                rooms: totalRooms,
+                occupants: occ.totalOccupants || 0
+            };
+        });
+
+        const operationalOverview = residences
+            .map((residence) => {
+                const resId = residence._id.toString();
+                const revenue = residencePnL[resId]?.revenue || 0;
+                const cashReceived = cashByResidence[resId] || 0;
+                const owing = Math.max(0, revenue - cashReceived);
+                const collectionRate = revenue > 0 ? (cashReceived / revenue) * 100 : 0;
+                return {
+                    residenceId: residence._id,
+                    name: residence.name,
+                    revenue,
+                    cashReceived,
+                    owing,
+                    collectionRate: Math.round(collectionRate)
+                };
+            })
+            .filter((o) => o.revenue > 0 || o.cashReceived > 0);
+
+        const alerts = await getAlertsAndNotifications(residences, propertyPerformance);
         const netProfitMargin = calculateNetProfitMargin(revenueExpenseSummary);
-
-        // 7. Cash Flow Monthly Data - Extract from cash flow service response
-        const cashFlowMonthlyBreakdown = cashFlowData?.monthly_breakdown || {};
-        const cashFlowMonthlyData = [];
-        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        const monthKeys = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
-        
-        for (let m = 0; m < 12; m++) {
-            const monthKey = monthKeys[m];
-            const monthData = cashFlowMonthlyBreakdown[monthKey];
-            
-            let revenue = 0;
-            let expenses = 0;
-            let profit = 0;
-            
-            if (monthData?.operating_activities) {
-                revenue = monthData.operating_activities.inflows || 0;
-                expenses = monthData.operating_activities.outflows || 0;
-                profit = monthData.operating_activities.net || (revenue - expenses);
-            } else if (monthData) {
-                revenue = monthData.income?.total || 0;
-                expenses = monthData.expenses?.total || 0;
-                profit = revenue - expenses;
-            }
-            
-            cashFlowMonthlyData.push({
-                period: monthNames[m],
-                revenue: revenue,
-                expenses: expenses,
-                profit: profit
-            });
-        }
-
-        // 8. Expense Breakdown - Use the cash flow data we already fetched, pass residences for by-residence breakdown
-        const expenseBreakdown = await getExpenseBreakdown(yearNum, monthNum, cashFlowData, residences);
-
-        // 11. Financial Health Score
         const financialHealth = calculateFinancialHealth(
             revenueExpenseSummary,
             propertyPerformance,
             alerts
         );
 
-        // 12-17. Monthly breakdown data (OPTIMIZED: Only fetch current month data)
-        // Only revenueExpenseSummary and cashFlowMonthlyData fetch all 12 months (for graphs)
-        // Everything else only fetches the current month to optimize performance
-        const [
-            revenueByResidenceCurrentMonth,
-            cashReceivedByResidenceCurrentMonth,
-            maintenancesByResidenceCurrentMonth,
-            monthlyDataByResidenceCurrentMonth
-        ] = await Promise.all([
-            getRevenueByResidenceForMonth(residences, yearNum, monthNum),
-            getCashReceivedByResidenceForMonth(residences, yearNum, monthNum),
-            getMaintenancesByResidenceForMonth(residences, yearNum, monthNum),
-            getMonthlyDataByResidenceForMonth(residences, yearNum, monthNum)
-        ]);
-        
-        // Format as monthly structures (only current month populated)
         const revenueByResidenceByMonth = {};
         const cashReceivedByResidenceByMonth = {};
         const maintenancesByResidenceByMonth = {};
         const monthlyDataByResidence = {};
-        
-        residences.forEach(residence => {
+
+        residences.forEach((residence) => {
             const resId = residence._id.toString();
-            revenueByResidenceByMonth[resId] = {};
-            cashReceivedByResidenceByMonth[resId] = {};
-            maintenancesByResidenceByMonth[resId] = {};
-            monthlyDataByResidence[resId] = {};
-            
-            // Only populate current month
-            revenueByResidenceByMonth[resId][monthNum] = revenueByResidenceCurrentMonth[resId] || 0;
-            cashReceivedByResidenceByMonth[resId][monthNum] = cashReceivedByResidenceCurrentMonth[resId] || 0;
-            maintenancesByResidenceByMonth[resId][monthNum] = maintenancesByResidenceCurrentMonth[resId] || [];
-            monthlyDataByResidence[resId][monthNum] = monthlyDataByResidenceCurrentMonth[resId] || {
-                month: monthNum,
-                monthName: new Date(yearNum, monthNum - 1, 1).toLocaleString('en-US', { month: 'short' }),
-                revenue: { total: 0, breakdown: {} },
-                expenses: { total: 0, breakdown: {} },
-                netIncome: 0
+            const pnl = residencePnL[resId] || { revenue: 0, expenses: 0, net: 0 };
+            revenueByResidenceByMonth[resId] = { [monthNum]: pnl.revenue || 0 };
+            cashReceivedByResidenceByMonth[resId] = { [monthNum]: cashByResidence[resId] || 0 };
+            maintenancesByResidenceByMonth[resId] = {
+                [monthNum]: maintenancesByResidence[resId] || []
+            };
+            monthlyDataByResidence[resId] = {
+                [monthNum]: {
+                    month: monthNum,
+                    monthName: new Date(yearNum, monthNum - 1, 1).toLocaleString('en-US', {
+                        month: 'short'
+                    }),
+                    revenue: { total: pnl.revenue || 0, breakdown: {} },
+                    expenses: { total: pnl.expenses || 0, breakdown: {} },
+                    netIncome: pnl.net || 0
+                }
             };
         });
-
-        // Applications and debtor summary are now fetched in parallel above
-
-        // 23. Financial Stats - Use revenue from revenueExpenseSummary
-        const financialStats = {
-            totalRevenue: revenueExpenseSummary.revenue,
-            totalExpenses: revenueExpenseSummary.expenses,
-            netIncome: revenueExpenseSummary.netIncome
-        };
-
-        // 24. Dashboard Stats
-        const dashboardStats = {
-            totalIncome: revenueExpenseSummary.revenue,
-            totalExpenses: revenueExpenseSummary.expenses,
-            netProfit: revenueExpenseSummary.netIncome
-        };
-
-        // 25. Portfolio Value (removed - was calculated from room prices)
-        const portfolioValue = 0;
 
         const response = {
             success: true,
             period: {
                 year: yearNum,
                 month: monthNum,
-                monthName: new Date(yearNum, monthNum - 1, 1).toLocaleString('en-US', { month: 'long' })
+                monthName: new Date(yearNum, monthNum - 1, 1).toLocaleString('en-US', {
+                    month: 'long'
+                })
             },
             data: {
-                // Existing data
                 revenueExpenseSummary,
                 netProfitMargin,
-                // OPTIMIZED: Removed cashBalanceSummary, occupancyByResidence, transactions, roomPrices
                 propertyPerformance,
                 recentMaintenances,
                 expenseBreakdown,
                 operationalOverview,
                 alerts,
                 financialHealth,
-                // New monthly breakdown data
                 revenueByResidence: revenueByResidenceByMonth,
-                // expensesByResidence removed - use expenseBreakdown.byResidence instead
                 cashReceivedByResidence: cashReceivedByResidenceByMonth,
-                // occupancyByResidenceByMonth removed for optimization
                 maintenancesByResidenceByMonth,
                 monthlyDataByResidence,
                 cashFlowMonthlyData,
-                // Additional data for frontend
                 applications,
-                // transactions removed for optimization
                 debtorSummary,
-                // roomPrices removed for optimization
-                financialStats,
-                dashboardStats,
-                portfolioValue,
-                // Alias for compatibility
+                financialStats: {
+                    totalRevenue: revenueExpenseSummary.revenue,
+                    totalExpenses: revenueExpenseSummary.expenses,
+                    netIncome: revenueExpenseSummary.netIncome
+                },
+                dashboardStats: {
+                    totalIncome: revenueExpenseSummary.revenue,
+                    totalExpenses: revenueExpenseSummary.expenses,
+                    netProfit: revenueExpenseSummary.netIncome
+                },
+                portfolioValue: 0,
                 maintenance: recentMaintenances
             }
         };
 
-        // Cache the result (5 minute TTL)
-        cacheService.set(cacheKey, response, 300);
-
+        // 10 minute cache — dashboard is expensive even on the fast path
+        cacheService.set(cacheKey, response, 600);
+        res.set('X-Cache', 'MISS');
+        res.set('Cache-Control', 'private, max-age=60');
         res.json(response);
-
     } catch (error) {
         console.error('Error in getExecutiveDashboard:', error);
         res.status(500).json({
@@ -743,16 +688,12 @@ async function getAlertsAndNotifications(residences, propertyPerformance = null)
     const alerts = [];
 
     try {
-        // 1. Rent arrears above threshold
-        const allDebtors = await Debtor.find({ status: { $ne: 'paid' } }).lean();
-        let totalArrears = 0;
-
-        for (const debtor of allDebtors) {
-            const balance = debtor.currentBalance || 0;
-            if (balance > 0) {
-                totalArrears += balance;
-            }
-        }
+        // 1. Rent arrears above threshold (aggregation — no full debtor load)
+        const [arrearsAgg] = await Debtor.aggregate([
+            { $match: { status: { $ne: 'paid' }, currentBalance: { $gt: 0 } } },
+            { $group: { _id: null, totalArrears: { $sum: '$currentBalance' } } }
+        ]);
+        const totalArrears = arrearsAgg?.totalArrears || 0;
 
         const arrearsThreshold = 5000; // $5K threshold
         if (totalArrears > arrearsThreshold) {
@@ -765,13 +706,11 @@ async function getAlertsAndNotifications(residences, propertyPerformance = null)
             });
         }
 
-        // 2. Low occupancy alerts
-        // OPTIMIZED: Use propertyPerformance if provided to avoid duplicate room queries
+        // 2. Low occupancy alerts from propertyPerformance
         if (propertyPerformance && propertyPerformance.length > 0) {
-            // Use occupancy data already calculated in getPropertyPerformance
             propertyPerformance.forEach(property => {
                 const occupancyRate = property.occupancy || 0;
-                const lowOccupancyThreshold = 50; // 50% threshold
+                const lowOccupancyThreshold = 50;
 
                 if (occupancyRate < lowOccupancyThreshold) {
                     alerts.push({
@@ -781,76 +720,6 @@ async function getAlertsAndNotifications(residences, propertyPerformance = null)
                         residenceId: property.residenceId,
                         residenceName: property.name,
                         occupancyRate: occupancyRate,
-                        threshold: lowOccupancyThreshold
-                    });
-                }
-            });
-        } else {
-            // Fallback: Calculate occupancy if propertyPerformance not provided
-            // OPTIMIZED: Use single aggregation query instead of per-room queries
-            const residenceIds = residences.map(r => r._id);
-            const now = new Date();
-            
-            const activeApplications = await Application.find({
-                $or: residences.map(r => ({
-                    $or: [
-                        { residenceId: r._id },
-                        { 'allocatedRoomDetails.residenceId': r._id.toString() },
-                        { residence: r._id }
-                    ]
-                })),
-                status: { $in: ['approved', 'allocated', 'active', 'enrolled'] },
-                $and: [
-                    {
-                        $or: [
-                            { endDate: null },
-                            { endDate: { $gte: now } }
-                        ]
-                    },
-                    {
-                        $or: [
-                            { startDate: null },
-                            { startDate: { $lte: now } }
-                        ]
-                    }
-                ]
-            }).select('residenceId allocatedRoomDetails residence allocatedRoom').lean();
-            
-            // Group by residence and calculate occupancy
-            const occupancyByResidence = {};
-            residences.forEach(residence => {
-                const resId = residence._id.toString();
-                occupancyByResidence[resId] = {
-                    occupiedRooms: new Set(),
-                    totalRooms: residence.rooms.length
-                };
-            });
-            
-            activeApplications.forEach(app => {
-                const resId = app.residenceId?.toString() || 
-                             app.allocatedRoomDetails?.residenceId?.toString() ||
-                             app.residence?.toString();
-                if (resId && occupancyByResidence[resId] && app.allocatedRoom) {
-                    occupancyByResidence[resId].occupiedRooms.add(app.allocatedRoom);
-                }
-            });
-            
-            // Generate alerts
-            residences.forEach(residence => {
-                const resId = residence._id.toString();
-                const data = occupancyByResidence[resId] || { occupiedRooms: new Set(), totalRooms: 0 };
-                const occupiedRooms = data.occupiedRooms.size;
-                const occupancyRate = data.totalRooms > 0 ? (occupiedRooms / data.totalRooms) * 100 : 0;
-                const lowOccupancyThreshold = 50;
-
-                if (occupancyRate < lowOccupancyThreshold) {
-                    alerts.push({
-                        type: 'low_occupancy',
-                        severity: 'medium',
-                        message: `Low occupancy alert at ${residence.name}`,
-                        residenceId: residence._id,
-                        residenceName: residence.name,
-                        occupancyRate: Math.round(occupancyRate),
                         threshold: lowOccupancyThreshold
                     });
                 }

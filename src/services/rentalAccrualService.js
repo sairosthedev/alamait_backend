@@ -480,7 +480,7 @@ class RentalAccrualService {
             parentAccount: '1100',
             accountCode: childCode,
             format: debtor?._id ? 'debtor_id' : 'user_id'
-        });
+        }, null, child);
         
         return child;
     }
@@ -1078,7 +1078,7 @@ class RentalAccrualService {
                 studentName: `${application.firstName} ${application.lastName}`,
                 totalDebit: totalDebit,
                 totalCredit: totalCredit
-            });
+            }, null, transactionEntry);
             
             // Update transaction with entry reference
             transaction.entries = [transactionEntry._id];

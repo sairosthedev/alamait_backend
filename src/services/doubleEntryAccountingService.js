@@ -3043,7 +3043,7 @@ class DoubleEntryAccountingService {
                 accountCode: code,
                 accountName: name,
                 accountType: type
-            });
+            }, null, account);
         }
         
         return account;

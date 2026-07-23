@@ -17,6 +17,7 @@ class MonthlyAccrualCronService {
         this.nextRun = null;
         this.job = null;
         this.lastBackfillRun = null;
+        this._jobInProgress = false;
     }
     
     /**
@@ -29,10 +30,11 @@ class MonthlyAccrualCronService {
                 return;
             }
             
-            // Schedule: hourly integrity check (Zimbabwe time).
-            // This is strong enough to catch missing accruals quickly without spamming duplicates/retries.
-            const cronSchedule = '0 * * * *';
-            const scheduleDescription = 'Hourly (Zimbabwe time)';
+            // Daily integrity check (Zimbabwe time). Hourly runs starve Render CPU + Atlas Flex.
+            const cronSchedule = process.env.ACCRUAL_CRON_SCHEDULE || '0 1 * * *';
+            const scheduleDescription = process.env.ACCRUAL_CRON_SCHEDULE
+                ? `Custom (${process.env.ACCRUAL_CRON_SCHEDULE})`
+                : 'Daily 1:00 AM (Zimbabwe time)';
             
             this.job = cron.schedule(cronSchedule, async () => {
                 await this.processMonthlyAccrualsInstance();
@@ -48,9 +50,14 @@ class MonthlyAccrualCronService {
             console.log(`   Next run: ${this.nextRun}`);
             console.log(`   Schedule: ${scheduleDescription}`);
             
-            // Run initial check after 10 seconds to ensure system is ready
-            console.log('🔄 Running initial accrual integrity check in 10 seconds...');
-            setTimeout(() => this.processMonthlyAccrualsInstance(), 10000);
+            // Optional startup backfill — off by default on Render (blocks API during boot)
+            if (process.env.RUN_ACCRUAL_CHECK_ON_STARTUP === 'true') {
+                const delayMs = Number(process.env.ACCRUAL_STARTUP_DELAY_MS) || 120000;
+                console.log(`🔄 Startup accrual check scheduled in ${Math.round(delayMs / 1000)}s...`);
+                setTimeout(() => this.processMonthlyAccrualsInstance(), delayMs);
+            } else {
+                console.log('ℹ️ Skipping startup accrual check (set RUN_ACCRUAL_CHECK_ON_STARTUP=true to enable)');
+            }
             
         } catch (error) {
             console.error('❌ Failed to start monthly accrual cron service:', error);
@@ -134,6 +141,11 @@ class MonthlyAccrualCronService {
     }
 
     async processMonthlyAccrualsInstance() {
+        if (this._jobInProgress) {
+            console.log('⏳ Monthly accrual job already in progress — skipping overlapping run');
+            return { success: false, skipped: true };
+        }
+        this._jobInProgress = true;
         try {
             // Ensure database connection is available
             await this.ensureDatabaseConnection();
@@ -188,6 +200,8 @@ class MonthlyAccrualCronService {
             console.error('❌ Error in monthly accrual process:', error);
             this.lastRun = new Date();
             this.calculateNextRun();
+        } finally {
+            this._jobInProgress = false;
         }
     }
     

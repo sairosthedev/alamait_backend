@@ -2826,7 +2826,7 @@ class EnhancedPaymentAllocationService {
         paymentType: paymentType,
         isAdvancePayment: true,
         description: isDeposit ? 'Deposit received (liability)' : `Advance ${paymentType} payment for future periods`
-      });
+      }, null, advanceTransaction);
       
       // 🆕 CRITICAL: Update debtor deferred income for advance payments (except deposits)
       // This ensures advance payments are reflected in the debtor account
@@ -3254,7 +3254,7 @@ class EnhancedPaymentAllocationService {
         paymentType: paymentType,
         monthSettled: monthSettled,
         isAdvancePayment: !hasAccrual
-      });
+      }, null, paymentTransaction);
       
       console.log(`✅ ${hasAccrual ? 'Payment allocation' : 'Advance payment'} transaction created: ${paymentTransaction._id}`);
       

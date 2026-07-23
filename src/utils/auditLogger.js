@@ -180,15 +180,27 @@ exports.logDebtorOperation = async (action, debtor, userId, details = '', before
  * Log system operations (for automated processes)
  */
 exports.logSystemOperation = async (action, collection, recordId, details = '', before = null, after = null) => {
-    const systemUserId = '68b7909295210ad2fa2c5dcf'; // System user ID
+    const systemUserId = process.env.SYSTEM_AUDIT_USER_ID || '68b7909295210ad2fa2c5dcf';
+    const detailsObj = typeof details === 'string'
+        ? { message: details, isSystemOperation: true, actor: 'System' }
+        : { ...(details || {}), isSystemOperation: true, actor: 'System' };
+
+    // Prefer a real document snapshot when callers only pass metadata in details
+    const afterSnapshot = after || (detailsObj.recordSnapshot ? detailsObj.recordSnapshot : null);
+    if (detailsObj.recordSnapshot) {
+        delete detailsObj.recordSnapshot;
+    }
+
     return await exports.createAuditLog({
         action,
         collection,
         recordId,
         userId: systemUserId,
         before,
-        after,
-        details: typeof details === 'string' ? details : JSON.stringify(details)
+        after: afterSnapshot && typeof afterSnapshot.toObject === 'function'
+            ? afterSnapshot.toObject()
+            : afterSnapshot,
+        details: detailsObj
     });
 };
 

@@ -38,6 +38,8 @@ function invalidateFinancialReports() {
     cacheService.deletePattern('^cash-flow:');
     cacheService.deletePattern('^debtors-list:');
     cacheService.deletePattern('^detailed-cashflow:');
+    cacheService.deletePattern('^finance-residences');
+    cacheService.deletePattern('^accrual-find-issues:');
 
     // Legacy SimpleCache used by financialReportsController monthly cash flow
     try {
@@ -47,6 +49,7 @@ function invalidateFinancialReports() {
         cache.deletePattern('^residence-cashflow:');
         cache.deletePattern('^detailed-cashflow:');
         cache.deletePattern('^balancesheet:');
+        cache.deletePattern('^executive-dashboard:');
     } catch (err) {
         // Ignore if legacy cache module is unavailable
     }

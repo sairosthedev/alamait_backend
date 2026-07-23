@@ -44,6 +44,16 @@ const auditMiddleware = async (req, res, next) => {
         return next();
     }
 
+    // Never audit the activity tracker itself — it is telemetry, not business CRUD.
+    // Frontend POSTs here to report real UI actions; logging that POST as "create" is noise.
+    if (
+        req.path.includes('/user-activity') ||
+        req.path.includes('/user-activities') ||
+        req.originalUrl?.includes('/user-activity')
+    ) {
+        return next();
+    }
+
     // Auth owns login/logout audit entries — avoid duplicate login rows
     if (
         req.path.includes('/auth/login') ||
@@ -110,9 +120,23 @@ const auditMiddleware = async (req, res, next) => {
                             : String(responseData).substring(0, 200)
                     };
                 }
+
+                // Auth runs on the route AFTER this middleware — read user at response time
+                const authenticatedUser = originalReq.user
+                    ? {
+                        id: originalReq.user._id || originalReq.user.id,
+                        email: originalReq.user.email,
+                        role: originalReq.user.role,
+                        firstName: originalReq.user.firstName,
+                        lastName: originalReq.user.lastName
+                    }
+                    : requestData.user;
                 
                 await logAPIAudit({
-                    request: requestData,
+                    request: {
+                        ...requestData,
+                        user: authenticatedUser
+                    },
                     response: {
                         statusCode: res.statusCode,
                         data: finalResponseData,
@@ -151,6 +175,15 @@ async function logAPIAudit({ request, response, originalReq }) {
         
         // Determine collection based on path
         const collection = determineCollection(request.path);
+
+        // Only audit real entity CRUD / workflow actions — not unmapped telemetry POSTs
+        const workflowActions = new Set([
+            'approve', 'reject', 'submit', 'convert', 'mark_paid',
+            'login', 'logout', 'register'
+        ]);
+        if (collection === 'API' && !workflowActions.has(action)) {
+            return;
+        }
         
         // Extract record ID if present
         const recordId = extractRecordId(request.path, request.body);
@@ -162,7 +195,7 @@ async function logAPIAudit({ request, response, originalReq }) {
             recordId,
             userId: request.user?.id || null,
             before: null,
-            after: response.data,
+            after: sanitizeAuditAfter(response.data, collection, action),
             details: JSON.stringify({
                 method: request.method,
                 path: request.path,
@@ -170,7 +203,10 @@ async function logAPIAudit({ request, response, originalReq }) {
                 statusCode: response.statusCode,
                 duration: response.duration,
                 ipAddress: request.ipAddress,
-                userAgent: request.userAgent
+                userAgent: request.userAgent,
+                actorEmail: request.user?.email || null,
+                actorName: [request.user?.firstName, request.user?.lastName].filter(Boolean).join(' ') || null,
+                actorRole: request.user?.role || null
             }),
             ipAddress: request.ipAddress,
             userAgent: request.userAgent
@@ -181,7 +217,7 @@ async function logAPIAudit({ request, response, originalReq }) {
             try {
                 const UserActivityService = require('../services/userActivityService');
                 const page = request.path;
-                const pageTitle = collection || 'API Request';
+                const pageTitle = collection;
                 
                 // Use the original request object if available, otherwise create a minimal one
                 const reqForTracking = originalReq || {
@@ -252,6 +288,29 @@ async function logAPIAudit({ request, response, originalReq }) {
 }
 
 /**
+ * Prefer entity payload over raw HTTP envelope for audit "after" snapshots
+ */
+function sanitizeAuditAfter(responseData, collection, action) {
+    if (!responseData || typeof responseData !== 'object') {
+        return responseData;
+    }
+    // Prefer created/updated entity if present
+    if (responseData.data && typeof responseData.data === 'object') {
+        return responseData.data;
+    }
+    if (responseData[collection?.toLowerCase?.()]) {
+        return responseData[collection.toLowerCase()];
+    }
+    return {
+        action,
+        collection,
+        success: responseData.success,
+        message: responseData.message,
+        id: responseData._id || responseData.id || null
+    };
+}
+
+/**
  * Determine action based on HTTP method and path
  */
 function determineAction(method, path) {
@@ -290,18 +349,24 @@ function determineCollection(path) {
         'applications': 'Application',
         'leases': 'Lease',
         'payments': 'Payment',
+        'payment-allocation': 'Payment',
         'expenses': 'Expense',
         'requests': 'Request',
         'monthly-requests': 'MonthlyRequest',
         'accounts': 'Account',
         'transactions': 'Transaction',
+        'transaction-entries': 'Transaction',
+        'journals': 'Transaction',
+        'journal-entries': 'Transaction',
         'vendors': 'Vendor',
         'debtors': 'Debtor',
         'residences': 'Residence',
         'rooms': 'Room',
         'quotations': 'Quotation',
         'invoices': 'Invoice',
-        'audit-logs': 'AuditLog'
+        'audit-logs': 'AuditLog',
+        'other-income': 'OtherIncome',
+        'creditors': 'Creditor'
     };
     
     // Find the first segment that maps to a collection

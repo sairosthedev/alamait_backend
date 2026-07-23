@@ -1274,7 +1274,7 @@ class FinancialReportsController {
             monthNames.forEach((month, index) => {
                 const monthKey = `${period}-${String(index + 1).padStart(2, '0')}`;
                 const monthData = detailedCashFlow.detailed_breakdown.monthly_breakdown[monthKey] || {
-                    income: { total: 0, rental_income: 0, admin_fees: 0, deposits: 0, utilities: 0, advance_payments: 0, other_income: 0 },
+                    income: { total: 0, rental_income: 0, admin_fees: 0, deposits: 0, utilities: 0, levies: 0, advance_payments: 0, other_income: 0 },
                     expenses: { total: 0, maintenance: 0, utilities: 0, cleaning: 0, security: 0, management: 0 },
                     net_cash_flow: 0,
                     transaction_count: 0,
@@ -1293,6 +1293,7 @@ class FinancialReportsController {
                             admin_fees: { amount: monthData.income.admin_fees, description: 'Administrative Fees' },
                             deposits: { amount: monthData.income.deposits, description: 'Security Deposits' },
                             utilities_income: { amount: monthData.income.utilities, description: 'Utilities Income' },
+                            levies: { amount: monthData.income.levies || 0, description: 'Levies Income' },
                             advance_payments: { amount: monthData.income.advance_payments, description: 'Advance Payments from Students' },
                             // Detailed expense breakdown
                             maintenance_expenses: { amount: monthData.expenses.maintenance, description: 'Property Maintenance' },
@@ -1309,6 +1310,7 @@ class FinancialReportsController {
                         admin_fees: monthData.income.admin_fees,
                         deposits: monthData.income.deposits,
                         utilities: monthData.income.utilities,
+                        levies: monthData.income.levies || 0,
                         advance_payments: monthData.income.advance_payments,
                         other_income: monthData.income.other_income || 0,
                         transactions: monthData.income.transactions || [] // Include detailed income transactions
@@ -1906,10 +1908,10 @@ class FinancialReportsController {
             // Use EnhancedCashFlowService which properly handles residence filtering at the database level
             const detailedCashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
-            // Cache the result for 5 minutes (300000ms)
-            cache.set(cacheKey, detailedCashFlowStatement, 300000);
+            // Cache the result for 2 minutes (120000ms)
+            cache.set(cacheKey, detailedCashFlowStatement, 120000);
             if (isDebugMode) {
-                console.log('✅ Detailed cash flow statement data cached for 5 minutes');
+                console.log('✅ Detailed cash flow statement data cached for 2 minutes');
             }
             
             res.json({
@@ -2780,6 +2782,8 @@ class FinancialReportsController {
                                 totalAdminFees += incomeData.admin_fees || 0;
                             } else if (accountCode === '4003' && incomeData.deposits) {
                                 totalDeposits += incomeData.deposits || 0;
+                            } else if (accountCode === '4010' && incomeData.levies) {
+                                totalOtherIncome += incomeData.levies || 0;
                             } else if ((accountCode === '4006' || accountCode === 'other_income') && incomeData.other_income) {
                                 // Support for other income (account code 4006 or virtual 'other_income')
                                 totalOtherIncome += incomeData.other_income || 0;
@@ -2813,6 +2817,15 @@ class FinancialReportsController {
                             netAmount: totalDeposits,
                                     transactionCount: 0,
                                     type: 'income',
+                            category: 'income'
+                        };
+                    } else if (accountCode === '4010') {
+                        accountData = {
+                            totalCredit: totalOtherIncome,
+                            totalDebit: 0,
+                            netAmount: totalOtherIncome,
+                            transactionCount: 0,
+                            type: 'income',
                             category: 'income'
                         };
                     } else if (accountCode === '4006' || accountCode === 'other_income') {
@@ -3090,6 +3103,34 @@ class FinancialReportsController {
                             category: 'investing_activities'
                         };
                     }
+                }
+
+                // Advance Payments Liability (2200) — cashflow categorizes these as income.advance_payments
+                if (!accountData && accountCode === '2200' && cashFlowData.monthly_breakdown) {
+                    const monthlyBreakdown = cashFlowData.monthly_breakdown;
+                    let targetMonthKey = null;
+                    if (month && period) {
+                        targetMonthKey = month.toLowerCase();
+                    }
+                    const monthsToCheck = targetMonthKey ? [targetMonthKey] : Object.keys(monthlyBreakdown);
+                    let totalAdvances = 0;
+                    for (const monthKey of monthsToCheck) {
+                        const monthData = monthlyBreakdown[monthKey];
+                        if (monthData?.income?.advance_payments) {
+                            totalAdvances += monthData.income.advance_payments || 0;
+                        } else if (monthData?.operating_activities?.breakdown?.advance_payments) {
+                            const ap = monthData.operating_activities.breakdown.advance_payments;
+                            totalAdvances += typeof ap === 'number' ? ap : (ap?.amount || 0);
+                        }
+                    }
+                    accountData = {
+                        totalCredit: totalAdvances,
+                        totalDebit: 0,
+                        netAmount: totalAdvances,
+                        transactionCount: 0,
+                        type: 'cash_flow',
+                        category: 'liability'
+                    };
                 }
                 
                 // Search in cash flow section
@@ -3610,18 +3651,18 @@ class FinancialReportsController {
                     
                     if (cashEntry && cashEntry.debit > 0) {
                         // This is a cash receipt transaction - categorize using same logic as cash flow service
+                        const incomeCategory = EnhancedCashFlowService.classifyStudentCashIncome(
+                            description,
+                            tx.metadata || {}
+                        );
                         if (accountCode === '4001') {
-                            // Rental income - match cash flow service logic exactly
-                            // Check for: "rent", "rental", "accommodation", or "payment allocation" in description
-                            return description.includes('rent') || 
-                                   description.includes('rental') || 
-                                   description.includes('accommodation') || 
-                                   description.includes('payment allocation');
+                            // Rental income only — never levies / generic payment allocation
+                            return incomeCategory === 'rental_income';
+                        } else if (accountCode === '4010') {
+                            return incomeCategory === 'levies';
                         } else if (accountCode === '4002') {
                             // Admin fees - match cash flow service logic
-                            return description.includes('admin') || 
-                                   description.includes('administrative') || 
-                                   description.includes('fee');
+                            return incomeCategory === 'admin_fees';
                         } else if (accountCode === '4006' || accountCode === 'other_income') {
                             // Other income - ONLY transactions that debited cash (1000) and credited debtors (1100 series)
                             // Must be DR Cash CR Debtor pattern - NOT account code 4003 or deposit liability accounts
@@ -3654,28 +3695,27 @@ class FinancialReportsController {
                                 return false; // Must credit a debtor account - exclude if not
                             }
                             
-                            // Exclude rent, admin, deposits, utilities, advance payments by description
+                            // Exclude rent, admin, deposits, utilities, levies, advance payments by description
                             // 🆕 BUT ALLOW council rates and similar transactions even if they have expense accounts
-                            const isRent = description.includes('rent') || 
-                                         description.includes('rental') || 
-                                         description.includes('accommodation') || 
-                                         description.includes('payment allocation');
-                            const isAdmin = description.includes('admin') || 
-                                          description.includes('administrative') || 
-                                          (description.includes('fee') && !description.includes('council'));
-                            const isDeposit = description.includes('deposit') || 
-                                            description.includes('security');
-                            const isUtilities = description.includes('utilit') || 
-                                               description.includes('internet') || 
-                                               description.includes('wifi');
-                            const isAdvance = description.includes('advance') || 
-                                            description.includes('prepaid') || 
-                                            description.includes('future');
+                            const incomeCategory = EnhancedCashFlowService.classifyStudentCashIncome(
+                                description,
+                                tx.metadata || {}
+                            );
+                            const isRent = incomeCategory === 'rental_income';
+                            const isAdmin = incomeCategory === 'admin_fees';
+                            const isDeposit = incomeCategory === 'deposits';
+                            const isUtilities = incomeCategory === 'utilities';
+                            const isAdvance = incomeCategory === 'advance_payments';
+                            const isLevies = incomeCategory === 'levies';
                             
                             // 🆕 ALLOW: Council rates and similar transactions - these are other income
                             // Even if they have expense accounts (DR Cash CR AR DR Expense CR Cash pattern)
                             const isCouncilRates = description.includes('council') || 
                                                   description.includes('rates');
+                            
+                            if ((isRent || isAdmin || isDeposit || isUtilities || isAdvance || isLevies) && !isCouncilRates) {
+                                return false;
+                            }
                             
                             // Check if this is an internal cash transfer (cash to cash) - exclude
                             // BUT allow if it has AR credit (DR Cash CR AR DR Expense CR Cash is valid other income)
@@ -3704,7 +3744,7 @@ class FinancialReportsController {
                             
                             // Include if it's other income (council, DR Cash CR Debtor, etc.) and not any of the excluded categories
                             // OR if it's council rates (which may have expense accounts but is still income)
-                            return isCouncilRates || (!isRent && !isAdmin && !isDeposit && !isUtilities && !isAdvance);
+                            return isCouncilRates || (!isRent && !isAdmin && !isDeposit && !isUtilities && !isAdvance && !isLevies);
                         }
                         // For other income accounts, include all payment transactions
                         return true;
@@ -4160,9 +4200,16 @@ class FinancialReportsController {
                                 monthTotalCredit = monthData.income.admin_fees || 0;
                             } else if (accountCode === '4003' && monthData.income?.deposits) {
                                 monthTotalCredit = monthData.income.deposits || 0;
+                            } else if (accountCode === '4010' && monthData.income?.levies) {
+                                monthTotalCredit = monthData.income.levies || 0;
                             } else if ((accountCode === '4006' || accountCode === 'other_income') && monthData.income?.other_income) {
                                 monthTotalCredit = monthData.income.other_income || 0;
                             }
+                            monthNetAmount = monthTotalCredit;
+                        } else if (accountCode === '2200') {
+                            const ap = monthData.income?.advance_payments
+                                ?? monthData.operating_activities?.breakdown?.advance_payments;
+                            monthTotalCredit = typeof ap === 'number' ? ap : (ap?.amount || 0);
                             monthNetAmount = monthTotalCredit;
                         } else if (account.type === 'Expense') {
                             // For expense accounts, get from operating_activities.breakdown

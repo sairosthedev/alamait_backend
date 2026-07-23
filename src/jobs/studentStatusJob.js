@@ -6,49 +6,62 @@ const StudentStatusManager = require('../utils/studentStatusManager');
  * Automatically updates student statuses and handles expired students
  */
 class StudentStatusJob {
-    
+    static _running = false;
+
     /**
      * Initialize the student status job
      */
     static initialize() {
         console.log('🕐 Initializing student status job...');
-        
-        // Run every day at 2:00 AM
+
+        // Daily only — hourly checks on Render compete with API traffic
         cron.schedule('0 2 * * *', async () => {
             console.log('🕐 Running daily student status update...');
             await this.runDailyStatusUpdate();
-        });
-        
-        // Run every hour to check for expired students
-        cron.schedule('0 * * * *', async () => {
-            console.log('🕐 Running hourly expired student check...');
             await this.runExpiredStudentCheck();
+        }, {
+            timezone: 'Africa/Harare'
         });
-        
-        console.log('✅ Student status job initialized');
+
+        console.log('✅ Student status job initialized (daily 2:00 AM Africa/Harare)');
+    }
+
+    static async withLock(fn) {
+        if (this._running) {
+            console.log('⏳ Student status job already running — skipping');
+            return { success: false, skipped: true };
+        }
+        this._running = true;
+        try {
+            return await fn();
+        } finally {
+            this._running = false;
+        }
     }
     
     /**
      * Run daily status update for all students
      */
     static async runDailyStatusUpdate() {
-        try {
-            console.log('🔄 Starting daily student status update...');
-            
-            const result = await StudentStatusManager.updateAllStudentStatuses();
-            
-            console.log('✅ Daily status update completed:');
-            console.log(`   Total Students: ${result.total}`);
-            console.log(`   Updated: ${result.updated}`);
-            console.log(`   Unchanged: ${result.unchanged}`);
-            console.log(`   Errors: ${result.errors}`);
-            
-            return result;
-            
-        } catch (error) {
-            console.error('❌ Error in daily status update:', error);
-            return { success: false, error: error.message };
-        }
+        return this.withLock(async () => {
+            try {
+                console.log('🔄 Starting daily student status update...');
+                
+                const result = await StudentStatusManager.updateAllStudentStatuses();
+                
+                console.log('✅ Daily status update completed:');
+                console.log(`   Total Students: ${result.total}`);
+                console.log(`   Updated: ${result.updated}`);
+                console.log(`   Unchanged: ${result.unchanged}`);
+                console.log(`   Errors: ${result.errors}`);
+                
+                return result;
+                
+            } catch (error) {
+                console.error('❌ Error in daily status update:', error);
+                return { success: false, error: error.message };
+            }
+        });
     }
     
     /**
@@ -122,7 +135,3 @@ class StudentStatusJob {
 }
 
 module.exports = StudentStatusJob;
-
-
-
-

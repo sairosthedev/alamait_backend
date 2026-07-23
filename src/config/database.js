@@ -10,18 +10,23 @@ const connectDB = async (retryCount = 0) => {
         console.log('Connection URI:', process.env.MONGODB_URI.replace(/\/\/[^:]+:[^@]+@/, '//****:****@')); // Hide credentials
 
         const conn = await mongoose.connect(process.env.MONGODB_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-            serverSelectionTimeoutMS: 30000, // Increased to 30 seconds
+            serverSelectionTimeoutMS: 30000,
             socketTimeoutMS: 45000,
-            connectTimeoutMS: 30000, // Added connection timeout
-            maxPoolSize: 20, // Increased pool size for better concurrency
-            minPoolSize: 5,
+            connectTimeoutMS: 30000,
+            // Atlas Flex / single Render dyno — keep pool modest but not starving
+            maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 15,
+            minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 2,
             retryWrites: true,
             retryReads: true,
-            maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
-            heartbeatFrequencyMS: 10000 // Send heartbeat every 10 seconds
+            maxIdleTimeMS: 30000,
+            heartbeatFrequencyMS: 10000
         });
+
+        if (!process.env.MONGODB_URI.includes('mongodb+srv://')) {
+            console.warn(
+                '⚠️ MONGODB_URI is not using mongodb+srv://. For Atlas Flex, prefer the SRV connection string from Atlas (Drivers → Connect) and include your database name in the path.'
+            );
+        }
 
         console.log(`MongoDB Connected: ${conn.connection.host}`);
         console.log('Database name:', conn.connection.name);

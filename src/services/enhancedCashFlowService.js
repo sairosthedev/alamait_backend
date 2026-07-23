@@ -197,6 +197,131 @@ class EnhancedCashFlowService {
         
         return false;
     }
+
+    /**
+     * Classify student cash receipts for cashflow income lines.
+     * Levies must never be treated as rent or advances.
+     */
+    static classifyStudentCashIncome(description = '', metadata = {}) {
+        const desc = String(description || '').toLowerCase();
+        const paymentType = String(metadata?.paymentType || '').toLowerCase();
+
+        if (
+            paymentType === 'levies' ||
+            desc.includes('payment allocation: levies') ||
+            desc.includes('levies payment') ||
+            desc.includes('levy payment') ||
+            desc.includes('levies') ||
+            desc.includes('levy')
+        ) {
+            return 'levies';
+        }
+
+        if (
+            desc.includes('advance') ||
+            desc.includes('prepaid') ||
+            desc.includes('future') ||
+            paymentType.includes('advance')
+        ) {
+            return 'advance_payments';
+        }
+
+        if (
+            paymentType === 'rent' ||
+            desc.includes('payment allocation: rent') ||
+            desc.includes('rent payment') ||
+            (
+                (desc.includes('rent') || desc.includes('rental') || desc.includes('accommodation')) &&
+                !desc.includes('payment allocation:')
+            )
+        ) {
+            return 'rental_income';
+        }
+
+        if (
+            paymentType === 'admin' ||
+            desc.includes('payment allocation: admin') ||
+            desc.includes('admin fee') ||
+            desc.includes('administrative')
+        ) {
+            return 'admin_fees';
+        }
+
+        if (paymentType === 'deposit' || desc.includes('deposit') || desc.includes('security')) {
+            return 'deposits';
+        }
+
+        if (desc.includes('utilit') || desc.includes('internet') || desc.includes('wifi')) {
+            return 'utilities';
+        }
+
+        if (desc.includes('council')) {
+            return 'other_income';
+        }
+
+        // Never treat bare "payment allocation" as rent
+        return 'other_income';
+    }
+
+    /**
+     * Payment-allocation / advance_payment txs whose Payment document was deleted
+     * still debit cash and inflate cashflow. Build a set of payment keys that still exist.
+     */
+    static async getExistingPaymentIdSet(transactionEntries = []) {
+        const objectIds = [];
+        const paymentIdStrings = [];
+        const seen = new Set();
+
+        for (const entry of transactionEntries) {
+            const source = String(entry.source || '');
+            if (!['payment', 'advance_payment', 'payment_allocation', 'rental_payment'].includes(source)) {
+                continue;
+            }
+            const raw = entry.metadata?.paymentId;
+            if (raw == null || raw === '') continue;
+            const key = String(raw);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            if (mongoose.Types.ObjectId.isValid(key) && String(new mongoose.Types.ObjectId(key)) === key) {
+                objectIds.push(new mongoose.Types.ObjectId(key));
+            }
+            paymentIdStrings.push(key);
+        }
+
+        const existing = new Set();
+        if (objectIds.length === 0 && paymentIdStrings.length === 0) {
+            return existing;
+        }
+
+        const Payment = require('../models/Payment');
+        const found = await Payment.find({
+            $or: [
+                ...(objectIds.length ? [{ _id: { $in: objectIds } }] : []),
+                ...(paymentIdStrings.length ? [{ paymentId: { $in: paymentIdStrings } }] : [])
+            ]
+        })
+            .select('_id paymentId')
+            .lean();
+
+        for (const p of found) {
+            existing.add(String(p._id));
+            if (p.paymentId) existing.add(String(p.paymentId));
+        }
+        return existing;
+    }
+
+    /**
+     * True when a payment-sourced cash receipt references a deleted Payment.
+     */
+    static isOrphanPaymentCashEntry(entry, existingPaymentIds) {
+        const source = String(entry?.source || '');
+        if (!['payment', 'advance_payment', 'payment_allocation', 'rental_payment'].includes(source)) {
+            return false;
+        }
+        const raw = entry?.metadata?.paymentId;
+        if (raw == null || raw === '') return false;
+        return !existingPaymentIds.has(String(raw));
+    }
     
     /**
      * Generate comprehensive detailed cash flow statement
@@ -211,8 +336,8 @@ class EnhancedCashFlowService {
             const cacheService = require('./cacheService');
             const cacheKey = `detailed-cashflow:${period}:${basis}:${residenceId || 'all'}`;
             
-            // Use getOrSet for automatic caching and request deduplication (10 minute TTL)
-            return await cacheService.getOrSet(cacheKey, 600, async () => {
+            // Use getOrSet for automatic caching and request deduplication (2 minute TTL)
+            return await cacheService.getOrSet(cacheKey, 120, async () => {
                 return await this._generateDetailedCashFlowStatementInternal(period, basis, residenceId);
             });
         } catch (error) {
@@ -294,7 +419,7 @@ class EnhancedCashFlowService {
             // Optimize: Run all queries in parallel for better performance
             const paymentQuery = {
                 date: { $gte: startDate, $lte: endDate },
-                status: { $in: ['confirmed', 'completed', 'paid', 'Confirmed', 'Completed', 'Paid'] }
+                status: { $in: ['confirmed', 'completed', 'paid', 'Confirmed', 'Completed', 'Paid', 'Verified'] }
             };
             
             if (residenceId) {
@@ -317,7 +442,9 @@ class EnhancedCashFlowService {
                     .sort({ date: 1 })
                     .lean(),
                 Payment.find(paymentQuery)
-                    .select('paymentId date amount rentAmount adminFee deposit status residence student')
+                    .select('paymentId date amount totalAmount rentAmount adminFee deposit levies method status residence student payments paymentMonth')
+                    .populate('student', 'firstName lastName')
+                    .populate('residence', 'name')
                     .sort({ date: 1 })
                     .lean(),
                 Expense.find(expenseQuery)
@@ -743,6 +870,7 @@ class EnhancedCashFlowService {
                 admin_fees: { total: 0, transactions: [] },
                 deposits: { total: 0, transactions: [] },
                 utilities: { total: 0, transactions: [] },
+                levies: { total: 0, transactions: [] },
                 advance_payments: { total: 0, transactions: [] },
                 other_income: { total: 0, transactions: [] }
             },
@@ -760,6 +888,9 @@ class EnhancedCashFlowService {
         
         // Set to track processed transactions to prevent double-counting
         const processedTransactions = new Set();
+
+        // Skip cash receipts whose Payment document was deleted (orphaned allocations)
+        const existingPaymentIds = await this.getExistingPaymentIdSet(transactionEntries);
         
         // Create a map of transaction entries to their corresponding payments for accurate date handling
         const transactionToPaymentMap = new Map();
@@ -870,7 +1001,7 @@ class EnhancedCashFlowService {
                     const matchingPayment = payments.find(p => 
                         p.student && entry.metadata && entry.metadata.studentId && 
                         p.student.toString() === entry.metadata.studentId.toString() &&
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
                     );
                     if (matchingPayment) {
                         correspondingPayment = matchingPayment;
@@ -883,7 +1014,7 @@ class EnhancedCashFlowService {
                 if (!correspondingPayment && entry.metadata && entry.metadata.studentId) {
                     const matchingPayment = payments.find(p => 
                         p.student && p.student.toString() === entry.metadata.studentId.toString() &&
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
                     );
                     if (matchingPayment) {
                         correspondingPayment = matchingPayment;
@@ -895,7 +1026,7 @@ class EnhancedCashFlowService {
                 // PRIORITY 5: Amount and date proximity matching (within 30 days)
                 if (!correspondingPayment) {
                     const matchingPayment = payments.find(p => 
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
                         Math.abs(new Date(p.date).getTime() - new Date(entry.date).getTime()) < 30 * 24 * 60 * 60 * 1000 // Within 30 days
                     );
                     if (matchingPayment) {
@@ -947,7 +1078,7 @@ class EnhancedCashFlowService {
                     const matchingPayment = payments.find(p => 
                         p.student && entry.metadata && entry.metadata.studentId && 
                         p.student.toString() === entry.metadata.studentId.toString() &&
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
                     );
                     if (matchingPayment) {
                         correspondingPayment = matchingPayment;
@@ -959,7 +1090,7 @@ class EnhancedCashFlowService {
                 if (!correspondingPayment && entry.metadata && entry.metadata.studentId) {
                     const matchingPayment = payments.find(p => 
                         p.student && p.student.toString() === entry.metadata.studentId.toString() &&
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
                     );
                     if (matchingPayment) {
                         correspondingPayment = matchingPayment;
@@ -970,7 +1101,7 @@ class EnhancedCashFlowService {
                 // PRIORITY 5: Amount and date proximity matching (within 30 days)
                 if (!correspondingPayment) {
                     const matchingPayment = payments.find(p => 
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
                         Math.abs(new Date(p.date).getTime() - new Date(entry.date).getTime()) < 30 * 24 * 60 * 60 * 1000 // Within 30 days
                     );
                     if (matchingPayment) {
@@ -1054,6 +1185,12 @@ class EnhancedCashFlowService {
                         // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                         console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                         return; // Skip this transaction entry
+                    }
+
+                    // Orphan payment allocation (Payment deleted) — do not inflate cashflow
+                    if (this.isOrphanPaymentCashEntry(entry, existingPaymentIds)) {
+                        console.log(`💰 Orphan payment cash excluded (Payment missing): ${incomeAmount} - Transaction: ${entry.transactionId} - paymentId: ${entry.metadata?.paymentId}`);
+                        return;
                     }
                     
                     incomeBreakdown.total += incomeAmount;
@@ -1152,10 +1289,20 @@ class EnhancedCashFlowService {
                         } 
                         // 🆕 NEW: Check if payment date is before allocation month (override description-based categorization)
                         // BUT: Admin fees should always settle in payment month, not be treated as advance payments
-                        else if (isPaymentDateBeforeAllocationMonth && !desc.includes('admin')) {
+                        else if (isPaymentDateBeforeAllocationMonth && !desc.includes('admin') && !desc.includes('levies') && !desc.includes('levy')) {
                             category = 'advance_payments';
                             description = 'Advance Payment from Student (payment date before allocation month)';
                             isAdvancePayment = true;
+                        }
+                        // Levies before rent — never treat as rental_income
+                        else if (
+                            desc.includes('payment allocation: levies') ||
+                            desc.includes('levies') ||
+                            desc.includes('levy') ||
+                            (entry.metadata && String(entry.metadata.paymentType || '').toLowerCase() === 'levies')
+                        ) {
+                            category = 'levies';
+                            description = 'Levies Income';
                         }
                         // Check for specific payment allocations
                         else if (desc.includes('payment allocation: rent')) {
@@ -1573,7 +1720,7 @@ class EnhancedCashFlowService {
                             const currentMonthTotal = currentMonthAllocations.reduce((sum, payment) => sum + (payment.amount || 0), 0);
                             
                             // If payment amount is significantly larger than current month allocation, it might be advance
-                            if (correspondingPayment.totalAmount > currentMonthTotal * 1.5 && category === 'other_income') {
+                            if ((correspondingPayment.totalAmount ?? correspondingPayment.amount ?? 0) > currentMonthTotal * 1.5 && category === 'other_income') {
                                 category = 'advance_payments';
                                 description = 'Advance Payment (Excess Amount)';
                                 isAdvancePayment = true;
@@ -1881,14 +2028,23 @@ class EnhancedCashFlowService {
                             
                             // This is other income (council payments, etc.) - add to other_income category
                             const desc = (entry.description || '').toLowerCase();
-                            const isRent = desc.includes('rent') || desc.includes('rental') || desc.includes('accommodation') || desc.includes('payment allocation');
-                            const isAdmin = desc.includes('admin') || desc.includes('administrative') || desc.includes('fee');
-                            const isDeposit = desc.includes('deposit') || desc.includes('security');
-                            const isUtilities = desc.includes('utilit') || desc.includes('internet') || desc.includes('wifi');
-                            const isAdvance = desc.includes('advance') || desc.includes('prepaid') || desc.includes('future');
+                            const incomeCategory = this.classifyStudentCashIncome(desc, entry.metadata || {});
                             
-                            // Only add to other_income if it doesn't match any other category
-                            if (!isRent && !isAdmin && !isDeposit && !isUtilities && !isAdvance) {
+                            if (incomeCategory === 'levies') {
+                                if (!incomeBreakdown.by_source.levies) {
+                                    incomeBreakdown.by_source.levies = { total: 0, transactions: [] };
+                                }
+                                incomeBreakdown.by_source.levies.total += credit;
+                                incomeBreakdown.by_source.levies.transactions.push({
+                                    transactionId: entry.transactionId,
+                                    date: effectiveDate,
+                                    amount: credit,
+                                    accountCode,
+                                    accountName,
+                                    residence: entry.residence?.name || 'Unknown',
+                                    description: entry.description || 'Levies Income'
+                                });
+                            } else if (incomeCategory === 'other_income') {
                                 incomeBreakdown.by_source.other_income.total += credit;
                                 incomeBreakdown.by_source.other_income.transactions.push({
                                     transactionId: entry.transactionId,
@@ -1900,37 +2056,42 @@ class EnhancedCashFlowService {
                                     description: entry.description || 'Other Income'
                                 });
                                 
-                                // Group by residence
-                                const residenceName = entry.residence?.name || 'Unknown';
-                                if (!incomeBreakdown.by_residence[residenceName]) {
-                                    incomeBreakdown.by_residence[residenceName] = 0;
+                                const otherResidenceName = entry.residence?.name || 'Unknown';
+                                if (!incomeBreakdown.by_residence[otherResidenceName]) {
+                                    incomeBreakdown.by_residence[otherResidenceName] = 0;
                                 }
-                                incomeBreakdown.by_residence[residenceName] += credit;
+                                incomeBreakdown.by_residence[otherResidenceName] += credit;
                                 
-                                // Group by month
-                                const monthKey = effectiveDate.toISOString().slice(0, 7);
-                                if (!incomeBreakdown.by_month[monthKey]) {
-                                    incomeBreakdown.by_month[monthKey] = 0;
+                                const otherMonthKey = effectiveDate.toISOString().slice(0, 7);
+                                if (!incomeBreakdown.by_month[otherMonthKey]) {
+                                    incomeBreakdown.by_month[otherMonthKey] = 0;
                                 }
-                                incomeBreakdown.by_month[monthKey] += credit;
+                                incomeBreakdown.by_month[otherMonthKey] += credit;
                                 
                                 console.log(`💰 Other income identified: ${accountCode} (${accountName}) - Amount: ${credit} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                            } else if (incomeCategory === 'rental_income') {
+                                incomeBreakdown.by_source.rental_income.total += credit;
+                                incomeBreakdown.by_source.rental_income.transactions.push({
+                                    transactionId: entry.transactionId,
+                                    date: effectiveDate,
+                                    amount: credit,
+                                    accountCode,
+                                    accountName,
+                                    residence: entry.residence?.name || 'Unknown',
+                                    description: entry.description || 'Rental Income'
+                                });
+                                const rentResidenceName = entry.residence?.name || 'Unknown';
+                                if (!incomeBreakdown.by_residence[rentResidenceName]) {
+                                    incomeBreakdown.by_residence[rentResidenceName] = 0;
+                                }
+                                incomeBreakdown.by_residence[rentResidenceName] += credit;
+                                const rentMonthKey = effectiveDate.toISOString().slice(0, 7);
+                                if (!incomeBreakdown.by_month[rentMonthKey]) {
+                                    incomeBreakdown.by_month[rentMonthKey] = 0;
+                                }
+                                incomeBreakdown.by_month[rentMonthKey] += credit;
                             }
                         }
-                        
-                        // Group by residence
-                        const residenceName = entry.residence?.name || 'Unknown';
-                        if (!incomeBreakdown.by_residence[residenceName]) {
-                            incomeBreakdown.by_residence[residenceName] = 0;
-                        }
-                        incomeBreakdown.by_residence[residenceName] += credit;
-                        
-                        // Group by month using the effective date (payment date)
-                        const monthKey = effectiveDate.toISOString().slice(0, 7); // YYYY-MM
-                        if (!incomeBreakdown.by_month[monthKey]) {
-                            incomeBreakdown.by_month[monthKey] = 0;
-                        }
-                        incomeBreakdown.by_month[monthKey] += credit;
                         }
                     });
                 }
@@ -3517,20 +3678,34 @@ class EnhancedCashFlowService {
      * Process payment details
      */
     static processPaymentDetails(payments) {
-        return payments.map(payment => ({
-            paymentId: payment.paymentId,
-            date: payment.date,
-            student: payment.student?.firstName + ' ' + payment.student?.lastName || 'Unknown',
-            residence: payment.residence?.name || 'Unknown',
-            totalAmount: payment.totalAmount || 0,
-            rentAmount: payment.rentAmount || 0,
-            adminFee: payment.adminFee || 0,
-            deposit: payment.deposit || 0,
-            utilities: payment.utilities || 0,
-            other: payment.other || 0,
-            paymentMethod: payment.method || 'Unknown',
-            status: payment.status
-        }));
+        return payments.map(payment => {
+            const rentFromComponents = (payment.payments || [])
+                .filter(p => p.type === 'rent')
+                .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+            const leviesFromComponents = (payment.payments || [])
+                .filter(p => p.type === 'levies')
+                .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+            const totalAmount = Number(payment.totalAmount ?? payment.amount ?? 0) || 0;
+
+            return {
+                paymentId: payment.paymentId,
+                date: payment.date,
+                paymentMonth: payment.paymentMonth || null,
+                student: payment.student
+                    ? `${payment.student.firstName || ''} ${payment.student.lastName || ''}`.trim() || 'Unknown'
+                    : 'Unknown',
+                residence: payment.residence?.name || 'Unknown',
+                totalAmount,
+                rentAmount: Number(payment.rentAmount) || rentFromComponents || 0,
+                adminFee: Number(payment.adminFee) || 0,
+                deposit: Number(payment.deposit) || 0,
+                levies: Number(payment.levies) || leviesFromComponents || 0,
+                utilities: payment.utilities || 0,
+                other: payment.other || 0,
+                paymentMethod: payment.method || 'Unknown',
+                status: payment.status
+            };
+        });
     }
     
     /**
@@ -3561,6 +3736,7 @@ class EnhancedCashFlowService {
                 admin_fees: 0,
                 deposits: 0,
                 utilities: 0,
+                levies: 0,
                 advance_payments: 0,
                 other_income: 0,
                 transactions: []
@@ -3578,6 +3754,7 @@ class EnhancedCashFlowService {
                     admin_fees: { amount: 0, description: "Administrative Fees" },
                     deposits: { amount: 0, description: "Security Deposits" },
                     utilities_income: { amount: 0, description: "Utilities Income" },
+                    levies: { amount: 0, description: "Levies Income" },
                     advance_payments: { amount: 0, description: "Advance Payments from Students" },
                     other_income: { amount: 0, description: "Other Income" }
                 }
@@ -3660,7 +3837,7 @@ class EnhancedCashFlowService {
                     const matchingPayment = payments.find(p => 
                         p.student && entry.metadata && entry.metadata.studentId && 
                         p.student.toString() === entry.metadata.studentId.toString() &&
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
                     );
                     if (matchingPayment) {
                         correspondingPayment = matchingPayment;
@@ -3673,7 +3850,7 @@ class EnhancedCashFlowService {
                 if (!correspondingPayment && entry.metadata && entry.metadata.studentId) {
                     const matchingPayment = payments.find(p => 
                         p.student && p.student.toString() === entry.metadata.studentId.toString() &&
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
                     );
                     if (matchingPayment) {
                         correspondingPayment = matchingPayment;
@@ -3685,7 +3862,7 @@ class EnhancedCashFlowService {
                 // PRIORITY 5: Amount and date proximity matching (within 30 days)
                 if (!correspondingPayment) {
                     const matchingPayment = payments.find(p => 
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
                         Math.abs(new Date(p.date).getTime() - new Date(entry.date).getTime()) < 30 * 24 * 60 * 60 * 1000 // Within 30 days
                     );
                     if (matchingPayment) {
@@ -4069,13 +4246,15 @@ class EnhancedCashFlowService {
                                 monthlyCategory = 'advance_payments';
                             } 
                             // Check for specific payment allocations
-                            else if (desc.includes('payment allocation: rent')) {
+                            else if (desc.includes('payment allocation: levies') || desc.includes('levies') || desc.includes('levy')) {
+                                monthlyCategory = 'levies';
+                            } else if (desc.includes('payment allocation: rent')) {
                                 monthlyCategory = 'rental_income';
                             } else if (desc.includes('payment allocation: admin')) {
                                 monthlyCategory = 'admin_fees';
                             } 
-                            // Fallback to general keywords
-                            else if (desc.includes('rent')) {
+                            // Fallback to general keywords (never bare "payment allocation")
+                            else if (desc.includes('rent') && !desc.includes('payment allocation:')) {
                                 monthlyCategory = 'rental_income';
                             } else if (desc.includes('admin')) {
                                 monthlyCategory = 'admin_fees';
@@ -4105,6 +4284,16 @@ class EnhancedCashFlowService {
                         if (monthlyCategory === 'advance_payments') {
                             months[monthKey].income.advance_payments += incomeAmount;
                             console.log(`💰 Advance payment detected: ${incomeAmount} for ${monthKey} - Transaction: ${entry.transactionId}`);
+                        } else if (monthlyCategory === 'levies') {
+                            months[monthKey].income.levies = (months[monthKey].income.levies || 0) + incomeAmount;
+                            const leviesBreakdown = months[monthKey].operating_activities?.breakdown?.levies;
+                            if (leviesBreakdown && typeof leviesBreakdown === 'object') {
+                                leviesBreakdown.amount = (leviesBreakdown.amount || 0) + incomeAmount;
+                            } else if (months[monthKey].operating_activities?.breakdown) {
+                                months[monthKey].operating_activities.breakdown.levies =
+                                    (Number(months[monthKey].operating_activities.breakdown.levies) || 0) + incomeAmount;
+                            }
+                            console.log(`💰 Levies income detected: ${incomeAmount} for ${monthKey} - Transaction: ${entry.transactionId}`);
                         } else if (monthlyCategory === 'rental_income') {
                             months[monthKey].income.rental_income += incomeAmount;
                             console.log(`💰 Rental income detected: ${incomeAmount} for ${monthKey} - Transaction: ${entry.transactionId}`);
@@ -4201,7 +4390,7 @@ class EnhancedCashFlowService {
                                 const matchingPayment = payments.find(p => 
                                     p.student && entry.metadata && entry.metadata.student &&
                                     p.student.toLowerCase().includes(entry.metadata.student.toLowerCase()) &&
-                                    Math.abs(p.totalAmount - incomeAmount) < 0.01
+                                    Math.abs((p.totalAmount ?? p.amount ?? 0) - incomeAmount) < 0.01
                                 );
                                 
                                 if (matchingPayment) {
@@ -4236,7 +4425,7 @@ class EnhancedCashFlowService {
                             if (monthlyCategory === 'admin_fees' && !correspondingPayment) {
                                 // Try to find payment by amount and date proximity for admin fees
                                 const matchingPayment = payments.find(p => 
-                                    Math.abs(p.totalAmount - incomeAmount) < 0.01 &&
+                                    Math.abs((p.totalAmount ?? p.amount ?? 0) - incomeAmount) < 0.01 &&
                                     p.date && entry.date &&
                                     Math.abs(new Date(p.date).getTime() - new Date(entry.date).getTime()) < 30 * 24 * 60 * 60 * 1000 // Within 30 days
                                 );
@@ -4922,6 +5111,8 @@ class EnhancedCashFlowService {
                 console.error('❌ generateReliableMonthlyBreakdown: Invalid transactionEntries:', transactionEntries);
                 transactionEntries = [];
             }
+
+            const existingPaymentIds = await this.getExistingPaymentIdSet(transactionEntries);
         
         // Initialize simple monthly structure
         const monthlyData = {};
@@ -4936,6 +5127,7 @@ class EnhancedCashFlowService {
                         admin_fees: 0,
                         deposits: 0,
                         utilities: 0,
+                        levies: 0,
                         advance_payments: 0,
                         other_income: 0,
                         // Individual expense categories
@@ -4962,6 +5154,7 @@ class EnhancedCashFlowService {
                     admin_fees: 0,
                     deposits: 0,
                     utilities: 0,
+                    levies: 0,
                     advance_payments: 0,
                     other_income: 0
                 },
@@ -5543,6 +5736,11 @@ class EnhancedCashFlowService {
                         console.log(`💰 Internal cash transfer excluded from cash inflow in generateReliableMonthlyBreakdown: ${entry.transactionId} - Description: ${entry.description}`);
                         break; // Skip rest of this transaction, continue to next transaction
                     }
+
+                    if (this.isOrphanPaymentCashEntry(entry, existingPaymentIds)) {
+                        console.log(`💰 Orphan payment cash excluded from monthly cashflow: ${amount} - ${entry.transactionId} - paymentId: ${entry.metadata?.paymentId}`);
+                        break;
+                    }
                     
                     // This is actual cash inflow
                     monthlyData[monthName].operating_activities.inflows += amount;
@@ -5575,18 +5773,22 @@ class EnhancedCashFlowService {
                     }
                     
                     // Categorize based on description and timing
-                    // PRIORITY ORDER: Check for explicit advance payment keywords first, then rent, then others
-                    if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future') || isAdvancePayment) {
+                    // Levies are income, never rent/advances. Never treat bare "payment allocation" as rent.
+                    const incomeCategory = this.classifyStudentCashIncome(desc, entry.metadata || {});
+                    if (incomeCategory === 'levies') {
+                        monthlyData[monthName].income.levies = (monthlyData[monthName].income.levies || 0) + amount;
+                        monthlyData[monthName].operating_activities.breakdown.levies =
+                            (monthlyData[monthName].operating_activities.breakdown.levies || 0) + amount;
+                    } else if (incomeCategory === 'advance_payments' || isAdvancePayment) {
                         monthlyData[monthName].income.advance_payments += amount;
                         monthlyData[monthName].operating_activities.breakdown.advance_payments += amount;
-                    } else if (desc.includes('rent') || desc.includes('rental') || desc.includes('accommodation') || desc.includes('payment allocation')) {
-                        // Rent income - prioritize this over other categories
+                    } else if (incomeCategory === 'rental_income') {
                         monthlyData[monthName].income.rental_income += amount;
                         monthlyData[monthName].operating_activities.breakdown.rental_income += amount;
-                    } else if (desc.includes('admin') || desc.includes('administrative')) {
+                    } else if (incomeCategory === 'admin_fees') {
                         monthlyData[monthName].income.admin_fees += amount;
                         monthlyData[monthName].operating_activities.breakdown.admin_fees += amount;
-                    } else if ((desc.includes('deposit') || desc.includes('security')) &&
+                    } else if (incomeCategory === 'deposits' &&
                                // Also verify this is a deposit receipt (credits deposit account), not a return (debits deposit account)
                                entry.entries && entry.entries.some(line => {
                                    const lineAccountCode = String(line.accountCode || '').trim();
@@ -5602,10 +5804,10 @@ class EnhancedCashFlowService {
                         monthlyData[monthName].income.deposits += amount;
                         monthlyData[monthName].operating_activities.breakdown.deposits += amount;
                         console.log(`💰 [generateReliableMonthlyBreakdown] Cash deposit RECEIPT detected: ${amount} for ${monthName} - Transaction: ${entry.transactionId} - Deposits total now: ${monthlyData[monthName].income.deposits}`);
-                    } else if (desc.includes('utilit') || desc.includes('internet') || desc.includes('wifi')) {
+                    } else if (incomeCategory === 'utilities') {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
-                    } else if (desc.includes('council')) {
+                    } else if (incomeCategory === 'other_income' || desc.includes('council')) {
                         // Council payments should be treated as income
                         monthlyData[monthName].income.other_income += amount;
                         monthlyData[monthName].operating_activities.breakdown.other_income = (monthlyData[monthName].operating_activities.breakdown.other_income || 0) + amount;
@@ -5656,19 +5858,23 @@ class EnhancedCashFlowService {
                     monthlyData[monthName].income.total += amount;
                     processedTransactions.add(entry.transactionId + '_income');
                     
-                    // Categorize income (prioritize advance payments, then rent)
-                    const fallbackDesc = entry.description?.toLowerCase() || '';
-                    if (fallbackDesc.includes('advance') || fallbackDesc.includes('prepaid') || fallbackDesc.includes('future')) {
+                    // Categorize income (levies first — never rent/advance)
+                    const fallbackCategory = this.classifyStudentCashIncome(entry.description || '', entry.metadata || {});
+                    if (fallbackCategory === 'levies') {
+                        monthlyData[monthName].income.levies = (monthlyData[monthName].income.levies || 0) + amount;
+                        monthlyData[monthName].operating_activities.breakdown.levies =
+                            (monthlyData[monthName].operating_activities.breakdown.levies || 0) + amount;
+                    } else if (fallbackCategory === 'advance_payments') {
                         monthlyData[monthName].income.advance_payments += amount;
                         monthlyData[monthName].operating_activities.breakdown.advance_payments += amount;
-                    } else if (accountCode.startsWith('4001') || fallbackDesc.includes('rent') || fallbackDesc.includes('rental') || fallbackDesc.includes('accommodation') || fallbackDesc.includes('payment allocation')) {
+                    } else if (fallbackCategory === 'rental_income' || accountCode.startsWith('4001')) {
                         // Rental income - prioritize this
                         monthlyData[monthName].income.rental_income += amount;
                         monthlyData[monthName].operating_activities.breakdown.rental_income += amount;
-                    } else if (accountCode.startsWith('4002') || fallbackDesc.includes('admin')) {
+                    } else if (fallbackCategory === 'admin_fees' || accountCode.startsWith('4002')) {
                         monthlyData[monthName].income.admin_fees += amount;
                         monthlyData[monthName].operating_activities.breakdown.admin_fees += amount;
-                    } else if (accountCode.startsWith('4003') || fallbackDesc.includes('deposit')) {
+                    } else if (accountCode.startsWith('4003') || fallbackCategory === 'deposits') {
                         // Check if this is actually a late payment fee (not a deposit) - exclude from cash flow
                         const accountNameLower = (line.accountName || '').toLowerCase();
                         const isLatePaymentFee = accountNameLower.includes('late') && 
@@ -5682,14 +5888,20 @@ class EnhancedCashFlowService {
                             monthlyData[monthName].income.deposits += amount;
                             monthlyData[monthName].operating_activities.breakdown.deposits += amount;
                         }
-                    } else if (accountCode.startsWith('4004') || accountCode.startsWith('4005') || fallbackDesc.includes('utilit') || fallbackDesc.includes('internet') || fallbackDesc.includes('wifi')) {
+                    } else if (accountCode.startsWith('4004') || accountCode.startsWith('4005') || fallbackCategory === 'utilities') {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
-                    } else if (fallbackDesc.includes('council')) {
-                        // Council payments should be treated as income
-                        monthlyData[monthName].income.other_income += amount;
-                        monthlyData[monthName].operating_activities.breakdown.other_income = (monthlyData[monthName].operating_activities.breakdown.other_income || { amount: 0, description: "Other Income" });
-                        monthlyData[monthName].operating_activities.breakdown.other_income.amount += amount;
+                    } else if (fallbackCategory === 'other_income' || accountCode === '4010') {
+                        if (fallbackCategory === 'levies' || accountCode === '4010') {
+                            monthlyData[monthName].income.levies = (monthlyData[monthName].income.levies || 0) + amount;
+                            monthlyData[monthName].operating_activities.breakdown.levies =
+                                (monthlyData[monthName].operating_activities.breakdown.levies || 0) + amount;
+                        } else {
+                            // Council / other income
+                            monthlyData[monthName].income.other_income += amount;
+                            monthlyData[monthName].operating_activities.breakdown.other_income = (monthlyData[monthName].operating_activities.breakdown.other_income || { amount: 0, description: "Other Income" });
+                            monthlyData[monthName].operating_activities.breakdown.other_income.amount += amount;
+                        }
                     } else {
                         // Check for balance sheet adjustments (exclude from income)
                         if (this.isBalanceSheetAdjustment(entry)) {
@@ -8043,7 +8255,7 @@ class EnhancedCashFlowService {
                     correspondingPayment = payments.find(p => 
                         p.student && entry.metadata && entry.metadata.studentId && 
                         p.student.toString() === entry.metadata.studentId.toString() &&
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
                     );
                     if (correspondingPayment) {
                         effectiveDate = correspondingPayment.date;
@@ -8058,7 +8270,7 @@ class EnhancedCashFlowService {
                 else if (entry.metadata && entry.metadata.studentId) {
                     correspondingPayment = payments.find(p => 
                         p.student && p.student.toString() === entry.metadata.studentId.toString() &&
-                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                        Math.abs((p.totalAmount ?? p.amount ?? 0) - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
                     );
                     if (correspondingPayment) {
                         effectiveDate = correspondingPayment.date;

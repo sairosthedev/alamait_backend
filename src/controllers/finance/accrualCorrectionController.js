@@ -71,13 +71,17 @@ class AccrualCorrectionController {
     static async findIncorrectAccruals(req, res) {
         try {
             const { year, month } = req.query;
-            
-            const result = await AccrualCorrectionService.findStudentsWithIncorrectAccruals(
-                year ? parseInt(year) : null,
-                month ? parseInt(month) : null
+            const yearNum = year ? parseInt(year) : null;
+            const monthNum = month ? parseInt(month) : null;
+            const cacheService = require('../../services/cacheService');
+            const cacheKey = `accrual-find-issues:${yearNum || 'all'}:${monthNum || 'all'}`;
+
+            const result = await cacheService.getOrSet(cacheKey, 300, async () =>
+                AccrualCorrectionService.findStudentsWithIncorrectAccruals(yearNum, monthNum)
             );
             
             if (result.success) {
+                res.set('Cache-Control', 'private, max-age=60');
                 res.status(200).json({
                     success: true,
                     message: `Found ${result.count} students with potential incorrect accruals`,

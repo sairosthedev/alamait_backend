@@ -1,23 +1,33 @@
 const { Residence } = require('../../models/Residence');
-const User = require('../../models/User');
 const cacheService = require('../../services/cacheService');
 
-// Get all residences (for finance)
-// OPTIMIZED: Added caching and lean() for better performance
+const FINANCE_RESIDENCE_SELECT = [
+    'name',
+    'address',
+    'status',
+    'manager',
+    'rooms.roomNumber',
+    'rooms.type',
+    'rooms.price',
+    'rooms.status',
+    'rooms.capacity',
+    'rooms.occupied',
+    'rooms.currentOccupants'
+].join(' ');
+
+// Get all residences (for finance) — slim projection, no images/rules/amenities
 exports.getAllResidences = async (req, res) => {
     try {
-        const cacheKey = 'finance-residences';
-        
-        // Try cache first (5 minute TTL)
-        const cached = await cacheService.getOrSet(cacheKey, 300, async () => {
-            // Use lean() for better performance (returns plain objects, not Mongoose documents)
-            const residences = await Residence.find()
+        const cacheKey = 'finance-residences:slim:v2';
+
+        const cached = await cacheService.getOrSet(cacheKey, 600, async () => {
+            return Residence.find()
+                .select(FINANCE_RESIDENCE_SELECT)
                 .populate('manager', 'firstName lastName email')
                 .lean();
-            return residences;
         });
-        
-        res.set('Cache-Control', 'private, max-age=120');
+
+        res.set('Cache-Control', 'private, max-age=300');
         res.json(cached);
     } catch (error) {
         console.error('Finance: Error in getAllResidences:', error);
@@ -28,7 +38,10 @@ exports.getAllResidences = async (req, res) => {
 // Get single residence (for finance)
 exports.getResidence = async (req, res) => {
     try {
-        const residence = await Residence.findById(req.params.id).populate('manager', 'firstName lastName email');
+        const residence = await Residence.findById(req.params.id)
+            .select(FINANCE_RESIDENCE_SELECT)
+            .populate('manager', 'firstName lastName email')
+            .lean();
         if (!residence) {
             return res.status(404).json({ error: 'Residence not found' });
         }
@@ -37,4 +50,4 @@ exports.getResidence = async (req, res) => {
         console.error('Finance: Error in getResidence:', error);
         res.status(500).json({ error: 'Server error' });
     }
-}; 
+};
