@@ -9,6 +9,7 @@ const { Residence } = require('../../models/Residence');
 const Lease = require('../../models/Lease');
 const mongoose = require('mongoose');
 const cacheService = require('../../services/cacheService');
+const { arAccountCodeMatch } = require('../../utils/accountQueryHelpers');
 
 /**
  * Payment Allocation Controller
@@ -71,29 +72,11 @@ const getStudentARBalances = async (req, res) => {
             }
         }
         
-        // Try fuzzy matching as last resort
-        if (!debtor) {
-            const allDebtors = await Debtor.find({}).select('accountCode _id user debtorCode application').lean();
-            for (const d of allDebtors) {
-                if (d.user && d.user.toString() === actualUserId) {
-                    debtor = d;
-                    break;
-                }
-                if (d.application && d.application.toString() === studentId) {
-                    debtor = d;
-                    break;
-                }
-            }
-        }
-        
+        // Exact lookups only — never load all debtors (major latency spike)
         if (debtor) {
-            console.log(`✅ Found debtor: ${debtor.debtorCode}`);
-            console.log(`   Account Code: ${debtor.accountCode} (format: 1100-{debtorId})`);
-            console.log(`   Debtor ID: ${debtor._id}`);
-            console.log(`   User ID: ${debtor.user}`);
-            console.log(`   Using debtor account code for AR balance queries`);
-            
-            // 🆕 CRITICAL: Use the actual user ID from debtor for queries
+            if (process.env.DEBUG === 'true') {
+                console.log(`✅ Found debtor: ${debtor.debtorCode} / ${debtor.accountCode}`);
+            }
             actualUserId = debtor.user.toString();
         } else {
             console.warn(`⚠️ No debtor found for student ${studentId} (actualUserId: ${actualUserId})`);
@@ -568,7 +551,7 @@ const getOutstandingBalancesSummary = async (req, res) => {
         const summaryData = await cacheService.getOrSet(cacheKey, 60, async () => {
             // Build query for AR transactions
             const query = {
-                'entries.accountCode': { $regex: '^1100-' },
+                'entries.accountCode': arAccountCodeMatch(),
                 'entries.accountType': 'asset',
                 'entries.debit': { $gt: 0 }
             };
@@ -689,7 +672,7 @@ const getARInvoices = async (req, res) => {
         // Build query for accrual transactions
         const query = {
             source: 'rental_accrual',
-            'entries.accountCode': { $regex: '^1100-' }
+            'entries.accountCode': arAccountCodeMatch()
         };
 
         if (studentId) {
@@ -801,7 +784,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
             // Match AR transactions (both debits and credits)
             {
                 $match: {
-                    'entries.accountCode': { $regex: '^1100-' },
+                    'entries.accountCode': arAccountCodeMatch(),
                     'entries.accountType': 'Asset',
                     ...residenceFilter
                 }
@@ -811,7 +794,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
             // Match only AR entries
             {
                 $match: {
-                    'entries.accountCode': { $regex: '^1100-' },
+                    'entries.accountCode': arAccountCodeMatch(),
                     'entries.accountType': 'Asset'
                 }
             },
@@ -991,9 +974,14 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
 async function computeLiteMonthlyOutstanding({ residence, limit = 100, sortBy = 'totalBalance', sortOrder = 'desc' }) {
     const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 100));
 
+    // Bound history — full AR ledger scan was crushing Atlas on every payments page load
+    const historyStart = new Date();
+    historyStart.setFullYear(historyStart.getFullYear() - 2);
+
     const transactionQuery = {
         status: 'posted',
-        'entries.accountCode': { $regex: '^1100-' },
+        date: { $gte: historyStart },
+        'entries.accountCode': arAccountCodeMatch(),
         'entries.accountType': 'Asset'
     };
 
@@ -1254,7 +1242,7 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
             // Get all AR transactions for all students
         // Use same calculation logic as balance sheet: cumulative balances by transaction date up to month end
         const transactionQuery = {
-            'entries.accountCode': { $regex: '^1100-' },
+            'entries.accountCode': arAccountCodeMatch(),
             'entries.accountType': 'Asset',
             status: 'posted'
         };
@@ -1273,7 +1261,7 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
             const residenceId = new mongoose.Types.ObjectId(residence);
             // Use $and to combine residence filter with other conditions
             transactionQuery.$and = [
-                { 'entries.accountCode': { $regex: '^1100-' } },
+                { 'entries.accountCode': arAccountCodeMatch() },
                 { 'entries.accountType': 'Asset' },
                 { status: 'posted' },
                 {

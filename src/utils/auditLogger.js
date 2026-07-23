@@ -77,7 +77,9 @@ exports.createAuditLog = async (logData) => {
             errorMessage
         });
 
-        console.log(`[AUDIT] ${action} on ${collection} - ${recordId || 'N/A'} by user ${resolvedUserId} (${finalRequestId})`);
+        if (process.env.DEBUG === 'true' || process.env.VERBOSE_LOGS === 'true') {
+            console.log(`[AUDIT] ${action} on ${collection} - ${recordId || 'N/A'} by user ${resolvedUserId} (${finalRequestId})`);
+        }
         return auditEntry;
     } catch (error) {
         console.error('Failed to save audit log:', error);

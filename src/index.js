@@ -29,12 +29,17 @@ const startServer = async () => {
         }
 
         // Start monthly accrual cron service after database connection
-        const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
-        try {
-            monthlyAccrualCronService.start();
-            console.log('✅ Monthly accrual cron service started');
-        } catch (error) {
-            console.error('❌ Failed to start monthly accrual cron service:', error);
+        // Skip on web dyno when DISABLE_HEAVY_JOBS=true (use a Render Background Worker instead)
+        if (process.env.DISABLE_HEAVY_JOBS === 'true') {
+            console.log('ℹ️ DISABLE_HEAVY_JOBS=true — skipping monthly accrual cron on this process');
+        } else {
+            const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
+            try {
+                monthlyAccrualCronService.start();
+                console.log('✅ Monthly accrual cron service started');
+            } catch (error) {
+                console.error('❌ Failed to start monthly accrual cron service:', error);
+            }
         }
 
         // Start server

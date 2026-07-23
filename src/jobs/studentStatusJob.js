@@ -7,11 +7,17 @@ const StudentStatusManager = require('../utils/studentStatusManager');
  */
 class StudentStatusJob {
     static _running = false;
+    static _initialized = false;
 
     /**
      * Initialize the student status job
      */
     static initialize() {
+        if (this._initialized) {
+            console.log('⚠️ Student status job already initialized — skipping');
+            return;
+        }
+        this._initialized = true;
         console.log('🕐 Initializing student status job...');
 
         // Daily only — hourly checks on Render compete with API traffic

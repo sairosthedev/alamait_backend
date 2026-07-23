@@ -14,8 +14,8 @@ class EmailOutboxService {
             return;
         }
 
-        // Every 60 seconds
-        this.job = cron.schedule('* * * * *', async () => {
+        // Every 5 minutes (was every 60s — stole CPU/SMTP from API on Render web dyno)
+        this.job = cron.schedule('*/5 * * * *', async () => {
             try {
                 // Fetch failed or queued items due now
                 const pending = await EmailOutbox.find({
@@ -67,7 +67,7 @@ class EmailOutboxService {
             }
         }, { scheduled: true, timezone: 'Africa/Harare' });
 
-        console.log('✅ EmailOutboxService started (every 60s in production)');
+        console.log('✅ EmailOutboxService started (every 5 min in production)');
     }
 }
 

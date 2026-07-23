@@ -188,8 +188,8 @@ async function logAPIAudit({ request, response, originalReq }) {
         // Extract record ID if present
         const recordId = extractRecordId(request.path, request.body);
         
-        // Create audit log entry
-        await createAuditLog({
+        // Create audit log entry (fire-and-forget — never block the response path)
+        createAuditLog({
             action,
             collection,
             recordId,
@@ -210,78 +210,10 @@ async function logAPIAudit({ request, response, originalReq }) {
             }),
             ipAddress: request.ipAddress,
             userAgent: request.userAgent
-        });
-        
-        // Also track as user activity if user is authenticated
-        if (request.user && request.user.id) {
-            try {
-                const UserActivityService = require('../services/userActivityService');
-                const page = request.path;
-                const pageTitle = collection;
-                
-                // Use the original request object if available, otherwise create a minimal one
-                const reqForTracking = originalReq || {
-                    sessionID: originalReq?.sessionID || uuidv4(), // Generate session ID if not available
-                    requestId: request.requestId || uuidv4(),
-                    ip: request.ipAddress,
-                    connection: { remoteAddress: request.ipAddress },
-                    headers: { 
-                        'user-agent': request.userAgent,
-                        'referer': originalReq?.headers?.['referer'] || null,
-                        'referrer': originalReq?.headers?.['referrer'] || null
-                    },
-                    path: request.path,
-                    method: request.method,
-                    query: request.query,
-                    url: request.path
-                };
-                
-                // Ensure we have a session ID
-                if (!reqForTracking.sessionID) {
-                    reqForTracking.sessionID = uuidv4();
-                }
-                
-                // Track as action for API calls
-                const activityResult = await UserActivityService.trackAction(request.user.id, reqForTracking, {
-                    page,
-                    pageTitle,
-                    action: action,
-                    data: {
-                        method: request.method,
-                        path: request.path,
-                        query: request.query,
-                        statusCode: response.statusCode,
-                        duration: response.duration
-                    },
-                    recordId: recordId,
-                    collection: collection,
-                    status: response.statusCode < 400 ? 'success' : 'error',
-                    metadata: {
-                        responseSize: response.size,
-                        apiCall: true
-                    }
-                });
-                
-                if (!activityResult) {
-                    console.warn(`⚠️ UserActivity tracking returned null for user ${request.user.id} on ${request.path}`);
-                }
-            } catch (activityError) {
-                // Log error in all environments to help debug
-                console.error('❌ Failed to track user activity:', activityError.message);
-                console.error('   UserId:', request.user?.id);
-                console.error('   Path:', request.path);
-                console.error('   Action:', action);
-                if (process.env.NODE_ENV === 'development') {
-                    console.error('   Full error:', activityError);
-                    console.error('   Stack:', activityError.stack?.split('\n').slice(0, 10).join('\n'));
-                }
-            }
-        } else {
-            // Log when user is not authenticated (for debugging)
-            if (process.env.NODE_ENV === 'development' && request.path !== '/health' && !request.path.startsWith('/static')) {
-                console.log(`ℹ️ Skipping activity tracking - no authenticated user for ${request.method} ${request.path}`);
-            }
-        }
+        }).catch(() => {});
+
+        // Do NOT dual-write UserActivity here — frontend /user-activity/track owns UX telemetry.
+        // Middleware UserActivity.create doubled Atlas writes on every mutation.
     } catch (error) {
         console.error('Error creating API audit log:', error);
     }

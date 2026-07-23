@@ -1137,55 +1137,38 @@ class FinancialReportsController {
             let totalAnnualExpenses = 0;
             let totalAnnualNetIncome = 0;
 
-            const monthResults = await Promise.all(
-                Array.from({ length: 12 }, (_, index) => {
-                    const month = index + 1;
-                    return AccountingService.generateMonthlyIncomeStatement(month, parseInt(period, 10), residence)
-                        .then((monthData) => ({ month, monthData }))
-                        .catch((monthError) => {
-                            if (isReportDebugMode()) {
-                                console.error(`  ❌ Error processing month ${month}:`, monthError.message);
-                            }
-                            return { month, monthData: null };
-                        });
-                })
-            );
+            // Fast path: one year aggregation instead of 12× full income statements
+            const FastExecutiveDashboardService = require('../services/fastExecutiveDashboardService');
+            const yearPnL = await FastExecutiveDashboardService.getYearMonthlyPnL(parseInt(period, 10));
 
-            monthResults.forEach(({ month, monthData }) => {
+            Object.values(yearPnL).forEach((row) => {
+                const month = row.month;
                 const monthName = new Date(parseInt(period, 10), month - 1, 1).toLocaleString('en-US', { month: 'long' });
+                const revenueTotal = row.revenue || 0;
+                const expenseTotal = row.expenses || 0;
+                const netIncome = row.netIncome || 0;
 
-                if (monthData && monthData.success) {
-                    monthlyBreakdown[month] = {
-                        month,
-                        monthName,
-                        revenue: monthData.revenue || { total: 0 },
-                        expenses: monthData.expenses || { total: 0 },
-                        netIncome: monthData.netIncome || 0,
-                        summary: {
-                            totalRevenue: monthData.revenue?.total || 0,
-                            totalExpenses: monthData.expenses?.total || 0,
-                            totalNetIncome: monthData.netIncome || 0
-                        }
-                    };
+                monthlyBreakdown[month] = {
+                    month,
+                    monthName,
+                    revenue: { total: revenueTotal },
+                    expenses: { total: expenseTotal },
+                    netIncome,
+                    summary: {
+                        totalRevenue: revenueTotal,
+                        totalExpenses: expenseTotal,
+                        totalNetIncome: netIncome
+                    }
+                };
 
-                    totalAnnualRevenue += monthData.revenue?.total || 0;
-                    totalAnnualExpenses += monthData.expenses?.total || 0;
-                    totalAnnualNetIncome += monthData.netIncome || 0;
-                } else {
-                    monthlyBreakdown[month] = {
-                        month,
-                        monthName,
-                        revenue: { total: 0 },
-                        expenses: { total: 0 },
-                        netIncome: 0,
-                        summary: {
-                            totalRevenue: 0,
-                            totalExpenses: 0,
-                            totalNetIncome: 0
-                        }
-                    };
-                }
+                totalAnnualRevenue += revenueTotal;
+                totalAnnualExpenses += expenseTotal;
+                totalAnnualNetIncome += netIncome;
             });
+
+            // Legacy 12× path removed — was saturating Atlas connection pool on every dashboard load
+            const monthResults = []; // kept name for compatibility below if referenced
+            void monthResults;
 
             const dashboardData = {
                 period,

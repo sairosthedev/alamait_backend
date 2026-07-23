@@ -4,6 +4,7 @@ const Expense = require('../models/finance/Expense');
 const Account = require('../models/Account');
 const { Residence } = require('../models/Residence');
 const mongoose = require('mongoose');
+const { cashAccountCodeMatch, debugLog } = require('../utils/accountQueryHelpers');
 let CashFlowValidator;
 try {
     CashFlowValidator = require('./cashFlowValidator');
@@ -9118,27 +9119,25 @@ class EnhancedCashFlowService {
      */
     static async getOpeningCashBalance(asOfDate, residenceId = null) {
         try {
-            console.log(`💰 Calculating opening cash balance as of ${asOfDate.toISOString().slice(0, 10)}`);
+            debugLog(`💰 Calculating opening cash balance as of ${asOfDate.toISOString().slice(0, 10)}`);
             
-            // Get all transaction entries up to the specified date
             const query = {
                 date: { $lte: asOfDate },
-                // Exclude forfeiture transactions as they don't involve cash movement
                 'metadata.isForfeiture': { $ne: true },
-                status: { $nin: ['reversed', 'draft'] }
+                status: { $nin: ['reversed', 'draft'] },
+                'entries.accountCode': cashAccountCodeMatch()
             };
             
             if (residenceId) {
                 query.residence = new mongoose.Types.ObjectId(residenceId);
             }
             
-            // Optimize: Use aggregation pipeline for much faster cash balance calculation
             const cashBalanceResult = await TransactionEntry.aggregate([
                 { $match: query },
                 { $unwind: '$entries' },
                 {
                     $match: {
-                        'entries.accountCode': { $regex: '^(100|101)' }
+                        'entries.accountCode': cashAccountCodeMatch()
                     }
                 },
                 {
@@ -9154,7 +9153,7 @@ class EnhancedCashFlowService {
             const totalCredits = cashBalanceResult[0]?.totalCredits || 0;
             const cashBalance = totalDebits - totalCredits;
             
-            console.log(`💰 Total opening cash balance: $${cashBalance}`);
+            debugLog(`💰 Total opening cash balance: $${cashBalance}`);
             return cashBalance;
             
         } catch (error) {
@@ -9169,25 +9168,21 @@ class EnhancedCashFlowService {
      */
     static async getCashBalanceByAccount(asOfDate, residenceId = null) {
         try {
-            // Optimize: Reduce logging in production
             const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
             if (isDebugMode) {
                 console.log(`💰 Calculating cash balance by account as of ${asOfDate.toISOString().slice(0, 10)}${residenceId ? ` (residence: ${residenceId})` : ''}`);
             }
             
-            // Get all transaction entries up to the specified date
             const query = {
                 date: { $lte: asOfDate },
-                // Exclude forfeiture transactions as they don't involve cash movement
                 'metadata.isForfeiture': { $ne: true },
-                status: { $nin: ['reversed', 'draft'] }
+                status: { $nin: ['reversed', 'draft'] },
+                'entries.accountCode': cashAccountCodeMatch()
             };
-            
+
             if (residenceId) {
-                // When filtering by residence, check both top-level residence and metadata fields
-                // This matches the balance sheet logic for consistency
-                const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
-                    ? new mongoose.Types.ObjectId(residenceId) 
+                const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId)
+                    ? new mongoose.Types.ObjectId(residenceId)
                     : residenceId;
                 query.$or = [
                     { residence: residenceObjectId },
@@ -9198,30 +9193,22 @@ class EnhancedCashFlowService {
                     { 'metadata.residence': residenceId.toString() }
                 ];
             }
-            
-            // Optimize: Use aggregation pipeline for much faster cash balance by account calculation
+
             const accountBalancesResult = await TransactionEntry.aggregate([
                 { $match: query },
                 { $unwind: '$entries' },
                 {
                     $match: {
-                        // Match cash accounts: 1000-1019, but exclude 10000-10099 (those are not cash accounts)
-                        // Account 10003 is a special case - it's a cash account (Cbz Vault)
-                        $or: [
-                            { 'entries.accountCode': { $regex: '^10[0-1][0-9]$' } }, // 1000-1019
-                            { 'entries.accountCode': '10003' } // Explicitly include Cbz Vault
-                        ]
+                        'entries.accountCode': cashAccountCodeMatch()
                     }
                 },
                 {
                     $group: {
                         _id: {
                             accountCode: '$entries.accountCode'
-                            // Group only by accountCode, not accountName, to avoid splitting accounts with different names
                         },
                         totalDebits: { $sum: { $ifNull: ['$entries.debit', 0] } },
                         totalCredits: { $sum: { $ifNull: ['$entries.credit', 0] } },
-                        // Get the most common account name (prefer "Cbz Vault" over "cbz" for account 10003)
                         accountNames: { $addToSet: '$entries.accountName' }
                     }
                 },
@@ -9229,7 +9216,6 @@ class EnhancedCashFlowService {
                     $project: {
                         _id: 0,
                         accountCode: '$_id.accountCode',
-                        // Normalize account name: use "Cbz Vault" for account code 10003, otherwise use first name
                         accountName: {
                             $cond: {
                                 if: { $eq: ['$_id.accountCode', '10003'] },
@@ -9244,9 +9230,8 @@ class EnhancedCashFlowService {
             
             const accountBalances = {};
             accountBalancesResult.forEach(account => {
-                // Always use "Cbz Vault" for account code 10003 to ensure consistency with balance sheet
-                const accountName = (account.accountCode === '10003') 
-                    ? 'Cbz Vault' 
+                const accountName = (account.accountCode === '10003')
+                    ? 'Cbz Vault'
                     : account.accountName;
                 
                 accountBalances[account.accountCode] = {
@@ -9291,13 +9276,15 @@ class EnhancedCashFlowService {
                 query.residence = new mongoose.Types.ObjectId(residenceId);
             }
             
-            // Optimize: Use aggregation pipeline for much faster cash balance calculation
+            // Pre-filter to cash accounts so $match can use multikey index before unwind
+            query['entries.accountCode'] = cashAccountCodeMatch();
+
             const cashBalanceResult = await TransactionEntry.aggregate([
                 { $match: query },
                 { $unwind: '$entries' },
                 {
                     $match: {
-                        'entries.accountCode': { $regex: '^(100|101)' }
+                        'entries.accountCode': cashAccountCodeMatch()
                     }
                 },
                 {

@@ -7,6 +7,7 @@ const TransactionEntry = require('../models/TransactionEntry');
 const Debtor = require('../models/Debtor');
 const Maintenance = require('../models/Maintenance');
 const Application = require('../models/Application');
+const { cashAccountCodeMatch } = require('../utils/accountQueryHelpers');
 
 const MONTH_NAMES_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -127,10 +128,7 @@ class FastExecutiveDashboardService {
             { $unwind: '$entries' },
             {
                 $match: {
-                    $or: [
-                        { 'entries.accountCode': { $regex: /^10[0-1]\d$/ } },
-                        { 'entries.accountCode': '10003' }
-                    ]
+                    'entries.accountCode': cashAccountCodeMatch()
                 }
             },
             {
@@ -241,7 +239,7 @@ class FastExecutiveDashboardService {
             { $unwind: '$entries' },
             {
                 $match: {
-                    'entries.accountCode': { $regex: /^10[0-1]\d$/ },
+                    'entries.accountCode': cashAccountCodeMatch(),
                     'entries.debit': { $gt: 0 }
                 }
             },
