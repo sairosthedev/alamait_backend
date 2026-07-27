@@ -2484,10 +2484,8 @@ class EnhancedPaymentAllocationService {
       const monthMatchClause = (initialMonthSettled === null || initialMonthSettled === undefined)
         ? { $or: [{ 'metadata.monthSettled': null }, { 'metadata.monthSettled': { $exists: false } }] }
         : { 'metadata.monthSettled': initialMonthSettled };
-      
-      // Check 1: By payment ID + payment type (allow separate advance for rent vs deposit)
-      // Same payment can have one advance for 'rent' and one for 'deposit' - they must be separate transactions
-      const existingAdvanceTx = await TransactionEntry.findOne({
+
+      const paymentLinkClause = {
         $or: [
           { sourceId: paymentObjectId },
           { sourceId: paymentIdStr },
@@ -2495,11 +2493,19 @@ class EnhancedPaymentAllocationService {
           { 'metadata.paymentId': paymentId },
           { reference: paymentIdStr },
           { reference: paymentId }
-        ],
-        source: 'advance_payment',
-        'metadata.paymentType': paymentType,
-        ...monthMatchClause,
-        status: { $ne: 'reversed' }
+        ]
+      };
+
+      // Check 1: By payment ID + payment type (allow separate advance for rent vs deposit)
+      // Use $and so monthMatchClause $or does not overwrite paymentLinkClause $or
+      const existingAdvanceTx = await TransactionEntry.findOne({
+        $and: [
+          paymentLinkClause,
+          { source: 'advance_payment' },
+          { 'metadata.paymentType': paymentType },
+          monthMatchClause,
+          { status: { $ne: 'reversed' } }
+        ]
       });
       
       if (existingAdvanceTx) {
@@ -2515,8 +2521,9 @@ class EnhancedPaymentAllocationService {
       const { cashAccountCodeMatch } = require('../utils/accountQueryHelpers');
       const existingByStudentAmountDate = await TransactionEntry.findOne({
         'metadata.studentId': userIdStr,
+        'metadata.paymentType': paymentType,
         'entries.accountCode': cashAccountCodeMatch(),
-        'entries.debit': amount, // Same amount
+        'entries.debit': amount,
         date: {
           $gte: new Date(paymentDate.getFullYear(), paymentDate.getMonth(), paymentDate.getDate()),
           $lt: new Date(paymentDate.getFullYear(), paymentDate.getMonth(), paymentDate.getDate() + 1)
