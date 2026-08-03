@@ -9,6 +9,33 @@ const { createAuditLog } = require('../../utils/auditLogger');
 const { getStudentInfo, getStudentName, isStudentExpired, resolveStudentIdentifier, getLinkedStudentIdentifiers } = require('../../utils/studentUtils');
 const DeletionLogService = require('../../services/deletionLogService');
 
+/** Short TTL cache for unfiltered/light-filtered transaction list pages */
+const TXN_LIST_CACHE = new Map();
+const TXN_LIST_CACHE_TTL_MS = 20_000;
+const TXN_LIST_CACHE_MAX = 40;
+
+function txnListCacheGet(key) {
+    const hit = TXN_LIST_CACHE.get(key);
+    if (!hit) return null;
+    if (Date.now() > hit.expiresAt) {
+        TXN_LIST_CACHE.delete(key);
+        return null;
+    }
+    return hit.payload;
+}
+
+function txnListCacheSet(key, payload) {
+    if (TXN_LIST_CACHE.size >= TXN_LIST_CACHE_MAX) {
+        const oldest = TXN_LIST_CACHE.keys().next().value;
+        TXN_LIST_CACHE.delete(oldest);
+    }
+    TXN_LIST_CACHE.set(key, { expiresAt: Date.now() + TXN_LIST_CACHE_TTL_MS, payload });
+}
+
+function clearTxnListCache() {
+    TXN_LIST_CACHE.clear();
+}
+
 /**
  * Transaction Controller
  * 
@@ -18,194 +45,251 @@ const DeletionLogService = require('../../services/deletionLogService');
 class TransactionController {
     
     /**
-     * Get all transactions (main endpoint for frontend)
+     * Get all transactions (paginated — use page + limit; max 100 per page)
+     * GET /api/finance/transactions?page=1&limit=50
      */
     static async getAllTransactions(req, res) {
         try {
+            const startedAt = Date.now();
             const { page = 1, type, startDate, endDate, residence, source, userId, studentId } = req.query;
-            const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
-            
-            console.log('🔍 Fetching all transactions with filters:', req.query);
-            
+            // Small pages keep list fast; clients must use pagination.pages / hasNext
+            const DEFAULT_LIMIT = 50;
+            const MAX_LIMIT = 100;
+            const limit = Math.min(
+                MAX_LIMIT,
+                Math.max(1, parseInt(req.query.limit, 10) || DEFAULT_LIMIT)
+            );
+            const pageNum = Math.max(1, parseInt(page, 10) || 1);
+            const skip = (pageNum - 1) * limit;
+            // List view rarely needs nested payment populate; skip unless explicitly asked
+            const includePayment = String(req.query.includePayment || '').toLowerCase() === 'true';
+            // Entries are needed for journal lines; allow omitting for ultra-light list
+            const includeEntries = String(req.query.includeEntries ?? 'true').toLowerCase() !== 'false';
+
             let query = {};
-            
-            // Add filters
+
             if (type && type !== 'all') {
                 if (type === 'petty_cash') {
                     query.source = 'manual';
-                    query['metadata.transactionType'] = { 
-                        $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] 
+                    query['metadata.transactionType'] = {
+                        $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment']
                     };
                 } else {
                     query.type = type;
                 }
             }
-            
+
             if (source && source !== 'all') {
                 query.source = source;
             }
-            
+
             if (userId) {
                 query.sourceId = userId;
             }
-            
+
             if (startDate || endDate) {
                 query.date = {};
                 if (startDate) query.date.$gte = new Date(startDate);
                 if (endDate) query.date.$lte = new Date(endDate);
             }
-            
+
             if (residence) {
                 query.residence = residence;
             }
-            
-            // Handle studentId - filter by student's AR account and metadata
-            // This must be done AFTER other filters to properly combine conditions
+
             if (studentId) {
-                const mongoose = require('mongoose');
-                
                 const canonicalStudentId = await resolveStudentIdentifier(studentId);
                 const identifierVariants = await getLinkedStudentIdentifiers(canonicalStudentId || studentId);
                 const idStrings = Array.from(new Set(
                     (identifierVariants && identifierVariants.length ? identifierVariants : [studentId])
-                        .map(id => id && id.toString())
+                        .map((id) => id && id.toString())
                         .filter(Boolean)
                 ));
                 const idObjects = idStrings
-                    .filter(str => mongoose.Types.ObjectId.isValid(str))
-                    .map(str => new mongoose.Types.ObjectId(str));
-                
-                console.log('🔍 Filtering transactions for student identifiers:', idStrings);
-                
+                    .filter((str) => mongoose.Types.ObjectId.isValid(str))
+                    .map((str) => new mongoose.Types.ObjectId(str));
+
                 const orConditions = [];
-                
-                idStrings.forEach(idStr => {
-                    // AR account code — equality uses index (avoid regex)
+                idStrings.forEach((idStr) => {
                     orConditions.push({ 'entries.accountCode': `1100-${idStr}` });
-                    
-                    // Metadata and reference matches (string)
                     orConditions.push({ 'metadata.studentId': idStr });
                     orConditions.push({ 'metadata.userId': idStr });
                     orConditions.push({ sourceId: idStr });
                 });
-                
-                idObjects.forEach(objId => {
+                idObjects.forEach((objId) => {
                     orConditions.push({ 'metadata.studentId': objId });
                     orConditions.push({ 'metadata.userId': objId });
                     orConditions.push({ sourceId: objId });
                 });
-                
+
                 const studentQuery = { $or: orConditions };
-                
                 const existingConditions = { ...query };
-                if (Object.keys(existingConditions).length === 0) {
-                    query = studentQuery;
-                } else {
-                query = {
-                    $and: [
-                        existingConditions,
-                        studentQuery
-                    ]
-                };
-                }
-                
-                console.log(`📋 Final query structure:`, JSON.stringify(query, null, 2));
+                query = Object.keys(existingConditions).length === 0
+                    ? studentQuery
+                    : { $and: [existingConditions, studentQuery] };
             }
-            
-            const skip = (parseInt(page) - 1) * parseInt(limit);
-            
-            // OPTIMIZED: Use aggregation pipeline for better performance
-            // This avoids populate() which causes N+1 queries
-            const pipeline = [
-                { $match: query },
-                { $sort: { date: -1 } },
-                { $skip: skip },
-                { $limit: parseInt(limit) },
-                {
-                    $lookup: {
-                        from: 'payments',
-                        localField: 'sourceId',
-                        foreignField: '_id',
-                        as: 'paymentData'
-                    }
-                },
-                {
-                    $unwind: {
-                        path: '$paymentData',
-                        preserveNullAndEmptyArrays: true
-                    }
-                },
-                {
-                    $project: {
-                        _id: 1,
-                        transactionId: 1,
-                        date: 1,
-                        description: 1,
-                        type: 1,
-                        totalDebit: 1,
-                        totalCredit: 1,
-                        residence: 1,
-                        expenseId: 1,
-                        status: 1,
-                        createdBy: 1,
-                        entries: 1,
-                        sourceId: {
-                            $cond: {
-                                if: { $ne: ['$paymentData', null] },
-                                then: {
-                                    paymentId: '$paymentData.paymentId',
-                                    student: '$paymentData.student',
-                                    residence: '$paymentData.residence',
-                                    room: '$paymentData.room',
-                                    totalAmount: '$paymentData.totalAmount',
-                                    method: '$paymentData.method',
-                                    status: '$paymentData.status'
-                                },
-                                else: null
-                            }
-                        }
+
+            const listProjection = {
+                transactionId: 1,
+                date: 1,
+                description: 1,
+                type: 1,
+                totalDebit: 1,
+                totalCredit: 1,
+                residence: 1,
+                expenseId: 1,
+                status: 1,
+                createdBy: 1,
+                source: 1,
+                sourceId: 1
+            };
+            if (includeEntries) {
+                Object.assign(listProjection, {
+                    'entries.accountCode': 1,
+                    'entries.accountName': 1,
+                    'entries.accountType': 1,
+                    'entries.debit': 1,
+                    'entries.credit': 1,
+                    'entries.description': 1
+                });
+            }
+
+            const hasFilters = Object.keys(query).length > 0;
+            const cacheKey = !studentId
+                ? `p=${pageNum}|l=${limit}|ip=${includePayment}|ie=${includeEntries}|q=${JSON.stringify(query)}`
+                : null;
+
+            if (cacheKey) {
+                const cached = txnListCacheGet(cacheKey);
+                if (cached) {
+                    res.set('X-Cache', 'HIT');
+                    res.set('X-Total-Count', String(cached.pagination.total));
+                    res.set('X-Page', String(cached.pagination.page));
+                    res.set('X-Limit', String(cached.pagination.limit));
+                    return res.status(200).json(cached);
+                }
+            }
+
+            // Fast path: indexed find + lean (no payment $lookup)
+            let transactionEntries;
+            let total;
+            try {
+                const findQuery = TransactionEntry.find(query)
+                    .select(listProjection)
+                    .sort({ date: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .lean();
+
+                if (!hasFilters) {
+                    findQuery.hint({ date: -1 });
+                }
+
+                // Accurate total for pagination UI (collection is small enough)
+                const [rows, totalCount] = await Promise.all([
+                    findQuery,
+                    TransactionEntry.countDocuments(query)
+                ]);
+                transactionEntries = rows;
+                total = totalCount;
+            } catch (hintErr) {
+                console.warn('getAllTransactions query retry without hint:', hintErr.message);
+                const [rows, totalCount] = await Promise.all([
+                    TransactionEntry.find(query)
+                        .select(listProjection)
+                        .sort({ date: -1 })
+                        .skip(skip)
+                        .limit(limit)
+                        .lean(),
+                    TransactionEntry.countDocuments(query)
+                ]);
+                transactionEntries = rows;
+                total = totalCount;
+            }
+
+            let paymentById = null;
+            if (includePayment) {
+                const paymentIds = [
+                    ...new Set(
+                        transactionEntries
+                            .filter((e) => e.source === 'payment' && e.sourceId)
+                            .map((e) => e.sourceId.toString())
+                    )
+                ];
+                if (paymentIds.length) {
+                    const payments = await Payment.find({ _id: { $in: paymentIds } })
+                        .select('paymentId student residence room totalAmount method status')
+                        .lean();
+                    paymentById = new Map(payments.map((p) => [p._id.toString(), p]));
+                }
+            }
+
+            const pages = Math.max(1, Math.ceil(total / limit) || 1);
+            const transactions = transactionEntries.map((entry) => {
+                const row = {
+                    _id: entry._id,
+                    transactionId: entry.transactionId || `TXN-${entry._id}`,
+                    date: entry.date,
+                    description: entry.description,
+                    type: entry.type || 'transaction',
+                    amount: entry.totalDebit || entry.totalCredit || 0,
+                    residence: entry.residence,
+                    expenseId: entry.expenseId,
+                    status: entry.status || 'posted',
+                    createdBy: {
+                        _id: entry.createdBy,
+                        firstName: 'System',
+                        lastName: 'User',
+                        email: 'system@alamait.com'
+                    },
+                    entries: includeEntries ? (entry.entries || []) : []
+                };
+                if (includePayment && paymentById && entry.sourceId) {
+                    const pay = paymentById.get(entry.sourceId.toString());
+                    if (pay) {
+                        row.sourceId = {
+                            paymentId: pay.paymentId,
+                            student: pay.student,
+                            residence: pay.residence,
+                            room: pay.room,
+                            totalAmount: pay.totalAmount,
+                            method: pay.method,
+                            status: pay.status
+                        };
                     }
                 }
-            ];
-            
-            const [transactionEntries, totalResult] = await Promise.all([
-                TransactionEntry.aggregate(pipeline),
-                TransactionEntry.countDocuments(query)
-            ]);
-            
-            const total = totalResult;
-            
-            // Transform data for frontend
-            const transactions = transactionEntries.map(entry => ({
-                _id: entry._id,
-                transactionId: entry.transactionId || `TXN-${entry._id}`,
-                date: entry.date,
-                description: entry.description,
-                type: entry.type || 'transaction',
-                amount: entry.totalDebit || entry.totalCredit || 0,
-                residence: entry.residence,
-                expenseId: entry.expenseId,
-                status: entry.status || 'posted', // ✅ Added status field
-                createdBy: {
-                    _id: entry.createdBy,
-                    firstName: 'System',
-                    lastName: 'User',
-                    email: 'system@alamait.com'
-                },
-                entries: entry.entries || []
-            }));
-            
-            res.status(200).json({
-                success: true,
-                transactions: transactions,
-                pagination: {
-                    total: total,
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    pages: Math.ceil(total / limit)
-                }
+                return row;
             });
-            
+
+            const ms = Date.now() - startedAt;
+            if (ms > 500) {
+                console.warn(`⚠️ Slow getAllTransactions ${ms}ms (page=${pageNum} limit=${limit} filters=${hasFilters})`);
+            }
+
+            const payload = {
+                success: true,
+                transactions,
+                pagination: {
+                    total,
+                    page: pageNum,
+                    limit,
+                    pages,
+                    hasNext: pageNum < pages,
+                    hasPrev: pageNum > 1,
+                    nextPage: pageNum < pages ? pageNum + 1 : null,
+                    prevPage: pageNum > 1 ? pageNum - 1 : null
+                }
+            };
+
+            if (cacheKey) {
+                txnListCacheSet(cacheKey, payload);
+                res.set('X-Cache', 'MISS');
+            }
+
+            res.set('X-Total-Count', String(total));
+            res.set('X-Page', String(pageNum));
+            res.set('X-Limit', String(limit));
+            res.status(200).json(payload);
         } catch (error) {
             console.error('Error fetching all transactions:', error);
             res.status(500).json({
@@ -3230,7 +3314,8 @@ class TransactionController {
             }
             
             console.log(`✅ CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
-            
+            if (results.summary.totalSuccessful > 0) clearTxnListCache();
+
             res.status(200).json({
                 success: true,
                 message: 'CSV upload processed successfully',
@@ -3328,6 +3413,719 @@ class TransactionController {
             res.status(500).json({
                 success: false,
                 message: 'Failed to get CSV template',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Download Excel template for bulk journal (manual double-entry) upload
+     * GET /api/finance/transactions/journal-excel-template
+     * Includes classic Journals sheet + InvoicePayments sheet (billing format)
+     */
+    static async getJournalExcelTemplate(req, res) {
+        try {
+            const ExcelJS = require('exceljs');
+            const workbook = new ExcelJS.Workbook();
+            workbook.creator = 'Alamait Finance';
+            workbook.created = new Date();
+
+            // --- Classic double-entry sheet ---
+            const sheet = workbook.addWorksheet('Journals');
+            const headers = [
+                'journal_key',
+                'description',
+                'reference',
+                'date',
+                'account_code',
+                'debit',
+                'credit',
+                'line_description'
+            ];
+            sheet.addRow(headers);
+            const headerRow = sheet.getRow(1);
+            headerRow.font = { bold: true };
+            headerRow.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFE0E0E0' }
+            };
+            [
+                ['J1', 'Bank deposit - rental income', 'REF-001', '2026-07-15', '1000', 1500, 0, 'Cash received'],
+                ['J1', 'Bank deposit - rental income', 'REF-001', '2026-07-15', '4001', 0, 1500, 'Rental income'],
+                ['J2', 'Office supplies purchase', 'REF-002', '2026-07-16', '5001', 200, 0, 'Supplies expense'],
+                ['J2', 'Office supplies purchase', 'REF-002', '2026-07-16', '1000', 0, 200, 'Cash paid']
+            ].forEach((row) => sheet.addRow(row));
+            sheet.columns = headers.map((h) => ({ key: h, width: h === 'description' ? 32 : 14 }));
+
+            // --- Invoice / payment billing sheet (matches ops spreadsheet) ---
+            const inv = workbook.addWorksheet('InvoicePayments');
+            inv.getCell('J1').value = 'CURRENT DATE';
+            inv.getCell('L1').value = 'REPORTING DATE';
+            inv.getCell('J1').font = { bold: true };
+            inv.getCell('L1').font = { bold: true };
+            inv.getCell('J2').value = new Date();
+            inv.getCell('J2').numFmt = 'mm/dd/yy';
+            inv.getCell('L2').value = new Date();
+            inv.getCell('L2').numFmt = 'm/d/yyyy';
+
+            const invHeaders = [
+                'INVOICE DATE',
+                'INVOICE NUMBER',
+                'ROOM NUMBER',
+                'CUSTOMER',
+                'TOTAL AMOUNT',
+                'RENTAL',
+                'ADMIN FEE',
+                'DATE DUE',
+                'BALANCE IN',
+                'BALANCE OUT',
+                'PAYMENT',
+                'PAYMENT 2',
+                'PAYMENT 3'
+            ];
+            const hr = inv.getRow(3);
+            invHeaders.forEach((h, i) => {
+                hr.getCell(i + 1).value = h;
+                hr.getCell(i + 1).font = { bold: true };
+                hr.getCell(i + 1).fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FFE0E0E0' }
+                };
+            });
+            inv.getRow(4).values = [
+                ,
+                new Date('2026-07-01'),
+                'INV-1001',
+                'A101',
+                'Jane Doe',
+                350,
+                300,
+                50,
+                new Date('2026-07-31'),
+                0,
+                0,
+                300,
+                50,
+                0
+            ];
+            inv.getRow(5).values = [
+                ,
+                new Date('2026-07-01'),
+                'INV-1002',
+                'B202',
+                'John Smith',
+                200,
+                200,
+                0,
+                new Date('2026-07-31'),
+                50,
+                50,
+                150,
+                0,
+                0
+            ];
+            [14, 16, 12, 20, 14, 12, 12, 12, 12, 12, 12, 12, 12].forEach((w, i) => {
+                inv.getColumn(i + 1).width = w;
+            });
+
+            const instructions = workbook.addWorksheet('Instructions');
+            [
+                ['How to use this template'],
+                [''],
+                ['FORMAT A — Journals sheet (classic double-entry)'],
+                ['1. Each row is one debit OR credit line.'],
+                ['2. Same journal_key = one journal; debits must equal credits.'],
+                ['3. account_code must exist in chart of accounts (e.g. 1000, 4001).'],
+                [''],
+                ['FORMAT B — InvoicePayments sheet (billing / collections spreadsheet)'],
+                ['1. Put CURRENT DATE and REPORTING DATE in the top-right (optional).'],
+                ['2. Header row: INVOICE DATE, INVOICE NUMBER, ROOM NUMBER, CUSTOMER, TOTAL AMOUNT,'],
+                ['   RENTAL, ADMIN FEE, DATE DUE, BALANCE IN, BALANCE OUT, PAYMENT, PAYMENT 2, PAYMENT 3.'],
+                ['3. One customer/invoice per row.'],
+                ['4. Upload mode (form field "mode"):'],
+                ['   - payments (default): creates cash journals from PAYMENT columns'],
+                ['     DR Cash (1000), CR student AR (1100-{debtorId}) — updates debtor balance'],
+                ['   - charges: creates invoice accruals from RENTAL + ADMIN FEE'],
+                ['     DR student AR, CR Rent (4001), CR Admin Fee (4002)'],
+                ['   - both: creates charge + payment journals when amounts are present'],
+                ['5. CUSTOMER must match a student debtor name (or first+last). ROOM helps disambiguate.'],
+                ['6. Multi-tab (Jan–July): sheet=all (default), sheet=July, or sheet=ask for picker.'],
+                ['7. Missing INVOICE NUMBER still creates journals flagged "Missing Invoice Number".'],
+                ['8. Residence is selected in the upload form (applies to all rows).'],
+                [''],
+                ['Tip: Upload your existing ops spreadsheet — CUSTOMER names must match debtors.']
+            ].forEach((r) => instructions.addRow(r));
+            instructions.getColumn(1).width = 95;
+            instructions.getRow(1).font = { bold: true, size: 14 };
+
+            res.setHeader(
+                'Content-Type',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            );
+            res.setHeader(
+                'Content-Disposition',
+                'attachment; filename="journal-upload-template.xlsx"'
+            );
+
+            await workbook.xlsx.write(res);
+            res.end();
+        } catch (error) {
+            console.error('Error generating journal Excel template:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to generate journal Excel template',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * List worksheets in an uploaded Excel (for month-tab picker).
+     * POST /api/finance/transactions/list-excel-sheets
+     * multipart: file
+     */
+    static async listJournalExcelSheets(req, res) {
+        try {
+            const {
+                loadWorkbookFromBuffer,
+                listWorkbookSheets
+            } = require('../../services/journalExcelUploadService');
+
+            if (!req.file || !req.file.buffer) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Excel file is required (field name: file)'
+                });
+            }
+
+            const workbook = await loadWorkbookFromBuffer(req.file.buffer);
+            const sheets = listWorkbookSheets(workbook);
+            const monthTabs = sheets.filter((s) => s.isMonthTab);
+
+            res.status(200).json({
+                success: true,
+                message: monthTabs.length
+                    ? `Found ${monthTabs.length} month tab(s). Pass sheet=all or sheet=Jan,Feb,... when uploading.`
+                    : 'No month-named tabs detected; upload will use parseable sheets.',
+                data: {
+                    sheets,
+                    monthTabs: monthTabs.map((s) => s.name),
+                    suggestedUpload: {
+                        all: { sheet: 'all' },
+                        exampleOne: monthTabs[0] ? { sheet: monthTabs[0].name } : null
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('Error listing Excel sheets:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to list Excel sheets',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Upload Excel file and bulk-create manual journal (double-entry) transactions
+     * POST /api/finance/transactions/upload-excel
+     * multipart: file + residence (+ optional defaultDate, mode, sheet)
+     * sheet: "all" (default) | "July" | "Jan,Feb,Mar"
+     * Accepts classic journal rows OR invoice/payment billing sheets (multi-tab Jan–July).
+     */
+    static async uploadExcelJournals(req, res) {
+        try {
+            const Account = require('../../models/Account');
+            const { normalizeAccountName } = require('../../utils/accountNameNormalizer');
+            const {
+                loadWorkbookFromBuffer,
+                resolveSheetsToProcess,
+                detectAndParseSheet,
+                buildEntriesFromInvoiceRow,
+                resolveDebtorForCustomer,
+                transactionSourceForInvoiceRow
+            } = require('../../services/journalExcelUploadService');
+
+            if (!req.file || !req.file.buffer) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Excel file is required (field name: file)'
+                });
+            }
+
+            const residence = req.body.residence || req.body.residenceId;
+            if (!residence) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Residence is required (form field: residence)'
+                });
+            }
+
+            const defaultDate = req.body.defaultDate ? new Date(req.body.defaultDate) : new Date();
+            const mode = String(req.body.mode || 'payments').toLowerCase();
+            if (!['payments', 'charges', 'both'].includes(mode)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'mode must be one of: payments, charges, both'
+                });
+            }
+
+            // Default all month tabs; pass sheet=July to do one month, or sheet=ask to force picker response
+            const sheetParamRaw = req.body.sheet ?? req.body.sheets ?? req.query.sheet;
+            const forceAsk = String(sheetParamRaw || '').toLowerCase() === 'ask';
+            const sheetParam = forceAsk ? '' : (sheetParamRaw == null || sheetParamRaw === '' ? 'all' : sheetParamRaw);
+
+            const residenceId = residence._id || residence;
+            const residenceName =
+                req.body.residenceName || (typeof residence === 'object' ? residence.name : 'Unknown');
+
+            const cashCode = req.body.cashAccountCode || '1000';
+            const rentCode = req.body.rentAccountCode || '4001';
+            const adminCode = req.body.adminAccountCode || '4002';
+            const arCode = req.body.arAccountCode || '1100';
+
+            const workbook = await loadWorkbookFromBuffer(req.file.buffer);
+            const resolved = resolveSheetsToProcess(workbook, forceAsk ? '' : sheetParam);
+
+            if (forceAsk || resolved.needsSheetChoice) {
+                return res.status(400).json({
+                    success: false,
+                    code: 'SHEET_CHOICE_REQUIRED',
+                    message:
+                        resolved.message ||
+                        'Choose which tab(s) to import. Pass sheet=all or sheet=July (or Jan,Feb,...).',
+                    data: {
+                        availableSheets: resolved.available,
+                        monthTabs: (resolved.monthTabs || []).map((s) => s.name),
+                        examples: {
+                            all: 'sheet=all',
+                            oneMonth: 'sheet=July',
+                            several: 'sheet=Jan,Feb,Mar'
+                        }
+                    }
+                });
+            }
+
+            if (!resolved.sheets.length) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No worksheets selected to process',
+                    data: { availableSheets: resolved.available }
+                });
+            }
+
+            const results = {
+                format: null,
+                mode,
+                sheetsProcessed: [],
+                sheetsSkipped: [],
+                successful: [],
+                failed: [],
+                warnings: [],
+                missingInvoiceNumbers: [],
+                unmatchedStudents: [],
+                summary: {
+                    totalSheets: resolved.sheets.length,
+                    totalJournals: 0,
+                    totalSuccessful: 0,
+                    totalFailed: 0,
+                    totalMissingInvoiceNumber: 0,
+                    totalLinkedToDebtor: 0,
+                    totalUnmatchedStudents: 0,
+                    totalDebits: 0,
+                    totalCredits: 0
+                }
+            };
+
+            // Require student/debtor match for invoice sheets (so balances update). Pass requireStudentLink=false to allow unlinked GL-only journals.
+            const requireStudentLink = String(req.body.requireStudentLink ?? 'true').toLowerCase() !== 'false';
+            const debtorCache = new Map();
+
+            const saveJournal = async ({
+                journalKey,
+                description,
+                reference,
+                date,
+                entries,
+                extraMeta = {},
+                format,
+                sourceOverride = null
+            }) => {
+                let totalDebit = 0;
+                let totalCredit = 0;
+                for (const e of entries) {
+                    totalDebit += Number(e.debit) || 0;
+                    totalCredit += Number(e.credit) || 0;
+                }
+                if (entries.length < 2) {
+                    throw new Error('Each journal needs at least 2 lines');
+                }
+                if (Math.abs(totalDebit - totalCredit) > 0.01) {
+                    throw new Error(`Unbalanced: debits ${totalDebit} ≠ credits ${totalCredit}`);
+                }
+
+                const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+                const transactionSource =
+                    sourceOverride ||
+                    TransactionController.determineTransactionSource(entries, description) ||
+                    'manual';
+
+                const transactionEntry = new TransactionEntry({
+                    transactionId,
+                    date: date || defaultDate,
+                    description,
+                    reference: reference || `EXCEL-${journalKey}`,
+                    entries,
+                    totalDebit,
+                    totalCredit,
+                    source: transactionSource,
+                    sourceId: null,
+                    sourceModel: 'TransactionEntry',
+                    residence: residenceId,
+                    createdBy: req.user?.email || 'system',
+                    metadata: {
+                        residenceId,
+                        residenceName,
+                        createdBy: req.user?.email || 'system',
+                        transactionType:
+                            format === 'invoice_payment'
+                                ? 'manual_double_entry_excel_invoice'
+                                : 'manual_double_entry_excel',
+                        balanced: true,
+                        manualTransaction: true,
+                        excelJournalKey: journalKey,
+                        excelFileName: req.file.originalname,
+                        excelFormat: format,
+                        excelMode: mode,
+                        ...extraMeta
+                    }
+                });
+
+                await transactionEntry.save();
+                const warning = extraMeta.missingInvoiceNumber
+                    ? 'Missing Invoice Number — journal created with generated reference'
+                    : null;
+                results.successful.push({
+                    journalKey,
+                    transactionId: transactionEntry.transactionId,
+                    _id: transactionEntry._id,
+                    description,
+                    totalDebit,
+                    totalCredit,
+                    entryCount: entries.length,
+                    type: extraMeta.invoiceRowType || 'classic',
+                    sheetName: extraMeta.sheetName || null,
+                    debtorId: extraMeta.debtorId || null,
+                    studentId: extraMeta.studentId || null,
+                    accountCode: extraMeta.accountCode || null,
+                    missingInvoiceNumber: Boolean(extraMeta.missingInvoiceNumber),
+                    linkedToDebtor: Boolean(extraMeta.debtorId),
+                    warning
+                });
+                if (extraMeta.missingInvoiceNumber) {
+                    results.summary.totalMissingInvoiceNumber++;
+                    results.missingInvoiceNumbers.push({
+                        sheetName: extraMeta.sheetName,
+                        row: (extraMeta.excelRows || [])[0],
+                        customer: extraMeta.customer,
+                        journalKey,
+                        transactionId: transactionEntry.transactionId,
+                        message: 'Missing Invoice Number'
+                    });
+                    results.warnings.push(
+                        `${extraMeta.sheetName || 'sheet'} row ${(extraMeta.excelRows || [])[0]} (${extraMeta.customer}): Missing Invoice Number`
+                    );
+                }
+                results.summary.totalSuccessful++;
+                results.summary.totalDebits += totalDebit;
+                results.summary.totalCredits += totalCredit;
+            };
+
+            // Resolve GL accounts once (invoice format)
+            let gl = null;
+            const ensureGl = async () => {
+                if (gl) return gl;
+                const neededCodes = [cashCode, rentCode, adminCode, arCode];
+                const accounts = await Account.find({ code: { $in: neededCodes } }).lean();
+                const byCode = {};
+                accounts.forEach((a) => {
+                    byCode[String(a.code)] = a;
+                });
+                const missing = neededCodes.filter((c) => !byCode[c]);
+                if (missing.length) {
+                    const err = new Error(
+                        `Missing chart-of-accounts codes required for invoice upload: ${missing.join(', ')}`
+                    );
+                    err.missingAccountCodes = missing;
+                    throw err;
+                }
+                gl = {
+                    cash: {
+                        code: byCode[cashCode].code,
+                        name: normalizeAccountName(byCode[cashCode].code, byCode[cashCode].name),
+                        type: byCode[cashCode].type
+                    },
+                    rentIncome: {
+                        code: byCode[rentCode].code,
+                        name: normalizeAccountName(byCode[rentCode].code, byCode[rentCode].name),
+                        type: byCode[rentCode].type
+                    },
+                    adminIncome: {
+                        code: byCode[adminCode].code,
+                        name: normalizeAccountName(byCode[adminCode].code, byCode[adminCode].name),
+                        type: byCode[adminCode].type
+                    },
+                    ar: {
+                        code: byCode[arCode].code,
+                        name: normalizeAccountName(byCode[arCode].code, byCode[arCode].name),
+                        type: byCode[arCode].type
+                    }
+                };
+                return gl;
+            };
+
+            for (const sheet of resolved.sheets) {
+                let parsed;
+                try {
+                    parsed = detectAndParseSheet(sheet, {
+                        defaultDate,
+                        mode,
+                        sheetName: sheet.name
+                    });
+                } catch (err) {
+                    results.sheetsSkipped.push({ sheet: sheet.name, reason: err.message });
+                    continue;
+                }
+
+                results.format = results.format || parsed.format;
+                const sheetResult = {
+                    sheet: sheet.name,
+                    format: parsed.format,
+                    journals: 0,
+                    successful: 0,
+                    failed: 0,
+                    missingInvoiceNumber: 0
+                };
+
+                if (parsed.format === 'classic') {
+                    results.summary.totalJournals += parsed.groups.size;
+                    sheetResult.journals = parsed.groups.size;
+
+                    const codes = [...new Set(parsed.lines.map((l) => l.accountCode).filter(Boolean))];
+                    const accounts = await Account.find({
+                        code: { $in: codes },
+                        isActive: { $ne: false }
+                    }).lean();
+                    const accountByCode = {};
+                    accounts.forEach((a) => {
+                        accountByCode[String(a.code)] = a;
+                    });
+
+                    for (const [journalKey, groupLines] of parsed.groups.entries()) {
+                        try {
+                            if (!groupLines[0].journalKey || journalKey.startsWith('__row_')) {
+                                throw new Error('Missing journal_key');
+                            }
+                            const description = groupLines.find((l) => l.description)?.description;
+                            if (!description) throw new Error('Missing description');
+
+                            const entries = [];
+                            for (const line of groupLines) {
+                                if (!line.accountCode) {
+                                    throw new Error(`Row ${line.rowNumber}: missing account_code`);
+                                }
+                                const account = accountByCode[line.accountCode];
+                                if (!account) {
+                                    throw new Error(
+                                        `Row ${line.rowNumber}: account code not found: ${line.accountCode}`
+                                    );
+                                }
+                                if (line.debit > 0 && line.credit > 0) {
+                                    throw new Error(
+                                        `Row ${line.rowNumber}: cannot have both debit and credit`
+                                    );
+                                }
+                                if (line.debit <= 0 && line.credit <= 0) {
+                                    throw new Error(
+                                        `Row ${line.rowNumber}: debit or credit must be > 0`
+                                    );
+                                }
+                                entries.push({
+                                    accountCode: account.code,
+                                    accountName: normalizeAccountName(account.code, account.name),
+                                    accountType: account.type,
+                                    debit: line.debit,
+                                    credit: line.credit,
+                                    description: line.lineDescription || description
+                                });
+                            }
+
+                            await saveJournal({
+                                journalKey: `${sheet.name}-${journalKey}`,
+                                description: `[${sheet.name}] ${description}`,
+                                reference: groupLines.find((l) => l.reference)?.reference,
+                                date: groupLines.find((l) => l.date)?.date || defaultDate,
+                                entries,
+                                format: 'classic',
+                                extraMeta: {
+                                    sheetName: sheet.name,
+                                    excelRows: groupLines.map((l) => l.rowNumber)
+                                }
+                            });
+                            sheetResult.successful++;
+                        } catch (err) {
+                            results.failed.push({
+                                journalKey,
+                                sheetName: sheet.name,
+                                error: err.message,
+                                rows: groupLines.map((l) => l.rowNumber)
+                            });
+                            results.summary.totalFailed++;
+                            sheetResult.failed++;
+                        }
+                    }
+                } else {
+                    results.summary.totalJournals += parsed.proposed.length;
+                    sheetResult.journals = parsed.proposed.length;
+
+                    if (parsed.proposed.length === 0) {
+                        results.sheetsSkipped.push({
+                            sheet: sheet.name,
+                            reason:
+                                mode === 'payments'
+                                    ? 'No payment amounts found on this tab'
+                                    : 'No charge/payment rows found on this tab'
+                        });
+                        results.sheetsProcessed.push(sheetResult);
+                        continue;
+                    }
+
+                    let accountsGl;
+                    try {
+                        accountsGl = await ensureGl();
+                    } catch (err) {
+                        return res.status(400).json({
+                            success: false,
+                            message: err.message,
+                            data: { missingAccountCodes: err.missingAccountCodes || [] }
+                        });
+                    }
+
+                    for (const row of parsed.proposed) {
+                        try {
+                            const resolvedDebtor = await resolveDebtorForCustomer(row.customer, {
+                                roomNumber: row.roomNumber,
+                                residenceId,
+                                cache: debtorCache
+                            });
+
+                            if (!resolvedDebtor.ok) {
+                                results.summary.totalUnmatchedStudents++;
+                                results.unmatchedStudents.push({
+                                    sheetName: sheet.name,
+                                    row: row.rowNumber,
+                                    customer: row.customer,
+                                    roomNumber: row.roomNumber,
+                                    error: resolvedDebtor.error
+                                });
+                                if (requireStudentLink) {
+                                    throw new Error(resolvedDebtor.error);
+                                }
+                                results.warnings.push(
+                                    `${sheet.name} row ${row.rowNumber} (${row.customer}): ${resolvedDebtor.error} — created without debtor link`
+                                );
+                            } else if (resolvedDebtor.nameMatchedAs) {
+                                results.warnings.push(
+                                    `${sheet.name} row ${row.rowNumber}: matched "${row.customer}" → "${resolvedDebtor.nameMatchedAs}" (${resolvedDebtor.matchMethod})`
+                                );
+                            }
+
+                            const accountsForRow = {
+                                ...accountsGl,
+                                studentAr: resolvedDebtor.ok ? resolvedDebtor.studentAr : null
+                            };
+                            const entries = buildEntriesFromInvoiceRow(row, accountsForRow);
+                            const sourceOverride = transactionSourceForInvoiceRow(
+                                row,
+                                Boolean(resolvedDebtor.ok)
+                            );
+
+                            // Prefer rent vs admin paymentType for metadata
+                            let paymentType = 'rent';
+                            if (row.type === 'payment') {
+                                if ((row.adminFee || 0) > 0 && (row.rental || 0) <= 0) paymentType = 'admin';
+                                else if ((row.adminFee || 0) > 0 && (row.rental || 0) > 0) paymentType = 'rent';
+                            } else if (row.type === 'charge') {
+                                paymentType =
+                                    (row.adminFee || 0) > 0 && (row.rental || 0) <= 0 ? 'admin' : 'rent';
+                            }
+
+                            await saveJournal({
+                                journalKey: row.journalKey,
+                                description: row.description,
+                                reference: row.reference,
+                                date: row.date || parsed.reportingDate || defaultDate,
+                                entries,
+                                format: 'invoice_payment',
+                                sourceOverride,
+                                extraMeta: {
+                                    invoiceRowType: row.type,
+                                    customer: row.customer,
+                                    roomNumber: row.roomNumber,
+                                    invoiceNumber: row.invoiceNumber,
+                                    missingInvoiceNumber: Boolean(row.missingInvoiceNumber),
+                                    sheetName: sheet.name,
+                                    excelRows: [row.rowNumber],
+                                    debtorId: resolvedDebtor.ok ? resolvedDebtor.debtorId : null,
+                                    studentId: resolvedDebtor.ok ? resolvedDebtor.studentId : null,
+                                    accountCode: resolvedDebtor.ok ? resolvedDebtor.accountCode : null,
+                                    paymentType,
+                                    linkedToStudentAccount: Boolean(resolvedDebtor.ok)
+                                }
+                            });
+                            if (resolvedDebtor.ok) {
+                                results.summary.totalLinkedToDebtor++;
+                            }
+                            sheetResult.successful++;
+                            if (row.missingInvoiceNumber) sheetResult.missingInvoiceNumber++;
+                        } catch (err) {
+                            results.failed.push({
+                                journalKey: row.journalKey,
+                                sheetName: sheet.name,
+                                error: err.message,
+                                rows: [row.rowNumber],
+                                customer: row.customer,
+                                missingInvoiceNumber: Boolean(row.missingInvoiceNumber)
+                            });
+                            results.summary.totalFailed++;
+                            sheetResult.failed++;
+                        }
+                    }
+                }
+
+                results.sheetsProcessed.push(sheetResult);
+            }
+
+            const status = results.summary.totalSuccessful > 0 ? 200 : 400;
+            if (results.summary.totalSuccessful > 0) clearTxnListCache();
+            res.status(status).json({
+                success: results.summary.totalSuccessful > 0,
+                message: `Excel journals processed across ${results.sheetsProcessed.length} tab(s): ${results.summary.totalSuccessful} created (${results.summary.totalLinkedToDebtor} linked to student debtors), ${results.summary.totalFailed} failed` +
+                    (results.summary.totalMissingInvoiceNumber
+                        ? `, ${results.summary.totalMissingInvoiceNumber} missing invoice number`
+                        : '') +
+                    (results.summary.totalUnmatchedStudents
+                        ? `, ${results.summary.totalUnmatchedStudents} unmatched students`
+                        : ''),
+                data: results
+            });
+        } catch (error) {
+            console.error('Error uploading Excel journals:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to process Excel journal upload',
                 error: error.message
             });
         }

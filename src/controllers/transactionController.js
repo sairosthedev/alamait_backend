@@ -3,11 +3,11 @@ const Transaction = require('../models/Transaction');
 const Account = require('../models/Account');
 const AdvancePayment = require('../models/AdvancePayment');
 
-// Get all transactions with entries (for frontend compatibility)
+// Get all transactions with entries (paginated)
 exports.getAllTransactions = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const skip = (page - 1) * limit;
 
     const [transactionEntries, total] = await Promise.all([
@@ -15,12 +15,11 @@ exports.getAllTransactions = async (req, res) => {
         .sort({ date: -1 })
         .skip(skip)
         .limit(limit)
-        .select('date description reference entries source sourceModel sourceId')
+        .select('date description reference entries.accountCode entries.accountName entries.accountType entries.debit entries.credit source sourceModel sourceId')
         .lean(),
       TransactionEntry.countDocuments({})
     ]);
 
-    // Transform the data to match frontend expectations
     const transactionsWithEntries = transactionEntries.map(entry => {
       const transformedEntries = (entry.entries || []).map(entryItem => ({
         _id: `${entry._id}_${entryItem.accountCode}`,
@@ -47,10 +46,12 @@ exports.getAllTransactions = async (req, res) => {
       };
     });
 
+    const pages = Math.max(1, Math.ceil(total / limit) || 1);
     res.set('X-Total-Count', String(total));
     res.set('X-Page', String(page));
     res.set('X-Limit', String(limit));
-    // Legacy clients expect a bare array
+    res.set('X-Total-Pages', String(pages));
+    // Legacy clients expect a bare array — pagination is in headers
     res.status(200).json(transactionsWithEntries);
 
   } catch (error) {

@@ -15,8 +15,9 @@ router.use(auth);
 router.use(financeAccess);
 
 /**
- * Get all transactions
- * GET /api/finance/transactions
+ * Get all transactions (paginated)
+ * GET /api/finance/transactions?page=1&limit=50
+ * Max limit: 100. Use pagination.total / pagination.pages / hasNext from the response.
  */
 router.get('/', TransactionController.getAllTransactions);
 
@@ -103,6 +104,36 @@ router.post('/upload-csv', TransactionController.uploadCsvTransactions);
  * GET /api/finance/transactions/csv-template
  */
 router.get('/csv-template', TransactionController.getCsvTemplate);
+
+/**
+ * Download Excel template for bulk journal upload
+ * GET /api/finance/transactions/journal-excel-template
+ */
+router.get('/journal-excel-template', TransactionController.getJournalExcelTemplate);
+
+/**
+ * List month/tabs in an Excel workbook (for UI sheet picker)
+ * POST /api/finance/transactions/list-excel-sheets
+ * multipart: file
+ */
+const excelUpload = require('../../middleware/excelUpload');
+router.post(
+    '/list-excel-sheets',
+    excelUpload.single('file'),
+    TransactionController.listJournalExcelSheets
+);
+
+/**
+ * Upload Excel file for bulk journal (manual double-entry) creation
+ * POST /api/finance/transactions/upload-excel
+ * multipart/form-data: file, residence (required), defaultDate, mode, sheet
+ * sheet: all (default) | July | Jan,Feb,Mar | ask (returns picker list)
+ */
+router.post(
+    '/upload-excel',
+    excelUpload.single('file'),
+    TransactionController.uploadExcelJournals
+);
 
 /**
  * Verify transaction creation for a specific source
