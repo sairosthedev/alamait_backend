@@ -126,8 +126,10 @@ router.post(
 /**
  * Upload Excel file for bulk journal (manual double-entry) creation
  * POST /api/finance/transactions/upload-excel
- * multipart/form-data: file, residence (required), defaultDate, mode, sheet
+ * multipart/form-data: file, residence (required), defaultDate, mode, sheet,
+ *   requireStudentLink (default true), allowDuplicates (default false — blocks re-uploads)
  * sheet: all (default) | July | Jan,Feb,Mar | ask (returns picker list)
+ * Duplicates are matched by metadata.excelJournalKey (and invoice fingerprint) and skipped.
  */
 router.post(
     '/upload-excel',

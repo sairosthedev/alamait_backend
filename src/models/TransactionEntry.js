@@ -284,6 +284,9 @@ transactionEntrySchema.index({ 'metadata.paymentId': 1 });
 transactionEntrySchema.index({ 'metadata.parentEntryId': 1 });
 transactionEntrySchema.index({ 'metadata.originalEntryId': 1 });
 transactionEntrySchema.index({ 'metadata.arTransactionId': 1 });
+// Excel bulk upload idempotency
+transactionEntrySchema.index({ 'metadata.excelJournalKey': 1, status: 1 });
+transactionEntrySchema.index({ reference: 1, residence: 1, 'metadata.invoiceRowType': 1, status: 1 });
 
 // Compound index for sourceId + date (common query pattern)
 transactionEntrySchema.index({ sourceId: 1, date: -1 });

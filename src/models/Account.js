@@ -21,15 +21,15 @@ const AccountSchema = new mongoose.Schema({
     required: true,
     enum: [
       // Assets
-      'Current Assets', 'Fixed Assets', 'Other Assets',
+      'Current Assets', 'Fixed Assets', 'Non-Current Assets', 'Intangible Assets', 'Other Assets',
       // Liabilities  
-      'Current Liabilities', 'Long-term Liabilities',
+      'Current Liabilities', 'Long-term Liabilities', 'Non-Current Liabilities', 'Other Liabilities',
       // Equity
-      'Owner Equity', 'Retained Earnings',
-      // Income
-      'Operating Revenue', 'Other Income',
+      'Owner Equity', 'Retained Earnings', 'Capital', 'Drawings', 'Other Equity',
+      // Income / Revenue
+      'Operating Revenue', 'Other Income', 'Other Revenue', 'Non-Operating Revenue',
       // Expenses
-      'Operating Expenses', 'Administrative Expenses', 'Financial Expenses'
+      'Operating Expenses', 'Administrative Expenses', 'Financial Expenses', 'Cost of Sales', 'Other Expenses'
     ]
   },
   subcategory: {
@@ -107,16 +107,27 @@ AccountSchema.statics.getNextCode = async function(type, category = null, accoun
     const categorySubPrefixes = {
       'Current Assets': '0',
       'Fixed Assets': '2',
+      'Non-Current Assets': '2',
+      'Intangible Assets': '3',
       'Other Assets': '3',
       'Current Liabilities': '0',
       'Long-term Liabilities': '1',
+      'Non-Current Liabilities': '1',
+      'Other Liabilities': '2',
       'Owner Equity': '0',
       'Retained Earnings': '1',
+      'Capital': '0',
+      'Drawings': '2',
+      'Other Equity': '3',
       'Operating Revenue': '0',
       'Other Income': '2',
+      'Other Revenue': '2',
+      'Non-Operating Revenue': '3',
       'Operating Expenses': '0',
       'Administrative Expenses': '1',
-      'Financial Expenses': '2'
+      'Financial Expenses': '2',
+      'Cost of Sales': '3',
+      'Other Expenses': '4'
     };
 
     const basePrefix = typePrefixes[type];

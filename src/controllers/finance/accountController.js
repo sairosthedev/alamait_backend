@@ -23,7 +23,10 @@ exports.getAllAccounts = async (req, res) => {
     // Build filter object
     const filter = {};
     
-    if (type) filter.type = type;
+    if (type) {
+      const normalized = AccountCodeService.normalizeAccountType(type);
+      filter.type = normalized ? normalized.storageType : type;
+    }
     if (category) filter.category = category;
     if (isActive !== undefined) filter.isActive = isActive === 'true';
     
@@ -183,7 +186,7 @@ exports.createAccount = async (req, res) => {
 
     console.log('Creating account with data:', { name, type, category });
 
-    // Validate account data
+    // Validate account data (accepts Asset, Liability, Equity, Revenue, Expense)
     const validation = await AccountCodeService.validateAccountData({
       name,
       type,
@@ -194,21 +197,25 @@ exports.createAccount = async (req, res) => {
       console.log('Validation failed:', validation.errors);
       return res.status(400).json({ 
         error: 'Validation failed', 
-        details: validation.errors 
+        details: validation.errors,
+        allowedTypes: AccountCodeService.API_TYPES,
+        allowedCategories: AccountCodeService.getSuggestedCategories(type)
       });
     }
 
+    // Persist Income for Revenue (report compatibility)
+    const storageType = validation.normalizedType || type;
+
     // Generate account code automatically
-    // Pass account name to detect non-AP accounts (management fees, deposits, etc.)
-    console.log('Generating account code for:', type, category, 'Account name:', name);
-    const code = await AccountCodeService.generateAccountCode(type, category, name);
+    console.log('Generating account code for:', storageType, category, 'Account name:', name);
+    const code = await AccountCodeService.generateAccountCode(storageType, category, name);
     console.log('Generated code:', code);
 
     // Create account object
     const accountData = {
       code,
       name,
-      type,
+      type: storageType,
       category,
       subcategory,
       description,
@@ -421,6 +428,28 @@ exports.updateAccount = async (req, res) => {
     const originalAccount = await Account.findById(id);
     if (!originalAccount) {
       return res.status(404).json({ error: 'Account not found' });
+    }
+
+    // Normalize Revenue → Income; validate type/category if provided
+    if (updateData.type) {
+      const normalized = AccountCodeService.normalizeAccountType(updateData.type);
+      if (!normalized) {
+        return res.status(400).json({
+          error: `Invalid account type. Must be one of: ${AccountCodeService.API_TYPES.join(', ')}`,
+          allowedTypes: AccountCodeService.API_TYPES
+        });
+      }
+      updateData.type = normalized.storageType;
+    }
+    if (updateData.category) {
+      const typeForCats = updateData.type || originalAccount.type;
+      const allowed = AccountCodeService.getSuggestedCategories(typeForCats);
+      if (allowed.length && !allowed.includes(updateData.category)) {
+        return res.status(400).json({
+          error: `Invalid category for ${typeForCats}`,
+          allowedCategories: allowed
+        });
+      }
     }
 
     // Store original data for audit logging
@@ -729,7 +758,9 @@ exports.getAccountsByType = async (req, res) => {
     const { type } = req.params;
     const { includeInactive = false } = req.query;
 
-    const accounts = await Account.getAccountsByType(type, includeInactive === 'true');
+    const normalized = AccountCodeService.normalizeAccountType(type);
+    const storageType = normalized ? normalized.storageType : type;
+    const accounts = await Account.getAccountsByType(storageType, includeInactive === 'true');
     
     res.status(200).json(accounts);
   } catch (error) {
@@ -792,10 +823,12 @@ exports.getNextAccountCode = async (req, res) => {
     }
     
     // Validate account type
-    const validTypes = ['Asset', 'Liability', 'Equity', 'Income', 'Revenue', 'Expense'];
-    if (!validTypes.includes(type)) {
+    const validTypes = AccountCodeService.API_TYPES;
+    const normalized = AccountCodeService.normalizeAccountType(type);
+    if (!normalized) {
       return res.status(400).json({ 
-        error: 'Invalid account type. Must be one of: Asset, Liability, Equity, Income, Revenue, Expense' 
+        error: `Invalid account type. Must be one of: ${validTypes.join(', ')}`,
+        allowedTypes: validTypes
       });
     }
     
@@ -809,7 +842,7 @@ exports.getNextAccountCode = async (req, res) => {
     }
     
     // Map 'Revenue' to 'Income' for the model
-    const modelType = type === 'Revenue' ? 'Income' : type;
+    const modelType = normalized.storageType;
     
     // Get next available code using the Account model's static method
     const code = await Account.getNextCode(modelType, category);
@@ -844,6 +877,25 @@ exports.getNextAccountCode = async (req, res) => {
 };
 
 /**
+ * List allowed account types and categories for the create-account UI
+ * GET /api/finance/accounts/meta/types
+ */
+exports.getAccountTypesMeta = async (req, res) => {
+  try {
+    const types = AccountCodeService.getAccountTypesMeta();
+    res.status(200).json({
+      success: true,
+      types,
+      typeValues: AccountCodeService.API_TYPES,
+      note: 'Use type "Revenue" when creating income accounts; it is stored as Income internally.'
+    });
+  } catch (error) {
+    console.error('Error fetching account types meta:', error);
+    res.status(500).json({ error: 'Failed to fetch account types' });
+  }
+};
+
+/**
  * Get account type information
  */
 exports.getAccountTypeInfo = async (req, res) => {
@@ -854,11 +906,14 @@ exports.getAccountTypeInfo = async (req, res) => {
     const suggestedCategories = AccountCodeService.getSuggestedCategories(type);
 
     if (!typeInfo) {
-      return res.status(404).json({ error: 'Invalid account type' });
+      return res.status(404).json({
+        error: 'Invalid account type',
+        allowedTypes: AccountCodeService.API_TYPES
+      });
     }
 
     res.status(200).json({
-      type,
+      type: typeInfo.value,
       ...typeInfo,
       suggestedCategories
     });

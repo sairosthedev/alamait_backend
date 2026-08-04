@@ -3723,6 +3723,7 @@ class TransactionController {
                 sheetsSkipped: [],
                 successful: [],
                 failed: [],
+                duplicates: [],
                 warnings: [],
                 missingInvoiceNumbers: [],
                 unmatchedStudents: [],
@@ -3731,6 +3732,7 @@ class TransactionController {
                     totalJournals: 0,
                     totalSuccessful: 0,
                     totalFailed: 0,
+                    totalDuplicates: 0,
                     totalMissingInvoiceNumber: 0,
                     totalLinkedToDebtor: 0,
                     totalUnmatchedStudents: 0,
@@ -3741,7 +3743,55 @@ class TransactionController {
 
             // Require student/debtor match for invoice sheets (so balances update). Pass requireStudentLink=false to allow unlinked GL-only journals.
             const requireStudentLink = String(req.body.requireStudentLink ?? 'true').toLowerCase() !== 'false';
+            // Pass allowDuplicates=true to bypass idempotency (not recommended)
+            const allowDuplicates = String(req.body.allowDuplicates || '').toLowerCase() === 'true';
             const debtorCache = new Map();
+            const seenJournalKeys = new Set();
+
+            const findExistingExcelDuplicate = async ({
+                journalKey,
+                reference,
+                totalDebit,
+                date,
+                extraMeta = {}
+            }) => {
+                const orConditions = [{ 'metadata.excelJournalKey': journalKey }];
+
+                // Same invoice payment/charge (real invoice #) + amount + type + residence
+                const ref = reference && String(reference).trim();
+                const isGeneratedRef = !ref || /MISSING-INV/i.test(ref) || /^EXCEL-/i.test(ref);
+                if (!isGeneratedRef) {
+                    const fingerprint = {
+                        reference: ref,
+                        residence: residenceId,
+                        totalDebit: Number(totalDebit) || 0,
+                        'metadata.transactionType': {
+                            $in: ['manual_double_entry_excel', 'manual_double_entry_excel_invoice']
+                        }
+                    };
+                    if (extraMeta.invoiceRowType) {
+                        fingerprint['metadata.invoiceRowType'] = extraMeta.invoiceRowType;
+                    }
+                    if (extraMeta.customer) {
+                        fingerprint['metadata.customer'] = extraMeta.customer;
+                    }
+                    if (date) {
+                        const dayStart = new Date(date);
+                        dayStart.setHours(0, 0, 0, 0);
+                        const dayEnd = new Date(date);
+                        dayEnd.setHours(23, 59, 59, 999);
+                        fingerprint.date = { $gte: dayStart, $lte: dayEnd };
+                    }
+                    orConditions.push(fingerprint);
+                }
+
+                return TransactionEntry.findOne({
+                    status: { $ne: 'reversed' },
+                    $or: orConditions
+                })
+                    .select('transactionId reference date totalDebit metadata.excelJournalKey metadata.invoiceRowType')
+                    .lean();
+            };
 
             const saveJournal = async ({
                 journalKey,
@@ -3766,6 +3816,43 @@ class TransactionController {
                     throw new Error(`Unbalanced: debits ${totalDebit} ≠ credits ${totalCredit}`);
                 }
 
+                const normalizedKey = String(journalKey || '').trim();
+                if (!normalizedKey) {
+                    throw new Error('Missing journal key');
+                }
+
+                if (!allowDuplicates) {
+                    if (seenJournalKeys.has(normalizedKey)) {
+                        const err = new Error(
+                            `Duplicate blocked: journal key "${normalizedKey}" appears more than once in this upload`
+                        );
+                        err.code = 'DUPLICATE_JOURNAL';
+                        throw err;
+                    }
+                    seenJournalKeys.add(normalizedKey);
+
+                    const existing = await findExistingExcelDuplicate({
+                        journalKey: normalizedKey,
+                        reference: reference || `EXCEL-${normalizedKey}`,
+                        totalDebit,
+                        date: date || defaultDate,
+                        extraMeta
+                    });
+                    if (existing) {
+                        const err = new Error(
+                            `Duplicate blocked: already posted as ${existing.transactionId}` +
+                                (existing.reference ? ` (ref ${existing.reference})` : '') +
+                                `. Skip or reverse the existing journal before re-uploading.`
+                        );
+                        err.code = 'DUPLICATE_JOURNAL';
+                        err.existingTransactionId = existing.transactionId;
+                        err.existingId = existing._id;
+                        throw err;
+                    }
+                } else {
+                    seenJournalKeys.add(normalizedKey);
+                }
+
                 const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
                 const transactionSource =
                     sourceOverride ||
@@ -3776,7 +3863,7 @@ class TransactionController {
                     transactionId,
                     date: date || defaultDate,
                     description,
-                    reference: reference || `EXCEL-${journalKey}`,
+                    reference: reference || `EXCEL-${normalizedKey}`,
                     entries,
                     totalDebit,
                     totalCredit,
@@ -3795,7 +3882,7 @@ class TransactionController {
                                 : 'manual_double_entry_excel',
                         balanced: true,
                         manualTransaction: true,
-                        excelJournalKey: journalKey,
+                        excelJournalKey: normalizedKey,
                         excelFileName: req.file.originalname,
                         excelFormat: format,
                         excelMode: mode,
@@ -3808,7 +3895,7 @@ class TransactionController {
                     ? 'Missing Invoice Number — journal created with generated reference'
                     : null;
                 results.successful.push({
-                    journalKey,
+                    journalKey: normalizedKey,
                     transactionId: transactionEntry.transactionId,
                     _id: transactionEntry._id,
                     description,
@@ -3830,7 +3917,7 @@ class TransactionController {
                         sheetName: extraMeta.sheetName,
                         row: (extraMeta.excelRows || [])[0],
                         customer: extraMeta.customer,
-                        journalKey,
+                        journalKey: normalizedKey,
                         transactionId: transactionEntry.transactionId,
                         message: 'Missing Invoice Number'
                     });
@@ -3841,6 +3928,28 @@ class TransactionController {
                 results.summary.totalSuccessful++;
                 results.summary.totalDebits += totalDebit;
                 results.summary.totalCredits += totalCredit;
+            };
+
+            const recordJournalFailure = (payload, err) => {
+                if (err?.code === 'DUPLICATE_JOURNAL') {
+                    results.duplicates.push({
+                        ...payload,
+                        error: err.message,
+                        existingTransactionId: err.existingTransactionId || null,
+                        existingId: err.existingId || null
+                    });
+                    results.summary.totalDuplicates++;
+                    results.warnings.push(
+                        `${payload.sheetName || 'sheet'} ${payload.journalKey}: ${err.message}`
+                    );
+                    return 'duplicate';
+                }
+                results.failed.push({
+                    ...payload,
+                    error: err.message
+                });
+                results.summary.totalFailed++;
+                return 'failed';
             };
 
             // Resolve GL accounts once (invoice format)
@@ -3906,6 +4015,7 @@ class TransactionController {
                     journals: 0,
                     successful: 0,
                     failed: 0,
+                    duplicates: 0,
                     missingInvoiceNumber: 0
                 };
 
@@ -3976,14 +4086,16 @@ class TransactionController {
                             });
                             sheetResult.successful++;
                         } catch (err) {
-                            results.failed.push({
-                                journalKey,
-                                sheetName: sheet.name,
-                                error: err.message,
-                                rows: groupLines.map((l) => l.rowNumber)
-                            });
-                            results.summary.totalFailed++;
-                            sheetResult.failed++;
+                            const kind = recordJournalFailure(
+                                {
+                                    journalKey,
+                                    sheetName: sheet.name,
+                                    rows: groupLines.map((l) => l.rowNumber)
+                                },
+                                err
+                            );
+                            if (kind === 'duplicate') sheetResult.duplicates = (sheetResult.duplicates || 0) + 1;
+                            else sheetResult.failed++;
                         }
                     }
                 } else {
@@ -4091,16 +4203,18 @@ class TransactionController {
                             sheetResult.successful++;
                             if (row.missingInvoiceNumber) sheetResult.missingInvoiceNumber++;
                         } catch (err) {
-                            results.failed.push({
-                                journalKey: row.journalKey,
-                                sheetName: sheet.name,
-                                error: err.message,
-                                rows: [row.rowNumber],
-                                customer: row.customer,
-                                missingInvoiceNumber: Boolean(row.missingInvoiceNumber)
-                            });
-                            results.summary.totalFailed++;
-                            sheetResult.failed++;
+                            const kind = recordJournalFailure(
+                                {
+                                    journalKey: row.journalKey,
+                                    sheetName: sheet.name,
+                                    rows: [row.rowNumber],
+                                    customer: row.customer,
+                                    missingInvoiceNumber: Boolean(row.missingInvoiceNumber)
+                                },
+                                err
+                            );
+                            if (kind === 'duplicate') sheetResult.duplicates = (sheetResult.duplicates || 0) + 1;
+                            else sheetResult.failed++;
                         }
                     }
                 }
@@ -4108,11 +4222,17 @@ class TransactionController {
                 results.sheetsProcessed.push(sheetResult);
             }
 
-            const status = results.summary.totalSuccessful > 0 ? 200 : 400;
+            const hadWork =
+                results.summary.totalSuccessful > 0 ||
+                (results.summary.totalDuplicates > 0 && results.summary.totalFailed === 0);
+            const status = hadWork ? 200 : 400;
             if (results.summary.totalSuccessful > 0) clearTxnListCache();
             res.status(status).json({
-                success: results.summary.totalSuccessful > 0,
+                success: hadWork,
                 message: `Excel journals processed across ${results.sheetsProcessed.length} tab(s): ${results.summary.totalSuccessful} created (${results.summary.totalLinkedToDebtor} linked to student debtors), ${results.summary.totalFailed} failed` +
+                    (results.summary.totalDuplicates
+                        ? `, ${results.summary.totalDuplicates} duplicates blocked`
+                        : '') +
                     (results.summary.totalMissingInvoiceNumber
                         ? `, ${results.summary.totalMissingInvoiceNumber} missing invoice number`
                         : '') +
