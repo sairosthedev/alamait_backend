@@ -172,57 +172,70 @@ class PaymentService {
     }
 
     /**
-     * Get user ID for payment by checking existing debtor or creating new one
+     * Resolve student/debtor for payment creation.
+     * Accepts User id, Debtor id, or AR account code — same people as debtors list.
      */
     static async getUserIdForPayment(studentId, residenceId) {
         try {
             console.log(`🔍 Getting user ID for payment - Student: ${studentId}, Residence: ${residenceId}`);
-            
-            // Check if student exists
-            const student = await User.findById(studentId).select('firstName lastName email');
-            if (!student) {
-                throw new Error(`Student not found with ID: ${studentId}`);
+
+            if (!studentId) {
+                throw new Error('Student/debtor ID is required');
             }
 
-            // Try to find existing debtor first
-            let debtor = await Debtor.findOne({ user: studentId });
-            
+            const idStr = String(studentId);
+            let debtor = null;
+
+            // 1) Debtor by user id (most common from debtors list)
+            if (mongoose.Types.ObjectId.isValid(idStr)) {
+                debtor = await Debtor.findOne({ user: idStr });
+            }
+
+            // 2) Debtor by debtor _id
+            if (!debtor && mongoose.Types.ObjectId.isValid(idStr)) {
+                debtor = await Debtor.findById(idStr);
+            }
+
+            // 3) Debtor by account code
+            if (!debtor) {
+                const code = idStr.startsWith('1100-') ? idStr : `1100-${idStr}`;
+                debtor = await Debtor.findOne({ accountCode: code });
+            }
+
             if (debtor) {
-                console.log(`✅ Found existing debtor for student: ${student.firstName} ${student.lastName}`);
-                console.log(`   Debtor ID: ${debtor._id}`);
-                console.log(`   Debtor Code: ${debtor.debtorCode}`);
-                console.log(`   User ID: ${debtor.user}`);
-                
+                const name = debtor.contactInfo?.name || 'Tenant';
+                console.log(`✅ Resolved via debtor: ${name} (${debtor.debtorCode})`);
                 return {
-                    userId: debtor.user,
-                    debtor: debtor,
-                    isNewDebtor: false
-                };
-            } else {
-                console.log(`🏗️  No existing debtor found, will create one`);
-                
-                // Create new debtor account
-                const { createDebtorForStudent } = require('./debtorService');
-                
-                debtor = await createDebtorForStudent(student, {
-                    residenceId: residenceId,
-                    createdBy: studentId, // Use student as creator for now
-                    startDate: new Date(),
-                    roomPrice: 0 // Will be updated when room is assigned
-                });
-                
-                console.log(`✅ Created new debtor account for student: ${student.firstName} ${student.lastName}`);
-                console.log(`   Debtor ID: ${debtor._id}`);
-                console.log(`   Debtor Code: ${debtor.debtorCode}`);
-                console.log(`   User ID: ${debtor.user}`);
-                
-                return {
-                    userId: debtor.user,
-                    debtor: debtor,
-                    isNewDebtor: true
+                    userId: debtor.user || debtor._id,
+                    debtor,
+                    isNewDebtor: false,
+                    studentName: name
                 };
             }
-            
+
+            // 4) Active User only (legacy) — create debtor if needed
+            const student = await User.findById(studentId).select('firstName lastName email');
+            if (!student) {
+                throw new Error(
+                    `Student not found with ID: ${studentId}. Use a debtor from the debtors list.`
+                );
+            }
+
+            console.log(`🏗️  No existing debtor found for user, creating one`);
+            const { createDebtorForStudent } = require('./debtorService');
+            debtor = await createDebtorForStudent(student, {
+                residenceId: residenceId,
+                createdBy: studentId,
+                startDate: new Date(),
+                roomPrice: 0
+            });
+
+            return {
+                userId: debtor.user || student._id,
+                debtor,
+                isNewDebtor: true,
+                studentName: `${student.firstName} ${student.lastName}`
+            };
         } catch (error) {
             console.error('❌ Error getting user ID for payment:', error);
             throw error;

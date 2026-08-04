@@ -908,10 +908,54 @@ const createPayment = async (req, res) => {
             });
         }
 
-        // Check if student exists
-        const studentExists = await User.findOne({ _id: student, role: 'student' });
+        // Check if student/debtor exists (same people as debtors list)
+        const { getStudentInfo } = require('../../utils/studentUtils');
+        let studentExists = await User.findOne({ _id: student, role: 'student' });
+        let resolvedDebtor = null;
+
         if (!studentExists) {
-            return res.status(404).json({ message: 'Student not found' });
+            resolvedDebtor =
+                (mongoose.Types.ObjectId.isValid(student)
+                    ? await Debtor.findOne({ user: student })
+                    : null) ||
+                (mongoose.Types.ObjectId.isValid(student)
+                    ? await Debtor.findById(student)
+                    : null) ||
+                (await Debtor.findOne({
+                    accountCode: String(student).startsWith('1100-')
+                        ? String(student)
+                        : `1100-${student}`
+                }));
+
+            if (resolvedDebtor) {
+                const nameParts = String(resolvedDebtor.contactInfo?.name || '')
+                    .trim()
+                    .split(/\s+/);
+                studentExists = {
+                    _id: resolvedDebtor.user || resolvedDebtor._id,
+                    firstName: nameParts[0] || 'Tenant',
+                    lastName: nameParts.slice(1).join(' ') || '',
+                    email: resolvedDebtor.contactInfo?.email || '',
+                    isExpired: Boolean(resolvedDebtor.isExpired)
+                };
+            } else {
+                const studentInfo = await getStudentInfo(student);
+                if (studentInfo) {
+                    studentExists = {
+                        _id: studentInfo._id || student,
+                        firstName: studentInfo.firstName,
+                        lastName: studentInfo.lastName,
+                        email: studentInfo.email,
+                        isExpired: true
+                    };
+                }
+            }
+        }
+        if (!studentExists) {
+            return res.status(404).json({
+                message:
+                    'Student not found. Select a tenant from the debtors list (or /api/finance/students).'
+            });
         }
         
         // Check if residence exists
@@ -923,12 +967,17 @@ const createPayment = async (req, res) => {
         // 🆕 CRITICAL FIX: Always find debtor FIRST, then use debtor's account code (not payload)
         // Accruals use debtor account codes (1100-{debtorId}), so we MUST use debtor's account code
         const providedAccountCode = accountCode || debtorAccountCode;
-        let userId = student; // Default to student ID
-        let debtor = null;
+        let userId = studentExists._id || student; // Prefer resolved id
+        let debtor = resolvedDebtor || null;
         let finalAccountCode = null;
         
         // STEP 1: Find debtor by user ID (most reliable)
-        debtor = await Debtor.findOne({ user: student });
+        if (!debtor) {
+            debtor = await Debtor.findOne({ user: student });
+        }
+        if (!debtor && mongoose.Types.ObjectId.isValid(student)) {
+            debtor = await Debtor.findById(student);
+        }
         
         // STEP 2: If not found, try to find by account code from payload (if provided)
         if (!debtor && providedAccountCode && providedAccountCode.startsWith('1100-')) {

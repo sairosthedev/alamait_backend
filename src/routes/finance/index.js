@@ -128,141 +128,103 @@ router.get('/users/:id', async (req, res) => {
     }
 });
 
-// Get all students with residence information (for finance)
+// Get students for Add Payment — same source as debtors list
 router.get('/students', async (req, res) => {
     try {
-        const { page = 1, limit = 10, search, status, residence } = req.query;
-        const query = { role: 'student' };
+        const Debtor = require('../../models/Debtor');
+        const {
+            page = 1,
+            limit = 1000,
+            search,
+            status,
+            residence,
+            overdue
+        } = req.query;
 
-        // Add filters
-        if (status) {
+        const query = {};
+        // Match debtors list: status=all / omitted → everyone
+        if (status && String(status).toLowerCase() !== 'all') {
             query.status = status;
         }
-
-        if (residence) {
-            query.residence = residence;
-        }
+        if (residence) query.residence = residence;
+        if (overdue === 'true') query.currentBalance = { $gt: 0 };
 
         if (search) {
             query.$or = [
-                { firstName: { $regex: search, $options: 'i' } },
-                { lastName: { $regex: search, $options: 'i' } },
-                { email: { $regex: search, $options: 'i' } }
+                { 'contactInfo.name': { $regex: search, $options: 'i' } },
+                { 'contactInfo.email': { $regex: search, $options: 'i' } },
+                { debtorCode: { $regex: search, $options: 'i' } },
+                { accountCode: { $regex: search, $options: 'i' } }
             ];
         }
 
-        const skip = (page - 1) * limit;
+        const limitNum = Math.min(2000, Math.max(1, parseInt(limit, 10) || 1000));
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const skip = (pageNum - 1) * limitNum;
 
-        const students = await User.find(query)
-            .select('-password')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
+        const [total, debtors] = await Promise.all([
+            Debtor.countDocuments(query),
+            Debtor.find(query)
+                .select(
+                    'debtorCode accountCode status currentBalance totalOwed totalPaid residence user application contactInfo roomNumber isExpired expiredAt expirationReason createdAt'
+                )
+                .populate('user', 'firstName lastName email phone')
+                .populate('residence', 'name')
+                .sort({ 'contactInfo.name': 1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
 
-        // Fetch all applications for these students in one query
-        const studentIds = students.map(s => s._id.toString());
-        const applications = await Application.find({ student: { $in: studentIds } })
-            .sort({ createdAt: -1 })
-            .populate('residence', 'name')
-            .lean();
-        // Map all applications by student ID
-        const allAppsMap = {};
-        // Fetch all residences for room price lookup
-        const allResidences = await Residence.find({}).lean();
-        applications.forEach(app => {
-            const sid = app.student?.toString();
-            if (!allAppsMap[sid]) allAppsMap[sid] = [];
-            // Attach room price if possible
-            let roomPrice = null;
-            if (app.allocatedRoom && app.residence && app.residence._id) {
-                const residence = allResidences.find(r => r._id.toString() === app.residence._id.toString());
-                if (residence && Array.isArray(residence.rooms)) {
-                    const roomObj = residence.rooms.find(rm => rm.roomNumber === app.allocatedRoom);
-                    if (roomObj && roomObj.price) roomPrice = roomObj.price;
-                }
-            }
-            allAppsMap[sid].push({ ...app, roomPrice });
-        });
-
-        const studentsWithDetails = await Promise.all(students.map(async s => {
-            // Find all leases for this student
-            const leases = await Lease.find({ student: s._id }).populate('residence', 'name').lean();
-            // Find all payments for this student
-            const paymentHistory = await Payment.find({ student: s._id }).lean();
-
-            // Add paymentMonth to each payment in paymentHistory if present
-            const paymentHistoryWithMonth = paymentHistory.map(p => ({ ...p, paymentMonth: p.paymentMonth || null }));
-
-            // Try to get residenceName, room, and billingPeriod from the latest lease or application
-            let residenceName = null;
-            let room = null;
-            let billingPeriod = null;
-            let adminFeeRequired = 0;
-            let depositRequired = 0;
-            let adminFeePaid = 0;
-            let depositPaid = 0;
-            let application = allAppsMap[s._id.toString()]?.[0] || null; // latest approved application
-
-            if (leases.length > 0) {
-                const latestLease = leases[leases.length - 1];
-                residenceName = latestLease.residence?.name || null;
-                room = latestLease.room || null;
-                if (latestLease.startDate && latestLease.endDate) {
-                    const start = new Date(latestLease.startDate);
-                    const end = new Date(latestLease.endDate);
-                    const startStr = start.toLocaleString('default', { month: 'long', year: 'numeric' });
-                    const endStr = end.toLocaleString('default', { month: 'long', year: 'numeric' });
-                    billingPeriod = `${startStr} - ${endStr}`;
-                }
-                adminFeeRequired = latestLease.adminFee || 0;
-                depositRequired = latestLease.deposit || 0;
-            } else if (application) {
-                room = application.allocatedRoom || null;
-                residenceName = application.residence?.name || null;
-                if (application.startDate && application.endDate) {
-                    const start = new Date(application.startDate);
-                    const end = new Date(application.endDate);
-                    const startStr = start.toLocaleString('default', { month: 'long', year: 'numeric' });
-                    const endStr = end.toLocaleString('default', { month: 'long', year: 'numeric' });
-                    billingPeriod = `${startStr} - ${endStr}`;
-                }
-                adminFeeRequired = application.adminFee || 0;
-                depositRequired = application.deposit || 0;
-            }
-
-            // Calculate paid adminFee and deposit from payments
-            paymentHistoryWithMonth.forEach(p => {
-                if (p.adminFee) adminFeePaid += p.adminFee;
-                if (p.deposit) depositPaid += p.deposit;
-            });
-            const unpaidAdminFee = Math.max(0, adminFeeRequired - adminFeePaid);
-            const unpaidDeposit = Math.max(0, depositRequired - depositPaid);
+        // Shape expected by Add Payment modal (student picker)
+        const students = debtors.map((d) => {
+            const nameFromContact = String(d.contactInfo?.name || '').trim();
+            const parts = nameFromContact.split(/\s+/).filter(Boolean);
+            const firstName =
+                d.user?.firstName || parts[0] || 'Tenant';
+            const lastName =
+                d.user?.lastName || parts.slice(1).join(' ') || '';
+            const fullName = `${firstName} ${lastName}`.trim() || nameFromContact || d.debtorCode;
+            // Prefer user id when present (legacy payments), else debtor id
+            const studentId = d.user?._id || d.user || d._id;
 
             return {
-                ...s,
-                leases,
-                paymentHistory: paymentHistoryWithMonth,
-                residenceName,
-                room,
-                billingPeriod,
-                unpaidAdminFee,
-                unpaidDeposit,
-                application, // latest approved application
-                applications: allAppsMap[s._id.toString()] || [] // all applications
+                _id: studentId,
+                id: studentId,
+                firstName,
+                lastName,
+                name: fullName,
+                email: d.user?.email || d.contactInfo?.email || '',
+                phone: d.user?.phone || d.contactInfo?.phone || '',
+                status: d.isExpired ? 'expired' : d.status || 'active',
+                isExpired: Boolean(d.isExpired),
+                expiredAt: d.expiredAt || null,
+                residence: d.residence || null,
+                residenceName: d.residence?.name || null,
+                room: d.roomNumber || null,
+                currentRoom: d.roomNumber || null,
+                debtorId: d._id,
+                debtorCode: d.debtorCode,
+                accountCode: d.accountCode,
+                currentBalance: d.currentBalance || 0,
+                totalOwed: d.totalOwed || 0,
+                totalPaid: d.totalPaid || 0,
+                source: 'debtor'
             };
-        }));
-
-        const total = await User.countDocuments(query);
+        });
 
         res.json({
-            students: studentsWithDetails,
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(total / limit),
-            total
+            students,
+            debtors: students, // alias for clients that expect debtors shape
+            currentPage: pageNum,
+            totalPages: Math.max(1, Math.ceil(total / limitNum) || 1),
+            total,
+            limit: limitNum,
+            source: 'debtors',
+            includesExpired: true
         });
     } catch (error) {
-        console.error('Error fetching students for finance:', error);
+        console.error('Error fetching students for finance (from debtors):', error);
         res.status(500).json({ error: 'Server error' });
     }
 });

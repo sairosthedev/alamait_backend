@@ -1138,38 +1138,71 @@ async function computeLiteMonthlyOutstanding({ residence, limit = 100, sortBy = 
     });
 
     const limited = studentBalances.slice(0, limitNum);
-    const objectIds = limited
-        .map((s) => s.studentId)
-        .filter((id) => mongoose.Types.ObjectId.isValid(id))
-        .map((id) => new mongoose.Types.ObjectId(id));
+    const studentIds = limited.map((s) => s.studentId);
+    const { getMultipleStudentInfo } = require('../../utils/studentUtils');
+    const Debtor = require('../../models/Debtor');
 
-    const users = objectIds.length
-        ? await User.find({ _id: { $in: objectIds } })
-            .select('firstName lastName email phone')
+    const [studentInfoList, debtors] = await Promise.all([
+        getMultipleStudentInfo(studentIds),
+        Debtor.find({
+            $or: [
+                { user: { $in: studentIds.filter((id) => mongoose.Types.ObjectId.isValid(id)) } },
+                { _id: { $in: studentIds.filter((id) => mongoose.Types.ObjectId.isValid(id)) } },
+                { accountCode: { $in: studentIds.map((id) => `1100-${id}`) } }
+            ]
+        })
+            .select('_id user accountCode debtorCode contactInfo isExpired')
             .lean()
-        : [];
-    const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+    ]);
+
+    const studentInfoMap = new Map(
+        (studentInfoList || [])
+            .filter((s) => s && s._id)
+            .map((s) => [s._id.toString(), s])
+    );
+
+    const debtorByUser = new Map();
+    const debtorById = new Map();
+    const debtorByAccount = new Map();
+    for (const d of debtors) {
+        if (d.user) debtorByUser.set(d.user.toString(), d);
+        debtorById.set(d._id.toString(), d);
+        if (d.accountCode) debtorByAccount.set(d.accountCode, d);
+    }
 
     const students = limited.map((student) => {
-        const user = userMap.get(student.studentId);
+        const info = studentInfoMap.get(student.studentId) || null;
+        const debtor =
+            debtorByUser.get(student.studentId) ||
+            debtorById.get(student.studentId) ||
+            debtorByAccount.get(`1100-${student.studentId}`) ||
+            null;
+
+        const firstName =
+            info?.firstName ||
+            debtor?.contactInfo?.name?.split(' ')[0] ||
+            'Unknown';
+        const lastName =
+            info?.lastName ||
+            debtor?.contactInfo?.name?.split(' ').slice(1).join(' ') ||
+            '';
+
         return {
             studentId: student.studentId,
             residence: student.residence,
             totalBalance: student.totalBalance,
             totalTransactions: student.totalTransactions,
             latestTransaction: student.latestTransaction,
-            hasDebtorAccount: false,
-            debtorCode: null,
+            hasDebtorAccount: Boolean(debtor),
+            debtorCode: debtor?.debtorCode || null,
             monthlyBalances: student.monthlyBalances,
-            studentDetails: user
-                ? {
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email,
-                    phone: user.phone,
-                    isExpired: false
-                }
-                : null
+            studentDetails: {
+                firstName,
+                lastName,
+                email: info?.email || debtor?.contactInfo?.email || null,
+                phone: info?.phone || debtor?.contactInfo?.phone || null,
+                isExpired: Boolean(info?.isExpired || debtor?.isExpired || !info)
+            }
         };
     });
 

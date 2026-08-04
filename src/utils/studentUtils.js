@@ -468,11 +468,301 @@ async function getLinkedStudentIdentifiers(studentId) {
     return Array.from(variants).filter(Boolean);
 }
 
+/**
+ * List students for finance/admin pickers (Add Payment, etc.).
+ * Includes active Users, archived ExpiredStudent records, and Debtor accounts
+ * (so anyone visible in Debtors can be selected for payment).
+ * Default status=all so expired students appear in payment forms.
+ */
+async function listStudentsIncludingExpired({
+    search = '',
+    status = 'all',
+    residence = null,
+    page = 1,
+    limit = 50
+} = {}) {
+    const Debtor = require('../models/Debtor');
+    // Ensure Residence is registered for populate
+    try {
+        require('../models/Residence');
+    } catch (_) {
+        /* optional */
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10) || 50));
+    const statusFilter = String(status || 'all').toLowerCase();
+    const searchTrim = String(search || '').trim();
+    const searchRe = searchTrim
+        ? new RegExp(searchTrim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        : null;
+
+    const includeActive = statusFilter === 'all' || statusFilter === 'active';
+    const includeExpired = statusFilter === 'all' || statusFilter === 'expired';
+    const residenceFilter =
+        residence && mongoose.Types.ObjectId.isValid(residence) ? residence.toString() : null;
+
+    const activeQuery = { role: 'student' };
+    if (residenceFilter) {
+        activeQuery.residence = residenceFilter;
+    }
+    if (searchRe) {
+        activeQuery.$or = [
+            { firstName: searchRe },
+            { lastName: searchRe },
+            { email: searchRe },
+            { phone: searchRe }
+        ];
+    }
+
+    const debtorQuery = {};
+    if (residenceFilter) {
+        debtorQuery.residence = residenceFilter;
+    }
+    if (searchRe) {
+        debtorQuery.$or = [
+            { 'contactInfo.name': searchRe },
+            { 'contactInfo.email': searchRe },
+            { 'contactInfo.phone': searchRe },
+            { debtorCode: searchRe }
+        ];
+    }
+
+    const [activeUsers, expiredRecords, debtors] = await Promise.all([
+        includeActive
+            ? User.find(activeQuery)
+                .select(
+                    'firstName lastName email phone status residence currentRoom roomValidUntil createdAt'
+                )
+                .populate('residence', 'name _id')
+                .lean()
+            : Promise.resolve([]),
+        includeExpired
+            ? ExpiredStudent.find({})
+                .select('student application archivedAt reason studentId')
+                .lean()
+            : Promise.resolve([]),
+        // Always include debtors for payment pickers — they are the AR source of truth
+        Debtor.find(debtorQuery)
+            .select(
+                'user application contactInfo residence roomNumber status isExpired expiredAt expirationReason debtorCode accountCode createdAt'
+            )
+            .populate('residence', 'name _id')
+            .lean()
+    ]);
+
+    const byId = new Map();
+
+    const upsert = (id, row) => {
+        if (!id) return;
+        const key = String(id);
+        const existing = byId.get(key);
+        if (!existing) {
+            byId.set(key, row);
+            return;
+        }
+        // Prefer richer / more current data; keep expired flag if either says expired
+        byId.set(key, {
+            ...existing,
+            ...Object.fromEntries(
+                Object.entries(row).filter(([, v]) => v !== null && v !== undefined && v !== '')
+            ),
+            isExpired: Boolean(existing.isExpired || row.isExpired),
+            status:
+                existing.isExpired || row.isExpired
+                    ? 'expired'
+                    : row.status || existing.status || 'active',
+            debtorId: row.debtorId || existing.debtorId || null,
+            debtorCode: row.debtorCode || existing.debtorCode || null,
+            accountCode: row.accountCode || existing.accountCode || null
+        });
+    };
+
+    for (const u of activeUsers) {
+        const id = u._id.toString();
+        upsert(id, {
+            _id: u._id,
+            id,
+            firstName: u.firstName || '',
+            lastName: u.lastName || '',
+            email: u.email || '',
+            phone: u.phone || '',
+            status: u.status || 'active',
+            isExpired: false,
+            residence: u.residence || null,
+            currentRoom: u.currentRoom || null,
+            roomValidUntil: u.roomValidUntil || null,
+            createdAt: u.createdAt || null,
+            source: 'user',
+            debtorId: null,
+            debtorCode: null,
+            accountCode: null
+        });
+    }
+
+    for (const rec of expiredRecords) {
+        const src =
+            (rec.student && typeof rec.student === 'object' && (rec.student.firstName || rec.student._id)
+                ? rec.student
+                : null) ||
+            (rec.application?.student && typeof rec.application.student === 'object'
+                ? rec.application.student
+                : null) ||
+            {};
+
+        const rawId =
+            src._id ||
+            rec.student?._id ||
+            (typeof rec.student === 'string' ? rec.student : null) ||
+            rec.studentId ||
+            rec.application?.student?._id ||
+            rec._id;
+
+        if (!rawId) continue;
+        const id = String(rawId);
+
+        const firstName = src.firstName || rec.application?.firstName || '';
+        const lastName = src.lastName || rec.application?.lastName || '';
+        const email = src.email || rec.application?.email || '';
+        const phone = src.phone || rec.application?.phone || '';
+
+        if (searchRe && !searchRe.test(`${firstName} ${lastName} ${email} ${phone}`)) {
+            continue;
+        }
+
+        let studentResidence = src.residence || rec.application?.residence || null;
+        if (studentResidence && typeof studentResidence === 'object' && studentResidence._id) {
+            studentResidence = {
+                _id: studentResidence._id,
+                name: studentResidence.name || null
+            };
+        }
+
+        if (residenceFilter) {
+            if (!studentResidence) continue;
+            const rid =
+                typeof studentResidence === 'object' && studentResidence._id
+                    ? studentResidence._id.toString()
+                    : String(studentResidence);
+            if (rid !== residenceFilter) continue;
+        }
+
+        upsert(id, {
+            _id: mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id,
+            id,
+            firstName,
+            lastName,
+            email,
+            phone,
+            status: 'expired',
+            isExpired: true,
+            expiredAt: rec.archivedAt || null,
+            expirationReason: rec.reason || null,
+            residence: studentResidence,
+            currentRoom:
+                src.currentRoom ||
+                rec.application?.allocatedRoom ||
+                rec.application?.currentRoom ||
+                null,
+            roomValidUntil: src.roomValidUntil || rec.application?.endDate || null,
+            createdAt: src.createdAt || rec.archivedAt || null,
+            source: 'expired',
+            debtorId: null,
+            debtorCode: null,
+            accountCode: null
+        });
+    }
+
+    // Merge debtors — fills gaps where tenant exists in AR but not User/ExpiredStudent
+    for (const d of debtors) {
+        const name = String(d.contactInfo?.name || '').trim();
+        const parts = name.split(/\s+/).filter(Boolean);
+        const firstName = parts[0] || '';
+        const lastName = parts.slice(1).join(' ') || '';
+        const email = d.contactInfo?.email || '';
+        const phone = d.contactInfo?.phone || '';
+
+        const isExpired =
+            Boolean(d.isExpired) ||
+            d.status === 'expired' ||
+            String(d.status || '').toLowerCase() === 'inactive';
+
+        if (!includeExpired && isExpired) continue;
+        if (!includeActive && !isExpired) continue;
+
+        const userId = d.user ? String(d.user) : null;
+        const debtorId = String(d._id);
+        // Prefer user id as the selectable student id (payments reference student user)
+        const primaryId = userId || debtorId;
+
+        let studentResidence = d.residence || null;
+        if (studentResidence && typeof studentResidence === 'object' && studentResidence._id) {
+            studentResidence = {
+                _id: studentResidence._id,
+                name: studentResidence.name || null
+            };
+        }
+
+        upsert(primaryId, {
+            _id: mongoose.Types.ObjectId.isValid(primaryId)
+                ? new mongoose.Types.ObjectId(primaryId)
+                : primaryId,
+            id: primaryId,
+            firstName: firstName || 'Tenant',
+            lastName,
+            email,
+            phone,
+            status: isExpired ? 'expired' : d.status || 'active',
+            isExpired,
+            expiredAt: d.expiredAt || null,
+            expirationReason: d.expirationReason || null,
+            residence: studentResidence,
+            currentRoom: d.roomNumber || null,
+            roomValidUntil: null,
+            createdAt: d.createdAt || null,
+            source: userId && byId.has(userId) ? byId.get(userId).source : 'debtor',
+            debtorId,
+            debtorCode: d.debtorCode || null,
+            accountCode: d.accountCode || null
+        });
+
+        // Also index by debtor id so lookups by either id work
+        if (userId && userId !== debtorId) {
+            const row = byId.get(primaryId);
+            if (row) byId.set(debtorId, { ...row, id: primaryId, _id: row._id });
+        }
+    }
+
+    const students = Array.from(byId.values())
+        // Dedupe rows that were aliased (same person under user+debtor keys pointing to same primary)
+        .filter((s, idx, arr) => {
+            const key = String(s.id || s._id);
+            return arr.findIndex((x) => String(x.id || x._id) === key) === idx;
+        })
+        .sort((a, b) => {
+            const an = `${a.firstName} ${a.lastName}`.trim().toLowerCase();
+            const bn = `${b.firstName} ${b.lastName}`.trim().toLowerCase();
+            return an.localeCompare(bn);
+        });
+
+    const total = students.length;
+    const start = (pageNum - 1) * limitNum;
+
+    return {
+        students: students.slice(start, start + limitNum),
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.max(1, Math.ceil(total / limitNum) || 1)
+    };
+}
+
 module.exports = {
     getStudentInfo,
     getMultipleStudentInfo,
     getStudentName,
     isStudentExpired,
     resolveStudentIdentifier,
-    getLinkedStudentIdentifiers
+    getLinkedStudentIdentifiers,
+    listStudentsIncludingExpired
 };

@@ -139,7 +139,10 @@ exports.getAllDebtors = async (req, res) => {
 
         const query = {};
 
-        if (status) query.status = status;
+        // status=all (or omitted) → include every debtor (same as Add Payment)
+        if (status && String(status).toLowerCase() !== 'all') {
+            query.status = status;
+        }
         if (residence) query.residence = residence;
         if (overdue === 'true') query.currentBalance = { $gt: 0 };
 
@@ -152,7 +155,7 @@ exports.getAllDebtors = async (req, res) => {
             ];
         }
 
-        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+        const limitNum = Math.min(2000, Math.max(1, parseInt(limit, 10) || 10));
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
         const skip = (pageNum - 1) * limitNum;
         const sortDirection = sortOrder === 'desc' ? -1 : 1;

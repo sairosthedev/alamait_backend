@@ -497,106 +497,63 @@ exports.getRoomsWithOccupancy = async (req, res) => {
 // Get students with location information
 exports.getStudentsWithLocation = async (req, res) => {
     try {
-        const { page = 1, limit = 10, status, residence } = req.query;
-        const query = { role: 'student' };
+        const { page = 1, limit = 500, status, residence, search } = req.query;
+        const { listStudentsIncludingExpired } = require('../../utils/studentUtils');
 
-        // Build query based on filters
-        if (status) {
-            query.status = status;
-        }
-        if (residence) {
-            query.residence = residence;
-        }
+        const statusFilter =
+            String(status || '').toLowerCase() === 'expired' ? 'expired' : 'all';
 
-        const skip = (page - 1) * limit;
+        const result = await listStudentsIncludingExpired({
+            search,
+            status: statusFilter,
+            residence,
+            page,
+            limit
+        });
 
-        console.log('Fetching students with query:', query);
-
-        // Get students with pagination and filters
-        const students = await User.find(query)
-            .select('-password')
-            .populate({
-                path: 'residence',
-                select: 'name address location amenities',
-                model: 'Residence'
-            })
-            .populate({
-                path: 'currentBooking',
-                select: 'startDate endDate status',
-                model: 'Booking'
-            })
-            .populate({
-                path: 'maintenanceRequests',
-                select: 'status priority',
-                model: 'Maintenance'
-            })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        if (!students) {
-            console.log('No students found');
-            return res.json({
-                students: [],
-                pagination: {
-                    currentPage: parseInt(page),
-                    totalPages: 0,
-                    total: 0,
-                    limit: parseInt(limit)
-                }
-            });
-        }
-
-        // Get total count for pagination
-        const total = await User.countDocuments(query);
-
-        const studentsWithLocation = students.map(student => ({
-            id: student._id,
-            name: `${student.firstName} ${student.lastName}`,
+        const studentsWithLocation = result.students.map((student) => ({
+            id: student._id || student.id,
+            name: `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+            firstName: student.firstName,
+            lastName: student.lastName,
             email: student.email,
             phone: student.phone,
             status: student.status,
-            location: student.residence ? {
-                residenceId: student.residence._id,
-                residenceName: student.residence.name,
-                address: student.residence.address,
-                coordinates: student.residence.location?.coordinates || [],
-                amenities: student.residence.amenities || [],
-                roomNumber: student.currentRoom
-            } : null,
+            isExpired: Boolean(student.isExpired),
+            expiredAt: student.expiredAt || null,
+            debtorId: student.debtorId || null,
+            debtorCode: student.debtorCode || null,
+            accountCode: student.accountCode || null,
+            location: student.residence
+                ? {
+                    residenceId:
+                        typeof student.residence === 'object'
+                            ? student.residence._id
+                            : student.residence,
+                    residenceName:
+                        typeof student.residence === 'object' ? student.residence.name : null,
+                    roomNumber: student.currentRoom
+                }
+                : null,
             roomValidUntil: student.roomValidUntil,
-            roomApprovalDate: student.roomApprovalDate,
-            currentBooking: student.currentBooking ? {
-                startDate: student.currentBooking.startDate,
-                endDate: student.currentBooking.endDate,
-                status: student.currentBooking.status
-            } : null,
-            statistics: {
-                maintenanceRequests: student.maintenanceRequests?.length || 0,
-                activeMaintenanceRequests: student.maintenanceRequests?.filter(m => m.status !== 'completed').length || 0,
-                paymentHistory: student.paymentHistory || [],
-                lastPayment: student.lastPayment
-            },
-            emergencyContact: student.emergencyContact || null,
-            documents: student.documents || [],
-            preferences: student.preferences || {}
+            currentRoom: student.currentRoom
         }));
 
         res.json({
             students: studentsWithLocation,
             pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
-                total,
-                limit: parseInt(limit)
-            }
+                currentPage: result.page,
+                totalPages: result.pages,
+                total: result.total,
+                limit: result.limit
+            },
+            includesExpired: true
         });
     } catch (error) {
         console.error('Error in getStudentsWithLocation:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             error: 'Failed to fetch students',
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 }; 

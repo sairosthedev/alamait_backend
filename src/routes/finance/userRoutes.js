@@ -20,42 +20,59 @@ router.get('/admins', auth, async (req, res) => {
     }
 });
 
-// Get all students with residence information (for finance)
+// Get all students with residence information (for finance) — from debtors (same as Add Payment)
 router.get('/students', auth, checkRole('finance_admin', 'finance_user'), async (req, res) => {
     try {
-        const { page = 1, limit = 10, search, status } = req.query;
-        const query = { role: 'student' };
-
-        // Add filters
-        if (status) {
-            query.status = status;
-        }
-
+        const Debtor = require('../../models/Debtor');
+        const { page = 1, limit = 1000, search, status, residence } = req.query;
+        const query = {};
+        if (status && String(status).toLowerCase() !== 'all') query.status = status;
+        if (residence) query.residence = residence;
         if (search) {
             query.$or = [
-                { firstName: { $regex: search, $options: 'i' } },
-                { lastName: { $regex: search, $options: 'i' } },
-                { email: { $regex: search, $options: 'i' } }
+                { 'contactInfo.name': { $regex: search, $options: 'i' } },
+                { 'contactInfo.email': { $regex: search, $options: 'i' } },
+                { debtorCode: { $regex: search, $options: 'i' } }
             ];
         }
-
-        const skip = (page - 1) * limit;
-
-        const students = await User.find(query)
-            .select('-password')
-            .populate('residence', 'name _id')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        const total = await User.countDocuments(query);
-
+        const limitNum = Math.min(2000, Math.max(1, parseInt(limit, 10) || 1000));
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const [total, debtors] = await Promise.all([
+            Debtor.countDocuments(query),
+            Debtor.find(query)
+                .select('debtorCode accountCode status contactInfo residence user roomNumber isExpired expiredAt')
+                .populate('residence', 'name _id')
+                .sort({ 'contactInfo.name': 1 })
+                .skip((pageNum - 1) * limitNum)
+                .limit(limitNum)
+                .lean()
+        ]);
+        const students = debtors.map((d) => {
+            const parts = String(d.contactInfo?.name || '').trim().split(/\s+/).filter(Boolean);
+            const studentId = d.user || d._id;
+            return {
+                _id: studentId,
+                id: studentId,
+                firstName: parts[0] || 'Tenant',
+                lastName: parts.slice(1).join(' ') || '',
+                name: d.contactInfo?.name || d.debtorCode,
+                email: d.contactInfo?.email || '',
+                status: d.isExpired ? 'expired' : d.status,
+                isExpired: Boolean(d.isExpired),
+                residence: d.residence,
+                debtorId: d._id,
+                debtorCode: d.debtorCode,
+                accountCode: d.accountCode,
+                source: 'debtor'
+            };
+        });
         res.json({
             students,
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(total / limit),
-            total
+            currentPage: pageNum,
+            totalPages: Math.max(1, Math.ceil(total / limitNum) || 1),
+            total,
+            source: 'debtors',
+            includesExpired: true
         });
     } catch (error) {
         console.error('Error fetching students for finance:', error);

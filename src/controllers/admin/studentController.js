@@ -67,40 +67,29 @@ const safeDateFormat = (date) => {
     }
 };
 
-// Get all students with pagination and filters
+// Get all students with pagination and filters (includes expired by default)
 exports.getAllStudents = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search, status } = req.query;
-        const query = { role: 'student' };
+        const { page = 1, limit = 500, search, status, residence } = req.query;
+        const { listStudentsIncludingExpired } = require('../../utils/studentUtils');
 
-        // Add filters
-        if (status) {
-            query.status = status;
-        }
+        const statusFilter =
+            String(status || '').toLowerCase() === 'expired' ? 'expired' : 'all';
 
-        if (search) {
-            query.$or = [
-                { firstName: { $regex: search, $options: 'i' } },
-                { lastName: { $regex: search, $options: 'i' } },
-                { email: { $regex: search, $options: 'i' } }
-            ];
-        }
-
-        const skip = (page - 1) * limit;
-
-        const students = await User.find(query)
-            .select('-password')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
-
-        const total = await User.countDocuments(query);
+        const result = await listStudentsIncludingExpired({
+            search,
+            status: statusFilter,
+            residence,
+            page,
+            limit
+        });
 
         res.json({
-            students,
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(total / limit),
-            total
+            students: result.students,
+            currentPage: result.page,
+            totalPages: result.pages,
+            total: result.total,
+            includesExpired: true
         });
     } catch (error) {
         console.error('Error in getAllStudents:', error);
