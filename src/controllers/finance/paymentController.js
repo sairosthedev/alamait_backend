@@ -883,9 +883,17 @@ exports.processPayment = async (req, res) => {
         if (studentIdForDebtor) {
             const Debtor = require('../../models/Debtor');
             const User = require('../../models/User');
-            
-            // Check if student has a debtor record
-            debtor = await Debtor.findOne({ user: studentIdForDebtor });
+            const idStr = String(studentIdForDebtor);
+
+            // Accept User id, Debtor id, or AR account code (Add Payment may send any of these)
+            debtor = await Debtor.findOne({ user: idStr });
+            if (!debtor && mongoose.Types.ObjectId.isValid(idStr)) {
+                debtor = await Debtor.findById(idStr);
+            }
+            if (!debtor) {
+                const code = idStr.startsWith('1100-') ? idStr : `1100-${idStr}`;
+                debtor = await Debtor.findOne({ accountCode: code });
+            }
             
             if (!debtor) {
                 console.log('🏗️ No debtor record found - creating one like admin system does...');
@@ -938,6 +946,8 @@ exports.processPayment = async (req, res) => {
                 console.log('✅ Found existing debtor record');
                 console.log(`   Debtor Code: ${debtor.debtorCode}`);
                 console.log(`   Account Code: ${debtor.accountCode}`);
+                console.log(`   Name: ${debtor.contactInfo?.name || 'n/a'}`);
+                console.log(`   User: ${debtor.user || 'n/a'}`);
             }
         }
 
@@ -967,18 +977,24 @@ exports.processPayment = async (req, res) => {
         }
         
         // 🆕 CRITICAL FIX: Ensure payment uses debtor's user ID if debtor exists
+        // Frontend Add Payment often sends debtorId (not User id)
         let finalUserId = studentIdForPayment;
-        if (debtor && debtor.user) {
-            finalUserId = debtor.user;
-            if (debtor.user.toString() !== studentIdForPayment.toString()) {
-                console.log(`⚠️  Debtor user ID (${debtor.user}) differs from requested student ID (${studentIdForPayment})`);
-                console.log(`   Using debtor's user ID to ensure consistency`);
+        if (debtor) {
+            if (debtor.user) {
+                finalUserId = debtor.user;
+                if (String(debtor.user) !== String(studentIdForPayment)) {
+                    console.log(`⚠️  Request student ID (${studentIdForPayment}) is debtor/other id; using debtor.user ${debtor.user}`);
+                }
+            } else {
+                finalUserId = debtor._id;
+                console.log(`⚠️  Debtor ${debtor.debtorCode} has no user — storing debtor _id on payment`);
             }
         }
         
         // Create payment record
         // Finance/Admin created payments should have status 'Confirmed', not 'Pending'
         const paymentStatus = (status && status !== 'Pending') ? status : 'Confirmed';
+        const resolvedStudentName = debtor?.contactInfo?.name || null;
         
         const payment = new Payment({
             paymentId: finalPaymentId,
@@ -993,12 +1009,16 @@ exports.processPayment = async (req, res) => {
             date: dateForPayment,
             method,
             status: paymentStatus,           // ← Always 'Confirmed' for finance/admin created payments
-            description,
+            description: description || (resolvedStudentName ? `Payment - ${resolvedStudentName}` : description),
             rentAmount: rentAmount || 0,
             adminFee: adminFee || 0,
             deposit: deposit || 0,
             levies: levies || 0,
-            createdBy: req.user._id
+            createdBy: req.user._id,
+            // Stamp AR codes immediately so allocation / list name resolution work even if User is missing
+            ...(debtor?.accountCode
+                ? { accountCode: debtor.accountCode, debtorAccountCode: debtor.accountCode }
+                : {})
         });
         
         try {
@@ -1056,10 +1076,34 @@ exports.processPayment = async (req, res) => {
         }
         
         // Send immediate success response; heavy processing continues in background
+        const paymentResponse = payment.toObject ? payment.toObject() : payment;
+        try {
+            // Bust payments list cache so Unknown names aren't sticky after create
+            if (typeof cacheService.deletePattern === 'function') {
+                cacheService.deletePattern('finance-payments-');
+            } else if (typeof cacheService.clear === 'function') {
+                cacheService.clear();
+            }
+        } catch (_) {
+            // non-critical
+        }
+        invalidateFinancialReports();
+
         res.status(201).json({
             success: true,
             message: "Payment created successfully with double-entry accounting (processing allocation in background)",
-            payment
+            payment: {
+                ...paymentResponse,
+                studentName: resolvedStudentName || undefined,
+                // Helpful for UIs that still key off student populate
+                studentInfo: resolvedStudentName
+                    ? {
+                        _id: finalUserId,
+                        firstName: String(resolvedStudentName).split(/\s+/)[0] || resolvedStudentName,
+                        lastName: String(resolvedStudentName).split(/\s+/).slice(1).join(' ') || ''
+                      }
+                    : undefined
+            }
         });
         
         // Run Smart FIFO allocation, transaction verification, and emails in the background (non-blocking)
