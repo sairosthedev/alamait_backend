@@ -9,6 +9,40 @@ const ALLOCATION_DEBUG = false;
 
 class EnhancedPaymentAllocationService {
   /**
+   * Resolve display name: paymentData → User → Debtor.contactInfo.name
+   */
+  static async resolveStudentDisplayName(userId, paymentData = {}, debtorDoc = null) {
+    if (paymentData?.studentName && String(paymentData.studentName).trim()) {
+      return String(paymentData.studentName).trim();
+    }
+    if (debtorDoc?.contactInfo?.name) {
+      return String(debtorDoc.contactInfo.name).trim();
+    }
+    try {
+      const User = require('../models/User');
+      const student = await User.findById(userId).select('firstName lastName').lean();
+      if (student) {
+        const name = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+        if (name) return name;
+      }
+    } catch (_) {
+      // ignore
+    }
+    try {
+      const Debtor = require('../models/Debtor');
+      const debtor =
+        (await Debtor.findOne({ user: userId }).select('contactInfo.name').lean()) ||
+        (await Debtor.findById(userId).select('contactInfo.name').lean());
+      if (debtor?.contactInfo?.name) {
+        return String(debtor.contactInfo.name).trim();
+      }
+    } catch (_) {
+      // ignore
+    }
+    return 'Student';
+  }
+
+  /**
    * Order months for component allocation: true arrears (before paymentMonth) first,
    * then the paymentMonth itself. Months after paymentMonth are excluded from FIFO
    * (remainder becomes advance for the intended payment month).
@@ -199,7 +233,7 @@ class EnhancedPaymentAllocationService {
         const debtorIdFromCode = accountCode.replace('1100-', '');
         
         if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
-          debtorDoc = await Debtor.findById(debtorIdFromCode).select('accountCode _id user debtorCode application').lean();
+          debtorDoc = await Debtor.findById(debtorIdFromCode).select('accountCode _id user debtorCode application contactInfo startDate').lean();
           if (debtorDoc) {
             actualUserId = debtorDoc.user?.toString() || userId;
             finalAccountCode = debtorDoc.accountCode || accountCode; // Use debtor's account code if different
@@ -220,7 +254,7 @@ class EnhancedPaymentAllocationService {
       const mongoose = require('mongoose');
       
       if (mongoose.Types.ObjectId.isValid(userId)) {
-        debtorDoc = await Debtor.findById(userId).select('accountCode _id user debtorCode application').lean();
+        debtorDoc = await Debtor.findById(userId).select('accountCode _id user debtorCode application contactInfo startDate').lean();
         if (debtorDoc) {
           actualUserId = debtorDoc.user?.toString() || userId;
             if (!finalAccountCode) {
@@ -233,15 +267,15 @@ class EnhancedPaymentAllocationService {
         const application = await Application.findById(userId).select('student').lean();
         if (application && application.student) {
           actualUserId = application.student.toString();
-          debtorDoc = await Debtor.findOne({ user: actualUserId }).select('accountCode _id user debtorCode application').lean();
+          debtorDoc = await Debtor.findOne({ user: actualUserId }).select('accountCode _id user debtorCode application contactInfo startDate').lean();
           if (!debtorDoc) {
-            debtorDoc = await Debtor.findOne({ application: userId }).select('accountCode _id user debtorCode application').lean();
+            debtorDoc = await Debtor.findOne({ application: userId }).select('accountCode _id user debtorCode application contactInfo startDate').lean();
           }
             if (debtorDoc && !finalAccountCode) {
               finalAccountCode = debtorDoc.accountCode;
             }
         } else {
-          debtorDoc = await Debtor.findOne({ user: userId }).select('accountCode _id user debtorCode application').lean();
+          debtorDoc = await Debtor.findOne({ user: userId }).select('accountCode _id user debtorCode application contactInfo startDate').lean();
             if (debtorDoc && !finalAccountCode) {
               finalAccountCode = debtorDoc.accountCode;
             }
@@ -253,6 +287,9 @@ class EnhancedPaymentAllocationService {
         actualUserId = debtorDoc.user.toString();
         if (!finalAccountCode) {
           finalAccountCode = debtorDoc.accountCode;
+        }
+        if (!paymentData.studentName && debtorDoc.contactInfo?.name) {
+          paymentData.studentName = debtorDoc.contactInfo.name;
         }
         console.log(`✅ Using debtor: ${debtorDoc.debtorCode}, Account Code: ${finalAccountCode}`);
       } else {
@@ -268,11 +305,25 @@ class EnhancedPaymentAllocationService {
       const paymentMonthKey = paymentData.paymentMonth || `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
       console.log(`📅 Payment month: ${paymentMonthKey}`);
       console.log(`📅 Payment date: ${paymentDate.toISOString().split('T')[0]}`);
+
+      // Payment month before lease start → no rent is due yet; whole amount is advance
+      let forceAdvanceBeforeLease = false;
+      if (debtorDoc?.startDate && paymentMonthKey) {
+        const sd = new Date(debtorDoc.startDate);
+        const leaseStartMonth = `${sd.getFullYear()}-${String(sd.getMonth() + 1).padStart(2, '0')}`;
+        if (paymentMonthKey < leaseStartMonth) {
+          forceAdvanceBeforeLease = true;
+          outstandingBalances = [];
+          console.log(
+            `⚠️ Payment month ${paymentMonthKey} is before lease start ${leaseStartMonth} — treating entire payment as advance`
+          );
+        }
+      }
       
       // 🆕 CRITICAL: Check if payment date is before payment month (advance payment detection)
       // Compare YYYY-MM keys to avoid timezone edge cases (e.g. Apr 6 local vs Apr 1 UTC).
-      let isAdvancePaymentByDate = false;
-      if (paymentData.paymentMonth) {
+      let isAdvancePaymentByDate = forceAdvanceBeforeLease;
+      if (!isAdvancePaymentByDate && paymentData.paymentMonth) {
         const paymentDateMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
 
         if (paymentDateMonthKey < paymentData.paymentMonth) {
@@ -2540,16 +2591,8 @@ class EnhancedPaymentAllocationService {
         return existingByStudentAmountDate;
       }
       
-      // Get student name for AR account
-      let studentName = 'Student';
-      try {
-        const student = await User.findById(userId).select('firstName lastName').lean();
-        if (student) {
-          studentName = `${student.firstName} ${student.lastName}`;
-        }
-      } catch (error) {
-        console.log('⚠️ Could not fetch student details, using default name');
-      }
+      // Get student name for AR account (User may be missing — use Debtor)
+      let studentName = await this.resolveStudentDisplayName(userId, paymentData);
       
       // CRITICAL: Refine userIdStr now that we may know more (Application/payment lookups below)
       if (userId && typeof userId === 'object') {
@@ -2576,26 +2619,37 @@ class EnhancedPaymentAllocationService {
         }
       }
       
-      // Verify this is a student ID
-      const student = await User.findById(userIdStr);
-      if (!student) {
-        // If userId doesn't match a student, try to get student from payment
+      // 🆕 CRITICAL FIX: ALWAYS use debtor's account code (not payload or raw userId)
+      // Accruals use debtor account codes (1100-{debtorId}), so payments MUST match.
+      // Get Debtor first to use correct AR code (use userIdStr which is the corrected student ID).
+      const Debtor = require('../models/Debtor');
+      let debtor = await Debtor.findOne({ user: userIdStr }).select('accountCode _id debtorCode contactInfo').lean();
+      if (!debtor && mongoose.Types.ObjectId.isValid(userIdStr)) {
+        debtor = await Debtor.findById(userIdStr).select('accountCode _id debtorCode contactInfo user').lean();
+        if (debtor?.user) {
+          userIdStr = debtor.user.toString();
+        }
+      }
+
+      // User doc is optional when Debtor exists (archived tenants)
+      const student = await User.findById(userIdStr).select('_id').lean();
+      if (!student && !debtor && !(knownArCode && String(knownArCode).startsWith('1100-'))) {
         const Payment = require('../models/Payment');
         const payment = await Payment.findById(paymentId);
         if (payment && payment.student) {
           const correctStudentId = payment.student.toString ? payment.student.toString() : String(payment.student);
           console.log(`⚠️  userId ${userIdStr} is not a valid student ID, using student from payment: ${correctStudentId}`);
           userIdStr = correctStudentId;
-        } else {
-          throw new Error(`Invalid userId: ${userIdStr} - not a valid student ID and cannot find student from payment ${paymentId}`);
+          debtor = await Debtor.findOne({ user: userIdStr }).select('accountCode _id debtorCode contactInfo').lean();
+        }
+        if (!debtor && !(knownArCode && String(knownArCode).startsWith('1100-'))) {
+          throw new Error(`Invalid userId: ${userIdStr} - no User or Debtor found for payment ${paymentId}`);
         }
       }
-      
-      // 🆕 CRITICAL FIX: ALWAYS use debtor's account code (not payload or raw userId)
-      // Accruals use debtor account codes (1100-{debtorId}), so payments MUST match.
-      // Get Debtor first to use correct AR code (use userIdStr which is the corrected student ID).
-      const Debtor = require('../models/Debtor');
-      const debtor = await Debtor.findOne({ user: userIdStr }).select('accountCode _id debtorCode').lean();
+
+      if (debtor?.contactInfo?.name && (!studentName || studentName === 'Student')) {
+        studentName = debtor.contactInfo.name;
+      }
 
       let studentARCode = null;
       let debtorId = null;
@@ -2718,7 +2772,9 @@ class EnhancedPaymentAllocationService {
       const advanceTransaction = new TransactionEntry({
         transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
         date: paymentData.date ? new Date(paymentData.date) : new Date(),
-        description: isDeposit ? 'Deposit received (liability)' : `Advance ${paymentType} payment for future periods`,
+        description: isDeposit
+          ? `Deposit received from ${studentName}`
+          : `Advance ${paymentType} payment from ${studentName} for future periods`,
         reference: paymentId,
         entries: [
           // Entry 1: Debit Cash (money received)
@@ -2769,6 +2825,7 @@ class EnhancedPaymentAllocationService {
         metadata: {
           paymentId: paymentId,
           studentId: userIdStr, // Use verified student ID (for reference)
+          studentName: studentName,
           debtorId: debtor?._id?.toString() || null, // CRITICAL: Store Debtor ID (stable, persists after User deletion)
           amount: amount,
           paymentType: paymentType,
@@ -2967,18 +3024,9 @@ class EnhancedPaymentAllocationService {
         }
       }
 
-      // Get student name for AR account
+      // Get student name for AR account (User may be missing — use Debtor)
       const Account = require('../models/Account');
-      const User = require('../models/User');
-      let studentName = paymentData.studentName || 'Student';
-      try {
-        const student = await User.findById(userId).select('firstName lastName').lean();
-        if (student) {
-          studentName = `${student.firstName} ${student.lastName}`;
-        }
-      } catch (error) {
-        console.log('⚠️ Could not fetch student details, using default name');
-      }
+      let studentName = await this.resolveStudentDisplayName(userId, paymentData);
 
       // CRITICAL: Ensure userId is converted to string to prevent wrong AR codes
       let userIdStr = userId;
@@ -2999,6 +3047,12 @@ class EnhancedPaymentAllocationService {
       if (paymentData.debtorAccountCode && paymentData.debtorAccountCode.startsWith('1100-')) {
         studentARCode = paymentData.debtorAccountCode;
         debtorId = paymentData.debtorAccountCode.slice('1100-'.length);
+        if (mongoose.Types.ObjectId.isValid(debtorId)) {
+          debtor = await Debtor.findById(debtorId).select('accountCode _id debtorCode contactInfo user').lean();
+          if (debtor?.contactInfo?.name && (!studentName || studentName === 'Student')) {
+            studentName = debtor.contactInfo.name;
+          }
+        }
         console.log(`✅ Using debtorAccountCode from payment data for allocation: ${studentARCode} (derived debtorId: ${debtorId})`);
       } else {
         // No explicit debtorAccountCode – fall back to legacy resolution using userId
@@ -3017,23 +3071,24 @@ class EnhancedPaymentAllocationService {
           }
         }
         
-        // Verify this is a student ID
-        const student = await User.findById(userIdStr);
-        if (!student) {
-          // If userId doesn't match a student, try to get student from payment
+        // CRITICAL: Get Debtor to use Debtor ID for AR code (persists after User deletion)
+        debtor = await Debtor.findOne({ user: userIdStr }).lean();
+        if (!debtor && mongoose.Types.ObjectId.isValid(userIdStr)) {
+          debtor = await Debtor.findById(userIdStr).lean();
+          if (debtor?.user) {
+            userIdStr = debtor.user.toString();
+          }
+        }
+        if (!debtor) {
+          // Last chance: payment.student may still map to a debtor
           const Payment = require('../models/Payment');
           const payment = await Payment.findById(paymentId);
           if (payment && payment.student) {
             const correctStudentId = payment.student.toString ? payment.student.toString() : String(payment.student);
-            console.log(`⚠️  userId ${userIdStr} is not a valid student ID, using student from payment: ${correctStudentId}`);
             userIdStr = correctStudentId;
-          } else {
-            throw new Error(`Invalid userId: ${userIdStr} - not a valid student ID and cannot find student from payment ${paymentId}`);
+            debtor = await Debtor.findOne({ user: userIdStr }).lean();
           }
         }
-        
-        // CRITICAL: Get Debtor to use Debtor ID for AR code (persists after User deletion)
-        debtor = await Debtor.findOne({ user: userIdStr }).lean();
         if (!debtor) {
           throw new Error(`Debtor not found for user: ${userIdStr}. Please create debtor account first.`);
         }
@@ -3041,6 +3096,9 @@ class EnhancedPaymentAllocationService {
         // Use Debtor's accountCode (uses Debtor ID, stable and persistent)
         studentARCode = debtor.accountCode || `1100-${debtor._id.toString()}`;
         debtorId = debtor._id.toString();
+        if (debtor.contactInfo?.name && (!studentName || studentName === 'Student')) {
+          studentName = debtor.contactInfo.name;
+        }
         
         console.log(`✅ Using Debtor ID AR code for allocation: ${studentARCode} (Debtor: ${debtor.debtorCode})`);
       }

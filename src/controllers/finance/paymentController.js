@@ -1,4 +1,5 @@
 const { validationResult } = require('express-validator');
+const mongoose = require('mongoose');
 const Payment = require('../../models/Payment');
 const User = require('../../models/User');
 const { Residence } = require('../../models/Residence');
@@ -124,9 +125,45 @@ exports.getStudentPayments = async (req, res) => {
             return { payments: paymentsResult, total: totalCount };
         });
 
+        // Resolve names from Debtor when User populate is missing (archived tenants)
+        const missingStudentIds = [
+            ...new Set(
+                payments
+                    .filter((p) => !p.student || (!p.student.firstName && !p.student.lastName))
+                    .map((p) => String(p.student?._id || p.student || p.user || ''))
+                    .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+            )
+        ];
+        const debtorNameByUserId = new Map();
+        if (missingStudentIds.length > 0) {
+            const objectIds = missingStudentIds.map((id) => new mongoose.Types.ObjectId(id));
+            const debtors = await Debtor.find({
+                $or: [{ user: { $in: objectIds } }, { _id: { $in: objectIds } }]
+            })
+                .select('user contactInfo.name contactInfo.email')
+                .lean();
+            for (const d of debtors) {
+                const name = d.contactInfo?.name;
+                if (!name) continue;
+                const parts = String(name).trim().split(/\s+/);
+                const info = {
+                    _id: d.user || d._id,
+                    firstName: parts[0] || 'Unknown',
+                    lastName: parts.slice(1).join(' ') || '',
+                    email: d.contactInfo?.email || null,
+                    role: 'student'
+                };
+                if (d.user) debtorNameByUserId.set(String(d.user), info);
+                debtorNameByUserId.set(String(d._id), info);
+            }
+        }
+
         // Transform payments data (use populated student; avoid N+1 lookups)
         const formattedPayments = payments.map(payment => {
-            const studentInfo = payment.student || null;
+            const rawStudentId = String(payment.student?._id || payment.student || payment.user || '');
+            let studentInfo = payment.student?.firstName || payment.student?.lastName
+                ? payment.student
+                : debtorNameByUserId.get(rawStudentId) || null;
             let derivedPaymentType = 'Other';
 
             if (payment.rentAmount > 0 && payment.adminFee === 0 && payment.deposit === 0) {
@@ -149,9 +186,13 @@ exports.getStudentPayments = async (req, res) => {
                 ? `${payment.createdBy.firstName} ${payment.createdBy.lastName}`
                 : 'System';
 
+            const displayName = studentInfo
+                ? `${studentInfo.firstName || ''} ${studentInfo.lastName || ''}`.trim()
+                : '';
+
             return {
                 id: payment.paymentId,
-                student: studentInfo ? `${studentInfo.firstName} ${studentInfo.lastName}` : 'Unknown',
+                student: displayName || 'Unknown',
                 admin,
                 residence: payment.residence ? payment.residence.name : 'Unknown',
                 room: payment.room || 'Not Assigned',
@@ -167,7 +208,7 @@ exports.getStudentPayments = async (req, res) => {
                 proof: payment.proofOfPayment?.fileUrl || null,
                 method: payment.method || '',
                 description: payment.description || '',
-                studentId: studentInfo ? studentInfo._id : null,
+                studentId: studentInfo?._id || payment.student?._id || payment.student || payment.user || null,
                 residenceId: payment.residence ? payment.residence._id : null,
                 applicationStatus: payment.applicationStatus || null,
                 clarificationRequests: payment.clarificationRequests || [],
@@ -599,6 +640,24 @@ const findStudentById = async (studentId) => {
                     email: application.email
                 }, 
                 source: 'Application' 
+            };
+        }
+
+        // Resolve via Debtor (many tenants have no User doc)
+        const debtor = await Debtor.findOne({
+            $or: [{ user: studentId }, { _id: studentId }]
+        }).select('user contactInfo').lean();
+        if (debtor?.contactInfo?.name) {
+            const parts = String(debtor.contactInfo.name).trim().split(/\s+/);
+            return {
+                student: {
+                    _id: debtor.user || studentId,
+                    firstName: parts[0] || 'Unknown',
+                    lastName: parts.slice(1).join(' ') || '',
+                    email: debtor.contactInfo.email || null,
+                    role: 'student'
+                },
+                source: 'Debtor'
             };
         }
 
@@ -1054,7 +1113,9 @@ exports.processPayment = async (req, res) => {
                 method: payment.method,
                 date: payment.date,
                 // 🆕 Pass through AR account so advance creation can safely use 1100-{debtorId}
-                debtorAccountCode: payment.debtorAccountCode || payment.accountCode
+                debtorAccountCode: payment.debtorAccountCode || payment.accountCode,
+                // Prefer debtor display name (User may be missing for archived tenants)
+                studentName: debtor?.contactInfo?.name || undefined
             };
             
             console.log('📝 Allocation data:', allocationData);

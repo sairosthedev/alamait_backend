@@ -264,6 +264,35 @@ async function getStudentInfo(studentId) {
             };
         }
 
+        // Many tenants exist only as Debtors (User archived / never created).
+        // Resolve display name from Debtor by user id or debtor _id.
+        const Debtor = require('../models/Debtor');
+        let debtor = await Debtor.findOne({ user: studentId })
+            .select('contactInfo user residence roomNumber')
+            .lean();
+        if (!debtor) {
+            debtor = await Debtor.findById(studentId)
+                .select('contactInfo user residence roomNumber')
+                .lean();
+        }
+        if (debtor?.contactInfo?.name) {
+            const parts = String(debtor.contactInfo.name).trim().split(/\s+/);
+            return {
+                _id: debtor.user || studentId,
+                firstName: parts[0] || 'Unknown',
+                lastName: parts.slice(1).join(' ') || '',
+                email: debtor.contactInfo.email || null,
+                phone: debtor.contactInfo.phone || null,
+                role: 'student',
+                status: 'active',
+                isExpired: false,
+                roomValidUntil: null,
+                currentRoom: debtor.roomNumber || null,
+                residence: debtor.residence || null,
+                source: 'Debtor'
+            };
+        }
+
         return null;
     } catch (error) {
         console.error('Error getting student info:', error);
