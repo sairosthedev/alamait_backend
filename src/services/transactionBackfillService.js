@@ -468,6 +468,15 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             // Skip creating monthly accrual for lease start month
             if (month === leaseStartMonth && year === leaseStartYear) {
                 console.log(`⏭️ Skipping monthly accrual for lease start month ${monthKey} - handled by lease start process`);
+                // Must advance the iterator before continue — otherwise this loop never exits
+                currentMonthIter.setMonth(currentMonthIter.getMonth() + 1);
+                continue;
+            }
+
+            // Apr→May = 1 billing month: do not charge May as a second month
+            if (!RentalAccrualService.shouldAccrueMonthForLease(startDate, endDate, month, year)) {
+                console.log(`⏭️ Skipping monthly accrual for ${monthKey} - outside ${RentalAccrualService.countBillingMonths(startDate, endDate)}-month billing window`);
+                currentMonthIter.setMonth(currentMonthIter.getMonth() + 1);
                 continue;
             }
             

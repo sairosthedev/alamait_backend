@@ -24,6 +24,33 @@ const accrualLog = (...args) => {
 class RentalAccrualService {
     static END_MONTH_CUTOFF_DAY = 5; // if lease ends on/before this day, do NOT accrue that month
 
+    /**
+     * Billing months for a lease = calendar month difference (not inclusive calendar months).
+     * Examples:
+     *   4 Apr → 30 May  → 1 month
+     *   30 Apr → 30 May → 1 month
+     *   1 Aug → 2 Feb   → 6 months
+     *   1 Apr → 30 Apr  → 1 month (same calendar month)
+     */
+    static countBillingMonths(leaseStart, leaseEnd) {
+        if (!(leaseStart instanceof Date) || !(leaseEnd instanceof Date)) return 1;
+        if (Number.isNaN(leaseStart.getTime()) || Number.isNaN(leaseEnd.getTime())) return 1;
+        const diff =
+            (leaseEnd.getFullYear() - leaseStart.getFullYear()) * 12 +
+            (leaseEnd.getMonth() - leaseStart.getMonth());
+        return Math.max(1, diff);
+    }
+
+    /**
+     * 0-based index of (month/year) relative to lease start month.
+     * Lease start month = 0; next month = 1; etc.
+     */
+    static monthIndexFromLeaseStart(leaseStart, month, year) {
+        const startMonth = leaseStart.getMonth() + 1;
+        const startYear = leaseStart.getFullYear();
+        return (year - startYear) * 12 + (month - startMonth);
+    }
+
     static shouldAccrueMonthForLease(leaseStart, leaseEnd, month, year) {
         if (!(leaseStart instanceof Date) || !(leaseEnd instanceof Date)) return true;
         if (Number.isNaN(leaseStart.getTime()) || Number.isNaN(leaseEnd.getTime())) return true;
@@ -35,6 +62,16 @@ class RentalAccrualService {
         if (year === endYear && month === endMonth && endDay <= RentalAccrualService.END_MONTH_CUTOFF_DAY) {
             return false;
         }
+
+        // Only charge countBillingMonths months from start (start month is lease_start / index 0).
+        // So Apr→May (1 billing month) accrues only April — not May as a second month.
+        const monthIndex = RentalAccrualService.monthIndexFromLeaseStart(leaseStart, month, year);
+        if (monthIndex < 0) return false;
+        const billingMonths = RentalAccrualService.countBillingMonths(leaseStart, leaseEnd);
+        if (monthIndex >= billingMonths) {
+            return false;
+        }
+
         return true;
     }
     /**
@@ -1136,6 +1173,16 @@ class RentalAccrualService {
                         // Stop at lease end boundary (do not create accruals after the lease ends)
                         if (year > leaseEndYearForBackfill || (year === leaseEndYearForBackfill && month > leaseEndMonthForBackfill)) {
                             break;
+                        }
+                        // Apr→May = 1 billing month: only lease-start month is charged
+                        if (!this.shouldAccrueMonthForLease(leaseStartDateForBackfill, leaseEndDateForBackfill, month, year)) {
+                            console.log(`   ⏭️ Skipping ${month}/${year}: outside ${this.countBillingMonths(leaseStartDateForBackfill, leaseEndDateForBackfill)}-month billing window`);
+                            month++;
+                            if (month > 12) {
+                                month = 1;
+                                year++;
+                            }
+                            continue;
                         }
                         const result = await this.createStudentRentAccrual(application, month, year);
                         if (result.success) {

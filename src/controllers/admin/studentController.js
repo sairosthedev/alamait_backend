@@ -25,6 +25,300 @@ const StudentDeletionService = require('../../services/studentDeletionService');
 const { getStudentInfo } = require('../../utils/studentUtils');
 const { findOverlappingApprovedApplication, isLeasePeriodFullyEnded } = require('../../utils/leaseOverlapUtils');
 
+/**
+ * Normalize one tenant/student upload row so CSV + Excel headers both work.
+ * Accepts firstName/firstname/"first name", roomNumber/roomnumber, etc.
+ */
+function coerceRoomNumber(value) {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value === 'object') {
+        // Frontend sometimes sends room: { type, price } without a room number
+        const nested =
+            value.roomNumber ||
+            value.roomnumber ||
+            value.number ||
+            value.code ||
+            value.name ||
+            value.room;
+        if (nested && typeof nested !== 'object') {
+            const s = String(nested).trim();
+            if (s && s !== '[object Object]') return s;
+        }
+        return undefined;
+    }
+    const s = String(value).trim();
+    if (!s || s === '[object Object]') return undefined;
+    return s;
+}
+
+function looksLikeRoomCode(value) {
+    if (!value || typeof value === 'object') return false;
+    const s = String(value).trim();
+    // e.g. BHM1, BHM2, A101, Unit6, STK12
+    return /^[A-Za-z]{1,8}\s?\d{1,4}[A-Za-z]?$/i.test(s);
+}
+
+function findRoomNumberInRow(raw = {}) {
+    const direct = coerceRoomNumber(
+        raw.roomNumber ??
+            raw.roomnumber ??
+            raw.room_number ??
+            raw.roomNo ??
+            raw.roomno ??
+            raw.unit ??
+            raw.Room ??
+            raw.room
+    );
+    if (direct) return direct;
+
+    const skipKeys = new Set([
+        'email', 'firstname', 'lastname', 'first name', 'last name', 'name', 'fullname',
+        'phone', 'status', 'startdate', 'enddate', 'lease start', 'lease end', 'start', 'end',
+        'monthlyrent', 'rent', 'price', 'type', 'emergencycontact', 'emergency',
+        'residenceid', 'residence', '_emailgenerated'
+    ]);
+
+    for (const [key, value] of Object.entries(raw)) {
+        const keyNorm = String(key).toLowerCase().trim();
+        if (skipKeys.has(keyNorm)) continue;
+        // Column header wrongly set to a room code (e.g. header "BHM1", values BHM1/BHM2)
+        if (looksLikeRoomCode(key) && coerceRoomNumber(value)) {
+            return coerceRoomNumber(value);
+        }
+        if (looksLikeRoomCode(value)) {
+            return String(value).trim();
+        }
+    }
+    return undefined;
+}
+
+function normalizeTenantUploadRow(raw = {}) {
+    if (!raw || typeof raw !== 'object') return null;
+
+    const pick = (...keys) => {
+        for (const key of keys) {
+            if (raw[key] !== undefined && raw[key] !== null && String(raw[key]).trim() !== '') {
+                return raw[key];
+            }
+        }
+        // case-insensitive / spaced header fallback
+        const entries = Object.entries(raw);
+        for (const want of keys) {
+            const wantNorm = String(want).toLowerCase().replace(/[^a-z0-9]/g, '');
+            for (const [k, v] of entries) {
+                if (v === undefined || v === null || String(v).trim() === '') continue;
+                if (typeof v === 'object') continue; // never treat objects as scalar field values here
+                const kNorm = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+                if (kNorm === wantNorm) return v;
+            }
+        }
+        return undefined;
+    };
+
+    const toDateStr = (value) => {
+        if (value === undefined || value === null || value === '') return undefined;
+        if (value instanceof Date && !Number.isNaN(value.getTime())) {
+            return value.toISOString().split('T')[0];
+        }
+        const stringValue = String(value).trim();
+        if (stringValue.includes('/')) {
+            const parts = stringValue.split('/');
+            if (parts.length === 3) {
+                // Prefer DD/MM/YYYY (Zimbabwe); if first part > 12 treat as day-first already handled;
+                // also accept MM/DD/YYYY when month <= 12
+                const a = parts[0].padStart(2, '0');
+                const b = parts[1].padStart(2, '0');
+                const year = parts[2];
+                // If first segment > 12, must be DD/MM/YYYY
+                if (parseInt(parts[0], 10) > 12) {
+                    return `${year}-${b}-${a}`;
+                }
+                // Default MM/DD/YYYY for backward compatibility with existing Excel path
+                return `${year}-${a}-${b}`;
+            }
+        }
+        return stringValue;
+    };
+
+    let firstName = pick('firstName', 'firstname', 'first name', 'givenname', 'given name');
+    let lastName = pick('lastName', 'lastname', 'last name', 'surname', 'familyname', 'family name');
+    const fullName = pick('name', 'fullName', 'fullname', 'student name', 'tenant', 'customer');
+
+    if ((!firstName || !lastName) && fullName) {
+        const parts = String(fullName).trim().split(/\s+/).filter(Boolean);
+        if (!firstName && parts.length) firstName = parts[0];
+        if (!lastName && parts.length > 1) lastName = parts.slice(1).join(' ');
+        else if (!lastName) lastName = firstName || 'Tenant';
+    }
+
+    const email = pick('email', 'emailaddress', 'e-mail', 'mail');
+    const phone = pick('phone', 'phonenumber', 'mobile', 'cellphone', 'cell');
+    const roomNumber = findRoomNumberInRow(raw);
+    let monthlyRent = pick('monthlyRent', 'monthlyrent', 'rent', 'roomprice');
+    // Frontend sends room: { type, price } for pricing — prefer that for rent
+    if (raw.room && typeof raw.room === 'object' && raw.room.price != null && raw.room.price !== '') {
+        monthlyRent = raw.room.price;
+    }
+    const status = pick('status');
+    const startDate = toDateStr(pick('startDate', 'startdate', 'lease start', 'leasestart', 'start'));
+    const endDate = toDateStr(pick('endDate', 'enddate', 'lease end', 'leaseend', 'end'));
+    const emergencyContact = pick('emergencyContact', 'emergencycontact', 'emergency');
+
+    if (!email && !firstName && !lastName) return null;
+
+    return {
+        ...raw,
+        email: email ? String(email).trim().toLowerCase() : email,
+        firstName: firstName ? String(firstName).trim() : firstName,
+        lastName: lastName ? String(lastName).trim() : lastName,
+        // Keep lowercase aliases used by Excel processing path
+        firstname: firstName ? String(firstName).trim() : firstName,
+        lastname: lastName ? String(lastName).trim() : lastName,
+        phone: phone != null ? String(phone).trim() : phone,
+        roomNumber: roomNumber || undefined,
+        roomnumber: roomNumber || undefined,
+        // Keep structured room for price/type — never treat as roomNumber
+        room: raw.room && typeof raw.room === 'object' ? raw.room : roomNumber || raw.room,
+        monthlyRent: monthlyRent != null && monthlyRent !== '' ? Number(monthlyRent) : monthlyRent,
+        monthlyrent: monthlyRent != null && monthlyRent !== '' ? Number(monthlyRent) : monthlyRent,
+        status: status != null ? String(status).trim() : status,
+        startDate,
+        endDate,
+        emergencyContact
+    };
+}
+
+/** Resolve rent: room.price (UI room type) → monthlyRent → matched residence room → defaults */
+function resolveUploadMonthlyRent(row = {}, defaultMonthlyRent, matchedRoom = null) {
+    // Frontend sends room: { type, price } — that price is the intended rent
+    if (row.room && typeof row.room === 'object') {
+        const fromRoomObj = parseFloat(row.room.price ?? row.room.monthlyRent ?? row.room.rent);
+        if (!Number.isNaN(fromRoomObj) && fromRoomObj > 0) return fromRoomObj;
+    }
+
+    const fromRow = parseFloat(row.monthlyRent ?? row.monthlyrent ?? row.monthly_rent);
+    if (!Number.isNaN(fromRow) && fromRow > 0) return fromRow;
+
+    if (matchedRoom && matchedRoom.price != null) {
+        const fromMatched = parseFloat(matchedRoom.price);
+        if (!Number.isNaN(fromMatched) && fromMatched > 0) return fromMatched;
+    }
+
+    const fromDefault = parseFloat(defaultMonthlyRent);
+    if (!Number.isNaN(fromDefault) && fromDefault > 0) return fromDefault;
+
+    return 150;
+}
+
+/**
+ * Shared / multi-bed rooms are allowed on CSV upload.
+ * Uses date-overlap occupancy + in-batch reservations (so 3 students → BHM2 in one file works).
+ */
+async function checkUploadRoomCapacity({
+    residenceId,
+    roomNumber,
+    roomDoc,
+    startDate,
+    endDate,
+    batchRoomCounts
+}) {
+    if (!roomNumber || !roomDoc) return { ok: true };
+
+    // Historical / already-ended leases: don't block on current snapshot occupancy
+    if (endDate && !Number.isNaN(new Date(endDate).getTime()) && isLeasePeriodFullyEnded(endDate)) {
+        return { ok: true, skipped: true };
+    }
+
+    const capacity = Number(roomDoc.capacity) || 1;
+    const roomKey = String(roomNumber).trim().toLowerCase();
+    const reservedInBatch = batchRoomCounts?.get(roomKey) || 0;
+
+    let currentOccupancy = Number(roomDoc.currentOccupancy) || 0;
+    try {
+        const Booking = require('../../models/Booking');
+        const availability = await Booking.checkAvailability(
+            residenceId,
+            roomDoc.roomNumber || roomNumber,
+            startDate,
+            endDate
+        );
+        if (typeof availability.currentOccupancy === 'number') {
+            currentOccupancy = availability.currentOccupancy;
+        }
+        // Prefer booking-based capacity when provided
+        if (availability.capacity) {
+            // keep local capacity from roomDoc unless booking returned something
+        }
+        if (availability.available === false && reservedInBatch === 0) {
+            // Fall through to projected check below for clearer batch-aware message
+        }
+    } catch (err) {
+        console.log(`⚠️ Booking availability check failed, using snapshot occupancy: ${err.message}`);
+    }
+
+    const projected = currentOccupancy + reservedInBatch;
+    if (projected >= capacity) {
+        return {
+            ok: false,
+            error: `Room ${roomNumber} is at full capacity (${projected}/${capacity}) for these dates. Shared rooms are allowed up to capacity.`
+        };
+    }
+
+    return { ok: true, roomKey, capacity, projected };
+}
+
+function reserveUploadRoomSlot(batchRoomCounts, roomNumber) {
+    if (!batchRoomCounts || !roomNumber) return;
+    const roomKey = String(roomNumber).trim().toLowerCase();
+    batchRoomCounts.set(roomKey, (batchRoomCounts.get(roomKey) || 0) + 1);
+}
+
+function parseCsvTextToRows(csvText) {
+    const text = String(csvText || '').replace(/^\uFEFF/, '').trim();
+    if (!text) return [];
+
+    const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '');
+    if (lines.length < 2) return [];
+
+    const splitCsvLine = (line) => {
+        const cells = [];
+        let cur = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') {
+                if (inQuotes && line[i + 1] === '"') {
+                    cur += '"';
+                    i++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+            } else if (ch === ',' && !inQuotes) {
+                cells.push(cur.trim());
+                cur = '';
+            } else {
+                cur += ch;
+            }
+        }
+        cells.push(cur.trim());
+        return cells;
+    };
+
+    const headers = splitCsvLine(lines[0]).map((h) => h.toLowerCase().trim());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+        const cells = splitCsvLine(lines[i]);
+        if (!cells.some((c) => c)) continue;
+        const raw = {};
+        headers.forEach((h, idx) => {
+            if (h) raw[h] = cells[idx] ?? '';
+        });
+        const normalized = normalizeTenantUploadRow(raw);
+        if (normalized) rows.push(normalized);
+    }
+    return rows;
+}
+
 // Helper function to safely format dates
 const safeDateFormat = (date) => {
     if (!date) return null;
@@ -2004,6 +2298,12 @@ exports.uploadCsvStudents = async (req, res) => {
                 message: 'CSV data is required'
             });
         }
+
+        // Accept raw CSV string (file contents pasted / sent as text)
+        if (typeof csvData === 'string') {
+            console.log('🔄 Parsing csvData string into rows');
+            csvData = parseCsvTextToRows(csvData);
+        }
         
         // Convert single object to array if needed
         if (!Array.isArray(csvData)) {
@@ -2013,14 +2313,13 @@ exports.uploadCsvStudents = async (req, res) => {
         
         // FIX: Handle case where csvData might be an array-like object instead of true array
         if (Array.isArray(csvData) && csvData.length > 0) {
-            // Ensure each item is a proper object
+            // Ensure each item is a proper object + normalize header variants
             csvData = csvData.map((item, index) => {
                 if (item && typeof item === 'object') {
-                    return item;
-                } else {
-                    console.log(`⚠️ Item ${index} is not an object:`, item);
-                    return null;
+                    return normalizeTenantUploadRow(item);
                 }
+                console.log(`⚠️ Item ${index} is not an object:`, item);
+                return null;
             }).filter(item => item !== null);
         }
 
@@ -2098,6 +2397,9 @@ exports.uploadCsvStudents = async (req, res) => {
         
         console.log(`🔄 Processing ${nonFailingStudents.length} students synchronously...`);
         
+        // Allow multiple students in the same room in one upload (up to room.capacity)
+        const batchRoomCounts = new Map();
+
         // Process each student synchronously
         for (let i = 0; i < nonFailingStudents.length; i++) {
             const row = nonFailingStudents[i];
@@ -2122,45 +2424,11 @@ exports.uploadCsvStudents = async (req, res) => {
                 if (existingUser) {
                     console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
-                
-                // Validate room if provided
-                let roomNumber = row.roomNumber || defaultRoomNumber;
-                let room = null;
-                
-                if (roomNumber) {
-                    room = residence.rooms.find(r => r.roomNumber === roomNumber);
-                    if (!room) {
-                        results.failed.push({
-                            row: rowNumber,
-                            error: `Room ${roomNumber} not found in residence`,
-                            data: row
-                        });
-                        results.summary.totalFailed++;
-                        continue;
-                    }
-                    
-                    // Check room availability (snapshot); skip when backfilling a lease that already ended
-                    const provisionalEnd = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : null);
-                    const skipSnapshotCapacity =
-                        provisionalEnd &&
-                        !Number.isNaN(provisionalEnd.getTime()) &&
-                        isLeasePeriodFullyEnded(provisionalEnd);
-                    if (!skipSnapshotCapacity && room.currentOccupancy >= room.capacity) {
-                        results.failed.push({
-                            row: rowNumber,
-                            error: `Room ${roomNumber} is at full capacity`,
-                            data: row
-                        });
-                        results.summary.totalFailed++;
-                        continue;
-                    }
-                }
-                
-                // Parse dates
+
+                // Parse dates first (needed for shared-room date capacity)
                 const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
                 const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
-                const monthlyRent = parseFloat(row.monthlyRent) || parseFloat(defaultMonthlyRent) || 150; // Default to $150
-                
+
                 if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     results.failed.push({
                         row: rowNumber,
@@ -2180,6 +2448,60 @@ exports.uploadCsvStudents = async (req, res) => {
                     results.summary.totalFailed++;
                     continue;
                 }
+                
+                // Validate room if provided
+                let roomNumber =
+                    coerceRoomNumber(row.roomNumber) ||
+                    coerceRoomNumber(row.roomnumber) ||
+                    coerceRoomNumber(row.room) ||
+                    findRoomNumberInRow(row) ||
+                    coerceRoomNumber(defaultRoomNumber);
+                let room = null;
+
+                if (!roomNumber && row.room && typeof row.room === 'object') {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Missing roomNumber. Use a "Room" column (BHM1, BHM2, …). The room object is only used for price (room.price).',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                if (roomNumber) {
+                    room = residence.rooms.find(r => String(r.roomNumber).trim().toLowerCase() === String(roomNumber).trim().toLowerCase());
+                    if (!room) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Room ${roomNumber} not found in residence`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+
+                    // Shared rooms OK (e.g. 2×BHM1, 3×BHM2) up to capacity; count this upload batch
+                    const capacityCheck = await checkUploadRoomCapacity({
+                        residenceId,
+                        roomNumber: room.roomNumber,
+                        roomDoc: room,
+                        startDate,
+                        endDate,
+                        batchRoomCounts
+                    });
+                    if (!capacityCheck.ok) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: capacityCheck.error,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                }
+                
+                // room: { type, price } → price is the rent; roomNumber is separate
+                const monthlyRent = resolveUploadMonthlyRent(row, defaultMonthlyRent, room);
 
                 if (existingUser) {
                     const conflict = await findOverlappingApprovedApplication(
@@ -2312,6 +2634,7 @@ exports.uploadCsvStudents = async (req, res) => {
                     }
                     
                     await residence.save();
+                    reserveUploadRoomSlot(batchRoomCounts, room.roomNumber || roomNumber);
                 }
                 
                 // Update student with room assignment
@@ -2384,43 +2707,10 @@ exports.uploadCsvStudents = async (req, res) => {
             }
         }
         
-        // 🆕 AUTO-LEASE-START: Trigger lease start process for all created students
-        if (results.applicationsForLeaseStart && results.applicationsForLeaseStart.length > 0) {
-            console.log(`\n🏠 === STARTING LEASE START PROCESS FOR ${results.applicationsForLeaseStart.length} STUDENTS ===`);
-            
-            const RentalAccrualService = require('../../services/rentalAccrualService');
-            let leaseStartSuccessCount = 0;
-            let leaseStartErrorCount = 0;
-            
-            for (const application of results.applicationsForLeaseStart) {
-                try {
-                    console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}...`);
-                    
-                    const accrualResult = await RentalAccrualService.processLeaseStart(application);
-                    
-                    if (accrualResult && accrualResult.success) {
-                        console.log(`✅ Lease start process completed successfully for ${application.firstName} ${application.lastName}`);
-                        console.log(`   - Initial accounting entries created`);
-                        console.log(`   - Prorated rent, admin fees, and deposits recorded`);
-                        console.log(`   - Invoice and welcome email sent`);
-                        console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
-                        leaseStartSuccessCount++;
-                    } else {
-                        console.log(`⚠️ Lease start process completed with warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || 'Unknown issue');
-                        leaseStartErrorCount++;
-                    }
-                } catch (leaseStartError) {
-                    console.error(`❌ Lease start process failed for ${application.firstName} ${application.lastName}:`, leaseStartError.message);
-                    leaseStartErrorCount++;
-                }
-            }
-            
-            console.log(`\n📊 === LEASE START PROCESS SUMMARY ===`);
-            console.log(`✅ Successful: ${leaseStartSuccessCount}`);
-            console.log(`❌ Failed: ${leaseStartErrorCount}`);
-            console.log(`📧 Invoices and welcome emails sent for ${leaseStartSuccessCount} students`);
-        }
-        
+        // 🆕 AUTO-LEASE-START: run AFTER response so the client does not wait/timeout
+        const applicationsForLeaseStart = results.applicationsForLeaseStart || [];
+        const uploadUserId = req.user._id;
+
         console.log(`✅ CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
         console.log(`📊 Final Results Summary:`);
         console.log(`   - Total processed: ${results.summary.totalProcessed}`);
@@ -2435,7 +2725,7 @@ exports.uploadCsvStudents = async (req, res) => {
             action: 'bulk_create',
             collection: 'User',
             recordId: null, // Bulk operation doesn't have a single record ID
-            userId: req.user._id,
+            userId: uploadUserId,
             before: null,
             after: {
                 totalProcessed: results.summary.totalProcessed,
@@ -2446,16 +2736,49 @@ exports.uploadCsvStudents = async (req, res) => {
                 defaultRoomNumber: defaultRoomNumber,
                 defaultStartDate: defaultStartDate,
                 defaultEndDate: defaultEndDate,
-                defaultMonthlyRent: defaultMonthlyRent
+                defaultMonthlyRent: defaultMonthlyRent,
+                leaseStartPending: applicationsForLeaseStart.length
             },
             details: `CSV bulk student upload - ${results.summary.totalSuccessful} non-failing students created, ${results.summary.totalFailed} failed, ${results.filtered} filtered out`
         });
         
         res.status(200).json({
             success: true,
-            message: `CSV upload processed successfully. ${results.filtered} failing students were filtered out.`,
-            data: results
+            message: `CSV upload processed successfully. ${results.filtered} failing students were filtered out.` +
+                (applicationsForLeaseStart.length
+                    ? ` Lease start / accruals for ${applicationsForLeaseStart.length} students are running in the background.`
+                    : ''),
+            data: {
+                ...results,
+                leaseStartQueued: applicationsForLeaseStart.length
+            }
         });
+
+        // Fire-and-forget lease start (emails, accruals) — never block the HTTP response
+        if (applicationsForLeaseStart.length > 0) {
+            setImmediate(async () => {
+                console.log(`\n🏠 === BACKGROUND LEASE START FOR ${applicationsForLeaseStart.length} CSV STUDENTS ===`);
+                const RentalAccrualService = require('../../services/rentalAccrualService');
+                let leaseStartSuccessCount = 0;
+                let leaseStartErrorCount = 0;
+                for (const application of applicationsForLeaseStart) {
+                    try {
+                        console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}...`);
+                        const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                        if (accrualResult && accrualResult.success) {
+                            leaseStartSuccessCount++;
+                        } else {
+                            console.log(`⚠️ Lease start warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || 'Unknown issue');
+                            leaseStartErrorCount++;
+                        }
+                    } catch (leaseStartError) {
+                        console.error(`❌ Lease start failed for ${application.firstName} ${application.lastName}:`, leaseStartError.message);
+                        leaseStartErrorCount++;
+                    }
+                }
+                console.log(`📊 Background lease start done: ✅ ${leaseStartSuccessCount} ❌ ${leaseStartErrorCount}`);
+            });
+        }
         
     } catch (error) {
         console.error('Error processing CSV upload:', error);
@@ -2564,13 +2887,13 @@ exports.uploadExcelStudents = async (req, res) => {
         if (!req.file) {
             return res.status(400).json({
                 success: false,
-                message: 'Excel file is required'
+                message: 'Excel or CSV file is required'
             });
         }
 
         const { residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent } = req.body;
         
-        console.log('📁 Processing Excel upload for students in residence:', residenceId);
+        console.log('📁 Processing Excel/CSV upload for students in residence:', residenceId);
         
         if (!residenceId) {
             return res.status(400).json({
@@ -2588,6 +2911,20 @@ exports.uploadExcelStudents = async (req, res) => {
             });
         }
 
+        // Convert Excel/CSV rows to normalized student objects
+        let csvData = [];
+        const originalName = (req.file.originalname || '').toLowerCase();
+        const isCsv =
+            originalName.endsWith('.csv') ||
+            String(req.file.mimetype || '').includes('csv') ||
+            String(req.file.mimetype || '') === 'text/plain';
+
+        if (isCsv) {
+            console.log('📊 Parsing CSV file upload...');
+            const text = req.file.buffer.toString('utf8');
+            csvData = parseCsvTextToRows(text);
+            console.log(`✅ Parsed ${csvData.length} rows from CSV`);
+        } else {
         // Parse Excel file
         console.log('📊 Loading Excel file...');
         const workbook = new ExcelJS.Workbook();
@@ -2603,8 +2940,6 @@ exports.uploadExcelStudents = async (req, res) => {
         }
         console.log('✅ Worksheet found');
 
-        // Convert Excel rows to CSV format
-        const csvData = [];
         const headers = [];
         
         // Get headers from first row
@@ -2669,88 +3004,21 @@ exports.uploadExcelStudents = async (req, res) => {
                 }
             });
 
-            // Normalize field names to handle variations (headers are converted to lowercase)
-            console.log(`🔄 Normalizing row ${rowNumber} data:`, rowData);
-            
-            // Handle room number variations
-            if (rowData.roomnumb) {
-                rowData.roomnumber = rowData.roomnumb;
-                delete rowData.roomnumb;
-                console.log(`   ✅ roomnumb → roomnumber: ${rowData.roomnumber}`);
-            }
-            if (rowData.roomnumber) {
-                console.log(`   ✅ roomnumber already exists: ${rowData.roomnumber}`);
-            }
-            
-            // Handle monthly rent variations
-            if (rowData.monthlyren) {
-                rowData.monthlyrent = rowData.monthlyren;
-                delete rowData.monthlyren;
-                console.log(`   ✅ monthlyren → monthlyrent: ${rowData.monthlyrent}`);
-            }
-            if (rowData.monthlyrent) {
-                console.log(`   ✅ monthlyrent already exists: ${rowData.monthlyrent}`);
-            }
-            
-            // Handle emergency contact variations
-            if (rowData.emergency) {
-                rowData.emergencycontact = rowData.emergency;
-                delete rowData.emergency;
-                console.log(`   ✅ emergency → emergencycontact: ${rowData.emergencycontact}`);
-            }
-            
-            // Handle date field variations (lowercase)
-            if (rowData.startdate) {
-                rowData.startDate = rowData.startdate;
-                delete rowData.startdate;
-                console.log(`   ✅ startdate → startDate: ${rowData.startDate}`);
-            }
-            if (rowData.enddate) {
-                rowData.endDate = rowData.enddate;
-                delete rowData.enddate;
-                console.log(`   ✅ enddate → endDate: ${rowData.endDate}`);
-            }
-            
-            // Handle firstName/lastName variations
-            if (rowData['first name']) {
-                rowData.firstname = rowData['first name'];
-                delete rowData['first name'];
-            }
-            if (rowData['last name']) {
-                rowData.lastname = rowData['last name'];
-                delete rowData['last name'];
-            }
-            if (rowData.firstname) {
-                rowData.firstname = rowData.firstname;
-            }
-            if (rowData.lastname) {
-                rowData.lastname = rowData.lastname;
-            }
-            
-            // Handle camelCase variations
-            if (rowData.firstName) {
-                rowData.firstname = rowData.firstName;
-                delete rowData.firstName;
-            }
-            if (rowData.lastName) {
-                rowData.lastname = rowData.lastName;
-                delete rowData.lastName;
-            }
-
-            // Only add row if it has required fields
-            if (rowData.email || rowData.firstname || rowData.lastname) {
-                console.log(`📝 Processing row ${rowNumber}:`, rowData);
-                csvData.push(rowData);
+            const normalized = normalizeTenantUploadRow(rowData);
+            if (normalized) {
+                console.log(`📝 Processing row ${rowNumber}:`, normalized);
+                csvData.push(normalized);
             }
         }
+        } // end excel branch
 
-        console.log(`📊 Parsed ${csvData.length} student records from Excel`);
+        console.log(`📊 Parsed ${csvData.length} student records from upload`);
         console.log('📋 Final csvData:', JSON.stringify(csvData, null, 2));
 
         if (csvData.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'No valid student data found in Excel file'
+                message: 'No valid student data found in file. Need columns: email, firstName, lastName (or Name).'
             });
         }
 
@@ -2767,14 +3035,15 @@ exports.uploadExcelStudents = async (req, res) => {
         
         // Process each Excel row (same logic as CSV upload)
         console.log('🔄 Starting to process Excel rows...');
+        const batchRoomCounts = new Map();
         for (let i = 0; i < csvData.length; i++) {
             const row = csvData[i];
             const rowNumber = i + 2; // +2 because Excel rows start at 1 and we skip header
             console.log(`🔄 Processing row ${i + 1}:`, row);
             
             try {
-                // Validate required fields
-                if (!row.email || !row.firstname || !row.lastname) {
+                // Validate required fields (support both camelCase and lowercase from CSV/Excel)
+                if (!row.email || !(row.firstName || row.firstname) || !(row.lastName || row.lastname)) {
                     results.failed.push({
                         row: rowNumber,
                         error: 'Missing required fields: email, firstName, lastName',
@@ -2783,72 +3052,25 @@ exports.uploadExcelStudents = async (req, res) => {
                     results.summary.totalFailed++;
                     continue;
                 }
+                row.firstName = row.firstName || row.firstname;
+                row.lastName = row.lastName || row.lastname;
+                row.firstname = row.firstName;
+                row.lastname = row.lastName;
+                row.roomnumber = row.roomnumber || row.roomNumber;
+                row.roomNumber = row.roomNumber || row.roomnumber;
+                row.monthlyrent = row.monthlyrent ?? row.monthlyRent;
+                row.monthlyRent = row.monthlyRent ?? row.monthlyrent;
                 
                 // Check if user already exists and has an active lease
                 const existingUser = await User.findOne({ email: row.email });
                 if (existingUser) {
                     console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
-                
-                // Validate room if provided
-                console.log(`🔍 Room validation for row ${rowNumber}:`, {
-                    roomnumber: row.roomnumber,
-                    room_number: row.room_number,
-                    defaultRoomNumber: defaultRoomNumber,
-                    allRowData: row
-                });
-                let roomNumber = row.roomnumber || row.room_number || defaultRoomNumber;
-                let room = null;
-                
-                if (roomNumber) {
-                    room = residence.rooms.find(r => r.roomNumber === roomNumber);
-                    if (!room) {
-                        results.failed.push({
-                            row: rowNumber,
-                            error: `Room ${roomNumber} not found in residence`,
-                            data: row
-                        });
-                        results.summary.totalFailed++;
-                        continue;
-                    }
-                    
-                    // Check room availability (snapshot); skip when backfilling a lease that already ended
-                    const endRawExc = row.endDate || row.enddate || row.end_date || defaultEndDate;
-                    const provisionalEnd = endRawExc ? new Date(endRawExc) : null;
-                    const skipSnapshotCapacity =
-                        provisionalEnd &&
-                        !Number.isNaN(provisionalEnd.getTime()) &&
-                        isLeasePeriodFullyEnded(provisionalEnd);
-                    if (!skipSnapshotCapacity && room.currentOccupancy >= room.capacity) {
-                        results.failed.push({
-                            row: rowNumber,
-                            error: `Room ${roomNumber} is at full capacity`,
-                            data: row
-                        });
-                        results.summary.totalFailed++;
-                        continue;
-                    }
-                }
-                
-                // Parse dates (handle both normalized and original field names)
+
+                // Parse dates before capacity (shared rooms need date window)
                 const startDate = row.startDate || row.startdate || row.start_date ? new Date(row.startDate || row.startdate || row.start_date) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
                 const endDate = row.endDate || row.enddate || row.end_date ? new Date(row.endDate || row.enddate || row.end_date) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
-                
-                // Parse monthly rent from the correct column
-                let monthlyRent = parseFloat(row.monthlyrent || row.monthlyRent || row.monthly_rent) || 0;
-                console.log(`💰 Monthly rent parsing:`, {
-                    monthlyrent: row.monthlyrent,
-                    monthlyRent: row.monthlyRent,
-                    monthly_rent: row.monthly_rent,
-                    parsed: monthlyRent
-                });
-                
-                // Fallback to default if no rent found
-                if (monthlyRent === 0) {
-                    monthlyRent = parseFloat(defaultMonthlyRent) || 150; // Default to $150
-                    console.log(`💰 Using default monthly rent: $${monthlyRent}`);
-                }
-                
+
                 if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     results.failed.push({
                         row: rowNumber,
@@ -2868,6 +3090,72 @@ exports.uploadExcelStudents = async (req, res) => {
                     results.summary.totalFailed++;
                     continue;
                 }
+                
+                // Validate room if provided
+                console.log(`🔍 Room validation for row ${rowNumber}:`, {
+                    roomnumber: row.roomnumber,
+                    room_number: row.room_number,
+                    defaultRoomNumber: defaultRoomNumber,
+                    allRowData: row
+                });
+                let roomNumber =
+                    coerceRoomNumber(row.roomnumber) ||
+                    coerceRoomNumber(row.roomNumber) ||
+                    coerceRoomNumber(row.room_number) ||
+                    coerceRoomNumber(row.room) ||
+                    findRoomNumberInRow(row) ||
+                    coerceRoomNumber(defaultRoomNumber);
+                let room = null;
+
+                if (!roomNumber && row.room && typeof row.room === 'object') {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Missing roomNumber. Use a "Room" column (BHM1, BHM2, …). The room object is only used for price (room.price).',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                if (roomNumber) {
+                    room = residence.rooms.find(r => String(r.roomNumber).trim().toLowerCase() === String(roomNumber).trim().toLowerCase());
+                    if (!room) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Room ${roomNumber} not found in residence`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+
+                    const capacityCheck = await checkUploadRoomCapacity({
+                        residenceId,
+                        roomNumber: room.roomNumber,
+                        roomDoc: room,
+                        startDate,
+                        endDate,
+                        batchRoomCounts
+                    });
+                    if (!capacityCheck.ok) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: capacityCheck.error,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                }
+                
+                // room: { type, price } → price is the rent when present
+                let monthlyRent = resolveUploadMonthlyRent(row, defaultMonthlyRent, room);
+                console.log(`💰 Monthly rent resolved: $${monthlyRent}`, {
+                    monthlyrent: row.monthlyrent,
+                    monthlyRent: row.monthlyRent,
+                    roomPrice: row.room && typeof row.room === 'object' ? row.room.price : undefined,
+                    matchedRoomPrice: room?.price
+                });
 
                 if (existingUser) {
                     const conflict = await findOverlappingApprovedApplication(
@@ -3037,6 +3325,7 @@ exports.uploadExcelStudents = async (req, res) => {
                     }
                     
                     await residence.save();
+                    reserveUploadRoomSlot(batchRoomCounts, room.roomNumber || roomNumber);
                 }
                 
                 // Update student with room assignment
@@ -3103,65 +3392,17 @@ exports.uploadExcelStudents = async (req, res) => {
         }
         
         console.log(`✅ Excel upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
-        
-        // 🆕 AUTO-LEASE-START: Trigger lease start process for all created students
-        if (results.applicationsForLeaseStart && results.applicationsForLeaseStart.length > 0) {
-            console.log(`\n🏠 === STARTING LEASE START PROCESS FOR ${results.applicationsForLeaseStart.length} STUDENTS ===`);
-            
-            // Ensure MongoDB connection is available for lease start process
-            const mongoose = require('mongoose');
-            if (mongoose.connection.readyState !== 1) {
-                console.log('⚠️ Database not connected, waiting for connection...');
-                let attempts = 0;
-                const maxAttempts = 30;
-                while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    attempts++;
-                }
-                if (mongoose.connection.readyState !== 1) {
-                    throw new Error('Database connection timeout - please ensure database is connected');
-                }
-            }
-            
-            const RentalAccrualService = require('../../services/rentalAccrualService');
-            let leaseStartSuccessCount = 0;
-            let leaseStartErrorCount = 0;
-            
-            for (const application of results.applicationsForLeaseStart) {
-                try {
-                    console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}...`);
-                    
-                    const accrualResult = await RentalAccrualService.processLeaseStart(application);
-                    
-                    if (accrualResult && accrualResult.success) {
-                        console.log(`✅ Lease start process completed successfully for ${application.firstName} ${application.lastName}`);
-                        console.log(`   - Initial accounting entries created`);
-                        console.log(`   - Prorated rent, admin fees, and deposits recorded`);
-                        console.log(`   - Invoice and welcome email sent`);
-                        console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
-                        leaseStartSuccessCount++;
-                    } else {
-                        console.log(`⚠️ Lease start process completed with warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || 'Unknown issue');
-                        leaseStartErrorCount++;
-                    }
-                } catch (leaseStartError) {
-                    console.error(`❌ Lease start process failed for ${application.firstName} ${application.lastName}:`, leaseStartError.message);
-                    leaseStartErrorCount++;
-                }
-            }
-            
-            console.log(`\n📊 === LEASE START PROCESS SUMMARY ===`);
-            console.log(`✅ Successful: ${leaseStartSuccessCount}`);
-            console.log(`❌ Failed: ${leaseStartErrorCount}`);
-            console.log(`📧 Invoices and welcome emails sent for ${leaseStartSuccessCount} students`);
-        }
+
+        const applicationsForLeaseStart = results.applicationsForLeaseStart || [];
+        const uploadUserId = req.user._id;
+        const fileName = req.file ? req.file.originalname : 'unknown';
         
         // Create audit log for Excel bulk upload
         await createAuditLog({
             action: 'bulk_create',
             collection: 'User',
             recordId: null, // Bulk operation doesn't have a single record ID
-            userId: req.user._id,
+            userId: uploadUserId,
             before: null,
             after: {
                 totalProcessed: results.summary.totalProcessed,
@@ -3172,16 +3413,49 @@ exports.uploadExcelStudents = async (req, res) => {
                 defaultStartDate: defaultStartDate,
                 defaultEndDate: defaultEndDate,
                 defaultMonthlyRent: defaultMonthlyRent,
-                fileName: req.file ? req.file.originalname : 'unknown'
+                fileName,
+                leaseStartPending: applicationsForLeaseStart.length
             },
             details: `Excel bulk student upload - ${results.summary.totalSuccessful} students created, ${results.summary.totalFailed} failed`
         });
         
         res.status(200).json({
             success: true,
-            message: 'Excel upload processed successfully',
-            data: results
+            message: 'Excel upload processed successfully' +
+                (applicationsForLeaseStart.length
+                    ? `. Lease start / accruals for ${applicationsForLeaseStart.length} students are running in the background.`
+                    : ''),
+            data: {
+                ...results,
+                leaseStartQueued: applicationsForLeaseStart.length
+            }
         });
+
+        // Fire-and-forget lease start — do not block the HTTP response
+        if (applicationsForLeaseStart.length > 0) {
+            setImmediate(async () => {
+                console.log(`\n🏠 === BACKGROUND LEASE START FOR ${applicationsForLeaseStart.length} EXCEL STUDENTS ===`);
+                const RentalAccrualService = require('../../services/rentalAccrualService');
+                let leaseStartSuccessCount = 0;
+                let leaseStartErrorCount = 0;
+                for (const application of applicationsForLeaseStart) {
+                    try {
+                        console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}...`);
+                        const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                        if (accrualResult && accrualResult.success) {
+                            leaseStartSuccessCount++;
+                        } else {
+                            console.log(`⚠️ Lease start warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || 'Unknown issue');
+                            leaseStartErrorCount++;
+                        }
+                    } catch (leaseStartError) {
+                        console.error(`❌ Lease start failed for ${application.firstName} ${application.lastName}:`, leaseStartError.message);
+                        leaseStartErrorCount++;
+                    }
+                }
+                console.log(`📊 Background lease start done: ✅ ${leaseStartSuccessCount} ❌ ${leaseStartErrorCount}`);
+            });
+        }
         
     } catch (error) {
         console.error('Error processing Excel upload:', error);
@@ -3495,6 +3769,8 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
         console.log(`✅ Residence found: ${residence.name}`);
         console.log(`📋 Students to process:`, csvData.map(s => s?.email).filter(Boolean));
         
+        const batchRoomCounts = new Map();
+
         // Process each CSV row
         for (let i = 0; i < csvData.length; i++) {
             const row = csvData[i];
@@ -3525,16 +3801,33 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                 }
                 
                 // Validate room if provided
-                let roomNumber = row.roomNumber || defaultRoomNumber;
+                let roomNumber =
+                    coerceRoomNumber(row.roomNumber) ||
+                    coerceRoomNumber(row.roomnumber) ||
+                    coerceRoomNumber(row.room) ||
+                    findRoomNumberInRow(row) ||
+                    coerceRoomNumber(defaultRoomNumber);
                 let roomData = null;
                 
                 console.log(`🏠 Room validation for student ${row.email}:`);
                 console.log(`   - Requested room: ${roomNumber}`);
+
+                if (!roomNumber && row.room && typeof row.room === 'object') {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Missing roomNumber. Use a "Room" column (BHM1, BHM2, …). The room object is only used for price (room.price).',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
                 
                 if (roomNumber) {
                     // Get fresh residence data for room validation
                     const freshResidence = await Residence.findById(residenceId);
-                    roomData = freshResidence.rooms.find(r => r.roomNumber === roomNumber);
+                    roomData = freshResidence.rooms.find(
+                        (r) => String(r.roomNumber).trim().toLowerCase() === String(roomNumber).trim().toLowerCase()
+                    );
                     
                     if (!roomData) {
                         console.log(`❌ Room ${roomNumber} not found in residence`);
@@ -3550,17 +3843,22 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                     console.log(`✅ Room ${roomNumber} found`);
                     console.log(`   - Current occupancy: ${roomData.currentOccupancy}/${roomData.capacity}`);
                     
-                    // Snapshot capacity; skip when backfilling a lease that already ended
-                    const provisionalEndBg = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : null);
-                    const skipSnapshotCapacity =
-                        provisionalEndBg &&
-                        !Number.isNaN(provisionalEndBg.getTime()) &&
-                        isLeasePeriodFullyEnded(provisionalEndBg);
-                    if (!skipSnapshotCapacity && roomData.currentOccupancy >= roomData.capacity) {
-                        console.log(`❌ Room ${roomNumber} is at full capacity`);
+                    // Shared rooms allowed in one upload (e.g. 2×BHM1, 3×BHM2) up to capacity
+                    const startDateForCap = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
+                    const endDateForCap = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+                    const capacityCheck = await checkUploadRoomCapacity({
+                        residenceId,
+                        roomNumber: roomData.roomNumber,
+                        roomDoc: roomData,
+                        startDate: startDateForCap,
+                        endDate: endDateForCap,
+                        batchRoomCounts
+                    });
+                    if (!capacityCheck.ok) {
+                        console.log(`❌ ${capacityCheck.error}`);
                         results.failed.push({
                             row: rowNumber,
-                            error: `Room ${roomNumber} is at full capacity`,
+                            error: capacityCheck.error,
                             data: row
                         });
                         results.summary.totalFailed++;
@@ -3573,7 +3871,7 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                 // Parse dates
                 const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
                 const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
-                const monthlyRent = parseFloat(row.monthlyRent) || parseFloat(defaultMonthlyRent) || 150;
+                const monthlyRent = resolveUploadMonthlyRent(row, defaultMonthlyRent, roomData);
                 
                 if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     console.log(`❌ Invalid date format`);
@@ -3755,6 +4053,7 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                         
                         await currentResidence.save();
                         console.log(`✅ Room ${roomNumber} updated: ${roomToUpdate.currentOccupancy}/${roomToUpdate.capacity}`);
+                        reserveUploadRoomSlot(batchRoomCounts, roomNumber);
                     }
                 }
                 

@@ -5,10 +5,13 @@ const ALLOWED_MIMES = new Set([
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
     'application/vnd.ms-excel', // .xls
     'application/vnd.ms-excel.sheet.macroEnabled.12', // .xlsm
-    'application/octet-stream' // some browsers send this for .xlsx
+    'application/octet-stream', // some browsers send this for .xlsx
+    'text/csv',
+    'application/csv',
+    'text/plain' // some browsers send CSV as text/plain
 ]);
 
-const ALLOWED_EXTS = new Set(['.xlsx', '.xls', '.xlsm', '.xltm']);
+const ALLOWED_EXTS = new Set(['.xlsx', '.xls', '.xlsm', '.xltm', '.csv']);
 
 const excelUpload = multer({
     storage: multer.memoryStorage(),
@@ -20,7 +23,7 @@ const excelUpload = multer({
         if (ALLOWED_EXTS.has(ext) || ALLOWED_MIMES.has(file.mimetype)) {
             return cb(null, true);
         }
-        cb(new Error('Invalid file type. Only Excel files (.xlsx, .xls) are allowed.'), false);
+        cb(new Error('Invalid file type. Only Excel (.xlsx, .xls) or CSV (.csv) files are allowed.'), false);
     }
 });
 

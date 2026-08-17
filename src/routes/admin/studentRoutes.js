@@ -196,25 +196,35 @@ router.post('/manual-add', manualStudentValidation, manualAddStudent);
  * Upload CSV for bulk student creation
  * POST /api/admin/students/upload-csv
  */
-router.post('/upload-csv', auth, checkRole(['admin']), uploadCsvStudents);
+router.post('/upload-csv', auth, checkRole(['admin', 'admin_ceo', 'finance_admin', 'ceo']), uploadCsvStudents);
 
 /**
- * Upload Excel for bulk student creation
+ * Upload Excel/CSV file for bulk student creation
  * POST /api/admin/students/upload-excel
  */
-router.post('/upload-excel', auth, checkRole(['admin']), excelUpload.single('file'), uploadExcelStudents);
+router.post('/upload-excel', auth, checkRole(['admin', 'admin_ceo', 'finance_admin', 'ceo']), (req, res, next) => {
+    excelUpload.single('file')(req, res, (err) => {
+        if (err) {
+            return res.status(400).json({
+                success: false,
+                message: err.message || 'File upload failed'
+            });
+        }
+        next();
+    });
+}, uploadExcelStudents);
 
 /**
  * Get CSV template for student upload
  * GET /api/admin/students/csv-template
  */
-router.get('/csv-template', auth, checkRole(['admin']), getStudentCsvTemplate);
+router.get('/csv-template', auth, checkRole(['admin', 'admin_ceo', 'finance_admin', 'ceo']), getStudentCsvTemplate);
 
 /**
  * Get Excel template for student upload
  * GET /api/admin/students/excel-template
  */
-router.get('/excel-template', auth, checkRole(['admin']), getStudentExcelTemplate);
+router.get('/excel-template', auth, checkRole(['admin', 'admin_ceo', 'finance_admin', 'ceo']), getStudentExcelTemplate);
 
 /**
  * Manual backfill transactions for all debtors
