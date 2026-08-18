@@ -24,7 +24,7 @@ const ExcelJS = require('exceljs');
 const StudentDeletionService = require('../../services/studentDeletionService');
 const { getStudentInfo } = require('../../utils/studentUtils');
 const { findOverlappingApprovedApplication, isLeasePeriodFullyEnded } = require('../../utils/leaseOverlapUtils');
-const { parseSlashDateToIso, parseCalendarDate, parseUploadCalendarDate, getCalendarParts, toCalendarIso, isEquivalentLeaseWindow } = require('../../utils/calendarDate');
+const { parseSlashDateToIso, parseCalendarDate, parseUploadCalendarDate, getCalendarParts, toCalendarIso, isEquivalentLeaseWindow, SLASH_DATE_RE } = require('../../utils/calendarDate');
 
 /** Alias used throughout upload handlers */
 const parseUploadDate = (value, role = 'start') => parseUploadCalendarDate(value, role);
@@ -96,6 +96,45 @@ function findRoomNumberInRow(raw = {}) {
     return undefined;
 }
 
+function isLeaseDateHeader(header) {
+    const n = String(header || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return ['startdate', 'enddate', 'leasestart', 'leaseend', 'start', 'end'].includes(n);
+}
+
+function pickDateFromRow(raw, keys) {
+    for (const key of keys) {
+        const v = raw[key];
+        if (v != null && SLASH_DATE_RE.test(String(v).trim())) {
+            return String(v).trim();
+        }
+    }
+    for (const want of keys) {
+        const wantNorm = String(want).toLowerCase().replace(/[^a-z0-9]/g, '');
+        for (const [k, v] of Object.entries(raw)) {
+            if (v == null || String(v).trim() === '' || typeof v === 'object') continue;
+            const kNorm = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (kNorm === wantNorm && SLASH_DATE_RE.test(String(v).trim())) {
+                return String(v).trim();
+            }
+        }
+    }
+    for (const key of keys) {
+        if (raw[key] !== undefined && raw[key] !== null && String(raw[key]).trim() !== '') {
+            return raw[key];
+        }
+    }
+    for (const want of keys) {
+        const wantNorm = String(want).toLowerCase().replace(/[^a-z0-9]/g, '');
+        for (const [k, v] of Object.entries(raw)) {
+            if (v === undefined || v === null || String(v).trim() === '') continue;
+            if (typeof v === 'object') continue;
+            const kNorm = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (kNorm === wantNorm) return v;
+        }
+    }
+    return undefined;
+}
+
 function normalizeTenantUploadRow(raw = {}) {
     if (!raw || typeof raw !== 'object') return null;
 
@@ -146,8 +185,14 @@ function normalizeTenantUploadRow(raw = {}) {
         monthlyRent = raw.room.price;
     }
     const status = pick('status');
-    const startDate = toDateStr(pick('startDate', 'startdate', 'lease start', 'leasestart', 'start'), 'start');
-    const endDate = toDateStr(pick('endDate', 'enddate', 'lease end', 'leaseend', 'end'), 'end');
+    const startDate = toDateStr(
+        pickDateFromRow(raw, ['startDate', 'startdate', 'lease start', 'leasestart', 'start']),
+        'start'
+    );
+    const endDate = toDateStr(
+        pickDateFromRow(raw, ['endDate', 'enddate', 'lease end', 'leaseend', 'end']),
+        'end'
+    );
     const emergencyContact = pick('emergencyContact', 'emergencycontact', 'emergency');
 
     if (!email && !firstName && !lastName) return null;
@@ -308,39 +353,8 @@ function parseCsvTextToRows(csvText) {
 // Helper function to safely format dates
 const safeDateFormat = (date) => {
     if (!date) return null;
-    
     try {
-        // If it's already a Date object
-        if (date instanceof Date) {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        }
-        
-        // If it's a string, try to parse it
-        if (typeof date === 'string') {
-            const parsedDate = new Date(date);
-            if (!isNaN(parsedDate.getTime())) {
-                const year = parsedDate.getFullYear();
-                const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
-                const day = String(parsedDate.getDate()).padStart(2, '0');
-                return `${year}-${month}-${day}`;
-            }
-        }
-        
-        // If it's a number (timestamp), try to parse it
-        if (typeof date === 'number') {
-            const parsedDate = new Date(date);
-            if (!isNaN(parsedDate.getTime())) {
-                const year = parsedDate.getFullYear();
-                const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
-                const day = String(parsedDate.getDate()).padStart(2, '0');
-                return `${year}-${month}-${day}`;
-            }
-        }
-        
-        return null;
+        return toCalendarIso(parseCalendarDate(date));
     } catch (error) {
         console.error('Error formatting date:', error);
         return null;
@@ -3060,23 +3074,25 @@ exports.uploadExcelStudents = async (req, res) => {
                 const value = cell.value;
                 
                 if (header && value !== null && value !== undefined) {
-                    // Convert Excel date to string if needed
                     if (value instanceof Date) {
-                        rowData[header] = value.toISOString().split('T')[0]; // YYYY-MM-DD format
-                        console.log(`   📅 ${header}: ${value} → ${rowData[header]} (date)`);
+                        rowData[header] = toCalendarIso(parseCalendarDate(value));
+                        console.log(`   📅 ${header}: ${value.toISOString()} → ${rowData[header]} (date)`);
                     } else {
                         const stringValue = value.toString().trim();
-                        
-                        // Handle date strings in DD/MM/YYYY (Zimbabwe) or MM/DD/YYYY
-                        if ((header === 'startdate' || header === 'enddate' || header === 'startDate' || header === 'endDate') && stringValue.includes('/')) {
+
+                        if (isLeaseDateHeader(header) && stringValue.includes('/')) {
                             const converted = parseSlashDateToIso(stringValue);
                             if (converted) {
                                 rowData[header] = converted;
-                                console.log(`   📅 ${header}: ${stringValue} → ${rowData[header]} (converted date)`);
+                                console.log(`   📅 ${header}: ${stringValue} → ${rowData[header]} (D/M/Y)`);
                             } else {
                                 rowData[header] = stringValue;
-                                console.log(`   📝 ${header}: ${stringValue}`);
                             }
+                        } else if (isLeaseDateHeader(header)) {
+                            rowData[header] = toCalendarIso(parseUploadCalendarDate(
+                                stringValue,
+                                header.includes('end') ? 'end' : 'start'
+                            )) || stringValue;
                         } else {
                             rowData[header] = stringValue;
                             console.log(`   📝 ${header}: ${stringValue}`);

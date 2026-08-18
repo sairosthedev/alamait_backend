@@ -26,12 +26,25 @@ function parseSlashDateToIso(value) {
         month = p0;
         day = p1;
     } else {
+        // D/M/YYYY (Zimbabwe / UK): 1/4/2026 = 1 April 2026
         day = p0;
         month = p1;
     }
 
     if (month < 1 || month > 12 || day < 1 || day > 31) return null;
     return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+const SLASH_DATE_RE = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
+
+function isExcelSerialDate(value) {
+    return typeof value === 'number' && value > 20000 && value < 80000;
+}
+
+function parseExcelSerialDate(serial) {
+    const utcMs = Date.UTC(1899, 11, 30) + Math.round(Number(serial)) * 86400000;
+    const d = new Date(utcMs);
+    return calendarDateUtc(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
 }
 
 /** Parse upload / API date input to a Date at UTC noon on the intended calendar day. */
@@ -87,8 +100,12 @@ function parseCalendarDate(value) {
 function parseUploadCalendarDate(value, role = 'start') {
     if (value === undefined || value === null || value === '') return null;
 
+    if (isExcelSerialDate(value)) {
+        return parseExcelSerialDate(value);
+    }
+
     const str = String(value).trim();
-    if (str.includes('/') && !str.includes('T')) {
+    if (SLASH_DATE_RE.test(str) || (str.includes('/') && !str.includes('T'))) {
         return parseCalendarDate(str);
     }
 
@@ -163,6 +180,9 @@ module.exports = {
     parseSlashDateToIso,
     parseCalendarDate,
     parseUploadCalendarDate,
+    parseExcelSerialDate,
+    isExcelSerialDate,
+    SLASH_DATE_RE,
     getCalendarParts,
     toCalendarIso,
     isEquivalentLeaseWindow

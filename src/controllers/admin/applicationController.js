@@ -12,6 +12,7 @@ const ExpiredStudent = require('../../models/ExpiredStudent');
 const EmailNotificationService = require('../../services/emailNotificationService');
 const Payment = require('../../models/Payment');
 const { getStudentInfo } = require('../../utils/studentUtils');
+const { toCalendarIso } = require('../../utils/calendarDate');
 const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
 
 // Get all applications with room status (paginated — never dump full collection)
@@ -79,9 +80,9 @@ exports.getApplications = async (req, res) => {
             requestType: app.requestType,
             status: app.status,
             paymentStatus: app.paymentStatus,
-            applicationDate: app.applicationDate ? app.applicationDate.toISOString().split('T')[0] : null,
-            startDate: app.startDate ? app.startDate.toISOString().split('T')[0] : null,
-            endDate: app.endDate ? app.endDate.toISOString().split('T')[0] : null,
+            applicationDate: app.applicationDate ? toCalendarIso(app.applicationDate) : null,
+            startDate: app.startDate ? toCalendarIso(app.startDate) : null,
+            endDate: app.endDate ? toCalendarIso(app.endDate) : null,
             preferredRoom: app.preferredRoom,
             alternateRooms: app.alternateRooms || [],
             currentRoom: app.currentRoom,
@@ -292,9 +293,9 @@ exports.getApplicationById = async (req, res) => {
             requestType: application.requestType,
             status: application.status,
             paymentStatus: application.paymentStatus,
-            applicationDate: application.applicationDate.toISOString().split('T')[0],
-            startDate: application.startDate ? application.startDate.toISOString().split('T')[0] : null,
-            endDate: application.endDate ? application.endDate.toISOString().split('T')[0] : null,
+            applicationDate: toCalendarIso(application.applicationDate),
+            startDate: application.startDate ? toCalendarIso(application.startDate) : null,
+            endDate: application.endDate ? toCalendarIso(application.endDate) : null,
             preferredRoom: application.preferredRoom,
             alternateRooms: application.alternateRooms || [],
             currentRoom: application.currentRoom,
