@@ -4,6 +4,7 @@ const Account = require('../models/Account');
 const Invoice = require('../models/Invoice');
 const mongoose = require('mongoose');
 const { logTransactionOperation, logSystemOperation } = require('../utils/auditLogger');
+const { parseCalendarDate, getCalendarParts, toCalendarIso } = require('../utils/calendarDate');
 
 // Toggle this to true only when you want verbose accrual logs
 const ACCRUAL_DEBUG = false;
@@ -33,11 +34,10 @@ class RentalAccrualService {
      *   1 Apr → 30 Apr  → 1 month (same calendar month)
      */
     static countBillingMonths(leaseStart, leaseEnd) {
-        if (!(leaseStart instanceof Date) || !(leaseEnd instanceof Date)) return 1;
-        if (Number.isNaN(leaseStart.getTime()) || Number.isNaN(leaseEnd.getTime())) return 1;
-        const diff =
-            (leaseEnd.getFullYear() - leaseStart.getFullYear()) * 12 +
-            (leaseEnd.getMonth() - leaseStart.getMonth());
+        const start = getCalendarParts(leaseStart);
+        const end = getCalendarParts(leaseEnd);
+        if (!start || !end) return 1;
+        const diff = (end.year - start.year) * 12 + (end.month - start.month);
         return Math.max(1, diff);
     }
 
@@ -46,25 +46,22 @@ class RentalAccrualService {
      * Lease start month = 0; next month = 1; etc.
      */
     static monthIndexFromLeaseStart(leaseStart, month, year) {
-        const startMonth = leaseStart.getMonth() + 1;
-        const startYear = leaseStart.getFullYear();
-        return (year - startYear) * 12 + (month - startMonth);
+        const start = getCalendarParts(leaseStart);
+        if (!start) return 0;
+        return (year - start.year) * 12 + (month - start.month);
     }
 
     static shouldAccrueMonthForLease(leaseStart, leaseEnd, month, year) {
-        if (!(leaseStart instanceof Date) || !(leaseEnd instanceof Date)) return true;
-        if (Number.isNaN(leaseStart.getTime()) || Number.isNaN(leaseEnd.getTime())) return true;
+        const start = getCalendarParts(leaseStart);
+        const end = getCalendarParts(leaseEnd);
+        if (!start || !end) return true;
 
         // If this is the lease end month and lease ends very early, do not accrue it.
-        const endMonth = leaseEnd.getMonth() + 1;
-        const endYear = leaseEnd.getFullYear();
-        const endDay = leaseEnd.getDate();
-        if (year === endYear && month === endMonth && endDay <= RentalAccrualService.END_MONTH_CUTOFF_DAY) {
+        if (year === end.year && month === end.month && end.day <= RentalAccrualService.END_MONTH_CUTOFF_DAY) {
             return false;
         }
 
         // Only charge countBillingMonths months from start (start month is lease_start / index 0).
-        // So Apr→May (1 billing month) accrues only April — not May as a second month.
         const monthIndex = RentalAccrualService.monthIndexFromLeaseStart(leaseStart, month, year);
         if (monthIndex < 0) return false;
         const billingMonths = RentalAccrualService.countBillingMonths(leaseStart, leaseEnd);
@@ -145,11 +142,12 @@ class RentalAccrualService {
     static calculateProratedRent(residence, room, leaseStartDate) {
         const cfg = residence?.paymentConfiguration?.rentProration || {};
         const enabled = cfg.enabled === true;
-        const startDate = new Date(leaseStartDate);
-        const year = startDate.getFullYear();
-        const month = startDate.getMonth();
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
-        const startDay = startDate.getDate();
+        const cal = getCalendarParts(leaseStartDate);
+        if (!cal) return room.price;
+        const year = cal.year;
+        const monthIndex = cal.month - 1;
+        const daysInMonth = new Date(Date.UTC(year, cal.month, 0)).getUTCDate();
+        const startDay = cal.day;
         const daysRemaining = daysInMonth - startDay + 1;
 
         if (!enabled) {
@@ -176,7 +174,7 @@ class RentalAccrualService {
                 {
                     let businessDays = 0;
                     for (let d = startDay; d <= daysInMonth; d++) {
-                        const wd = new Date(year, month, d).getDay();
+                        const wd = new Date(Date.UTC(year, monthIndex, d)).getUTCDay();
                         if (wd !== 0 && wd !== 6) businessDays++;
                     }
                     // Derive rate so that businessDays * rate ~= monthly price
@@ -581,11 +579,12 @@ class RentalAccrualService {
             
             // 🚫 PREVENT FUTURE MONTH LEASE STARTS: Only create lease starts for current or past months
             const now = new Date();
-            const leaseStartDate = new Date(application.startDate);
+            const leaseStartDate = parseCalendarDate(application.startDate);
+            const leaseStartCal = getCalendarParts(leaseStartDate);
             const currentMonth = now.getMonth() + 1;
             const currentYear = now.getFullYear();
-            const leaseStartMonth = leaseStartDate.getMonth() + 1;
-            const leaseStartYear = leaseStartDate.getFullYear();
+            const leaseStartMonth = leaseStartCal.month;
+            const leaseStartYear = leaseStartCal.year;
             
             // Check if lease starts in a future month
             if (leaseStartYear > currentYear || (leaseStartYear === currentYear && leaseStartMonth > currentMonth)) {
@@ -603,9 +602,9 @@ class RentalAccrualService {
             
             // 🆕 ENHANCED: Comprehensive duplicate detection for lease starts
             // Check by multiple criteria to prevent duplicates from any source
-            const leaseStartDateStr = leaseStartDate.toISOString().split('T')[0]; // YYYY-MM-DD
-            const leaseStartDayStart = new Date(leaseStartDateStr);
-            const leaseStartDayEnd = new Date(new Date(leaseStartDayStart).setDate(leaseStartDayStart.getDate() + 1));
+            const leaseStartDateStr = toCalendarIso(leaseStartDate); // YYYY-MM-DD
+            const leaseStartDayStart = parseCalendarDate(leaseStartDateStr);
+            const leaseStartDayEnd = new Date(leaseStartDayStart.getTime() + 24 * 60 * 60 * 1000);
             
             // Build comprehensive duplicate check array
             const duplicateChecks = [
@@ -789,10 +788,11 @@ class RentalAccrualService {
             }
             
             // Calculate prorated rent for start month
-            const startDate = new Date(application.startDate);
-            const endDate = new Date(application.endDate);
-            const daysInMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
-            const startDay = startDate.getDate();
+            const startDate = parseCalendarDate(application.startDate);
+            const endDate = parseCalendarDate(application.endDate);
+            const startCal = getCalendarParts(startDate);
+            const daysInMonth = new Date(Date.UTC(startCal.year, startCal.month, 0)).getUTCDate();
+            const startDay = startCal.day;
             const proratedDays = daysInMonth - startDay + 1;
             
             // Calculate prorated rent using residence proration config
@@ -1050,8 +1050,9 @@ class RentalAccrualService {
                     room: application.allocatedRoom,
                     type: 'lease_start',
                     leaseStartDate: application.startDate,
-                    accrualMonth: startDate.getMonth() + 1, // Add accrual month
-                    accrualYear: startDate.getFullYear(), // Add accrual year
+                    month: `${startCal.year}-${String(startCal.month).padStart(2, '0')}`,
+                    accrualMonth: startCal.month,
+                    accrualYear: startCal.year,
                     proratedRent,
                     adminFee,
                     securityDeposit,
@@ -1146,12 +1147,14 @@ class RentalAccrualService {
             
             // 🆕 AUTO-BACKFILL: If lease started in the past, create missing monthly accruals
             // Reuse variables already declared at the top of the function
-            const leaseStartDateForBackfill = new Date(application.startDate);
-            const leaseStartMonthForBackfill = leaseStartDateForBackfill.getMonth() + 1;
-            const leaseStartYearForBackfill = leaseStartDateForBackfill.getFullYear();
-            const leaseEndDateForBackfill = new Date(application.endDate);
-            const leaseEndMonthForBackfill = leaseEndDateForBackfill.getMonth() + 1;
-            const leaseEndYearForBackfill = leaseEndDateForBackfill.getFullYear();
+            const leaseStartDateForBackfill = parseCalendarDate(application.startDate);
+            const leaseStartPartsForBackfill = getCalendarParts(leaseStartDateForBackfill);
+            const leaseStartMonthForBackfill = leaseStartPartsForBackfill.month;
+            const leaseStartYearForBackfill = leaseStartPartsForBackfill.year;
+            const leaseEndDateForBackfill = parseCalendarDate(application.endDate);
+            const leaseEndPartsForBackfill = getCalendarParts(leaseEndDateForBackfill);
+            const leaseEndMonthForBackfill = leaseEndPartsForBackfill.month;
+            const leaseEndYearForBackfill = leaseEndPartsForBackfill.year;
             
             // Check if lease started in a past month (not current month)
             if (leaseStartYearForBackfill < currentYear || (leaseStartYearForBackfill === currentYear && leaseStartMonthForBackfill < currentMonth)) {

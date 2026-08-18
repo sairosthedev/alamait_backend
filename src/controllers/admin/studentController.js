@@ -24,6 +24,10 @@ const ExcelJS = require('exceljs');
 const StudentDeletionService = require('../../services/studentDeletionService');
 const { getStudentInfo } = require('../../utils/studentUtils');
 const { findOverlappingApprovedApplication, isLeasePeriodFullyEnded } = require('../../utils/leaseOverlapUtils');
+const { parseSlashDateToIso, parseCalendarDate, parseUploadCalendarDate, getCalendarParts, toCalendarIso, isEquivalentLeaseWindow } = require('../../utils/calendarDate');
+
+/** Alias used throughout upload handlers */
+const parseUploadDate = (value, role = 'start') => parseUploadCalendarDate(value, role);
 
 /**
  * Normalize one tenant/student upload row so CSV + Excel headers both work.
@@ -115,29 +119,11 @@ function normalizeTenantUploadRow(raw = {}) {
         return undefined;
     };
 
-    const toDateStr = (value) => {
+    const toDateStr = (value, role = 'start') => {
         if (value === undefined || value === null || value === '') return undefined;
-        if (value instanceof Date && !Number.isNaN(value.getTime())) {
-            return value.toISOString().split('T')[0];
-        }
-        const stringValue = String(value).trim();
-        if (stringValue.includes('/')) {
-            const parts = stringValue.split('/');
-            if (parts.length === 3) {
-                // Prefer DD/MM/YYYY (Zimbabwe); if first part > 12 treat as day-first already handled;
-                // also accept MM/DD/YYYY when month <= 12
-                const a = parts[0].padStart(2, '0');
-                const b = parts[1].padStart(2, '0');
-                const year = parts[2];
-                // If first segment > 12, must be DD/MM/YYYY
-                if (parseInt(parts[0], 10) > 12) {
-                    return `${year}-${b}-${a}`;
-                }
-                // Default MM/DD/YYYY for backward compatibility with existing Excel path
-                return `${year}-${a}-${b}`;
-            }
-        }
-        return stringValue;
+        const parsed = parseUploadCalendarDate(value, role);
+        if (!parsed) return String(value).trim();
+        return toCalendarIso(parsed);
     };
 
     let firstName = pick('firstName', 'firstname', 'first name', 'givenname', 'given name');
@@ -160,8 +146,8 @@ function normalizeTenantUploadRow(raw = {}) {
         monthlyRent = raw.room.price;
     }
     const status = pick('status');
-    const startDate = toDateStr(pick('startDate', 'startdate', 'lease start', 'leasestart', 'start'));
-    const endDate = toDateStr(pick('endDate', 'enddate', 'lease end', 'leaseend', 'end'));
+    const startDate = toDateStr(pick('startDate', 'startdate', 'lease start', 'leasestart', 'start'), 'start');
+    const endDate = toDateStr(pick('endDate', 'enddate', 'lease end', 'leaseend', 'end'), 'end');
     const emergencyContact = pick('emergencyContact', 'emergencycontact', 'emergency');
 
     if (!email && !firstName && !lastName) return null;
@@ -1623,8 +1609,8 @@ exports.manualAddStudent = async (req, res) => {
         // Parse and validate dates first (needed for residence payment preview)
         let parsedStartDate, parsedEndDate;
         try {
-            parsedStartDate = new Date(startDate);
-            parsedEndDate = new Date(endDate);
+            parsedStartDate = parseCalendarDate(startDate);
+            parsedEndDate = parseCalendarDate(endDate);
             
             if (isNaN(parsedStartDate.getTime())) {
                 return res.status(400).json({ error: 'Invalid start date format' });
@@ -2426,8 +2412,12 @@ exports.uploadCsvStudents = async (req, res) => {
                 }
 
                 // Parse dates first (needed for shared-room date capacity)
-                const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
-                const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+                const startDate = row.startDate
+                    ? parseUploadDate(row.startDate, 'start')
+                    : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : new Date());
+                const endDate = row.endDate
+                    ? parseUploadDate(row.endDate, 'end')
+                    : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : new Date());
 
                 if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     results.failed.push({
@@ -2511,6 +2501,88 @@ exports.uploadCsvStudents = async (req, res) => {
                         endDate
                     );
                     if (conflict) {
+                        const leaseMatch = isEquivalentLeaseWindow(
+                            conflict.startDate,
+                            conflict.endDate,
+                            startDate,
+                            endDate
+                        );
+                        if (leaseMatch.equivalent) {
+                            console.log(`♻️ Same lease window already exists for ${row.email} (${conflict.applicationCode}) — ensuring debtor & accruals`);
+                            if (!leaseMatch.exact) {
+                                await Application.updateOne(
+                                    { _id: conflict._id },
+                                    {
+                                        $set: {
+                                            startDate,
+                                            endDate,
+                                            preferredRoom: roomNumber || conflict.preferredRoom,
+                                            allocatedRoom: roomNumber || conflict.allocatedRoom
+                                        }
+                                    }
+                                );
+                                const startCal = getCalendarParts(startDate);
+                                const monthKey = `${startCal.year}-${String(startCal.month).padStart(2, '0')}`;
+                                const TransactionEntry = require('../../models/TransactionEntry');
+                                await TransactionEntry.updateMany(
+                                    {
+                                        'metadata.applicationId': conflict._id,
+                                        'metadata.type': 'lease_start',
+                                        status: { $ne: 'reversed' }
+                                    },
+                                    {
+                                        $set: {
+                                            date: startDate,
+                                            'metadata.month': monthKey,
+                                            'metadata.accrualMonth': startCal.month,
+                                            'metadata.accrualYear': startCal.year
+                                        }
+                                    }
+                                );
+                                console.log(`   📅 Corrected stored lease dates & accrual month → ${monthKey}`);
+                            }
+                            const Debtor = require('../../models/Debtor');
+                            let debtor = await Debtor.findOne({ user: existingUser._id });
+                            try {
+                                debtor = await createDebtorForStudent(existingUser, {
+                                    residenceId,
+                                    roomNumber,
+                                    createdBy: req.user._id,
+                                    application: conflict._id,
+                                    applicationCode: conflict.applicationCode,
+                                    startDate,
+                                    endDate,
+                                    roomPrice: monthlyRent,
+                                    isReapplication: true
+                                });
+                            } catch (debtorError) {
+                                console.error(`❌ Debtor ensure failed for ${row.email}:`, debtorError.message);
+                            }
+                            if (!results.applicationsForLeaseStart) {
+                                results.applicationsForLeaseStart = [];
+                            }
+                            const existingApp = await Application.findById(conflict._id);
+                            if (existingApp) {
+                                results.applicationsForLeaseStart.push(existingApp);
+                            }
+                            results.successful.push({
+                                row: rowNumber,
+                                studentId: existingUser._id,
+                                email: row.email,
+                                name: `${row.firstName} ${row.lastName}`,
+                                roomNumber,
+                                applicationCode: conflict.applicationCode,
+                                debtorCreated: !!debtor,
+                                reusedExistingApplication: true,
+                                datesCorrected: !leaseMatch.exact,
+                                message: leaseMatch.exact
+                                    ? 'Existing application reused; lease start will run if missing'
+                                    : 'Existing application dates corrected; accruals updated'
+                            });
+                            results.summary.totalSuccessful++;
+                            results.summary.totalStudents++;
+                            continue;
+                        }
                         results.failed.push({
                             row: rowNumber,
                             error: `Lease dates overlap an existing approved application (${conflict.applicationCode || conflict._id}).`,
@@ -2610,7 +2682,8 @@ exports.uploadCsvStudents = async (req, res) => {
                         applicationCode: application.applicationCode,
                         startDate: startDate,
                         endDate: endDate,
-                        roomPrice: monthlyRent
+                        roomPrice: monthlyRent,
+                        isReapplication: !!existingUser
                     });
                     
                     if (debtor) {
@@ -2756,23 +2829,34 @@ exports.uploadCsvStudents = async (req, res) => {
 
         // Fire-and-forget lease start (emails, accruals) — never block the HTTP response
         if (applicationsForLeaseStart.length > 0) {
+            const applicationIds = applicationsForLeaseStart.map((a) => a._id);
             setImmediate(async () => {
-                console.log(`\n🏠 === BACKGROUND LEASE START FOR ${applicationsForLeaseStart.length} CSV STUDENTS ===`);
+                console.log(`\n🏠 === BACKGROUND LEASE START FOR ${applicationIds.length} CSV STUDENTS ===`);
                 const RentalAccrualService = require('../../services/rentalAccrualService');
                 let leaseStartSuccessCount = 0;
                 let leaseStartErrorCount = 0;
-                for (const application of applicationsForLeaseStart) {
+                for (const applicationId of applicationIds) {
                     try {
+                        const application = await Application.findById(applicationId);
+                        if (!application) {
+                            console.error(`❌ Application ${applicationId} not found for lease start`);
+                            leaseStartErrorCount++;
+                            continue;
+                        }
                         console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}...`);
                         const accrualResult = await RentalAccrualService.processLeaseStart(application);
                         if (accrualResult && accrualResult.success) {
                             leaseStartSuccessCount++;
                         } else {
-                            console.log(`⚠️ Lease start warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || 'Unknown issue');
-                            leaseStartErrorCount++;
+                            console.log(`⚠️ Lease start warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || accrualResult?.message || 'Unknown issue');
+                            if (accrualResult?.skipped) {
+                                leaseStartSuccessCount++;
+                            } else {
+                                leaseStartErrorCount++;
+                            }
                         }
                     } catch (leaseStartError) {
-                        console.error(`❌ Lease start failed for ${application.firstName} ${application.lastName}:`, leaseStartError.message);
+                        console.error(`❌ Lease start failed for application ${applicationId}:`, leaseStartError.message);
                         leaseStartErrorCount++;
                     }
                 }
@@ -2983,14 +3067,11 @@ exports.uploadExcelStudents = async (req, res) => {
                     } else {
                         const stringValue = value.toString().trim();
                         
-                        // Handle date strings in MM/DD/YYYY format
+                        // Handle date strings in DD/MM/YYYY (Zimbabwe) or MM/DD/YYYY
                         if ((header === 'startdate' || header === 'enddate' || header === 'startDate' || header === 'endDate') && stringValue.includes('/')) {
-                            const parts = stringValue.split('/');
-                            if (parts.length === 3) {
-                                const month = parts[0].padStart(2, '0');
-                                const day = parts[1].padStart(2, '0');
-                                const year = parts[2];
-                                rowData[header] = `${year}-${month}-${day}`;
+                            const converted = parseSlashDateToIso(stringValue);
+                            if (converted) {
+                                rowData[header] = converted;
                                 console.log(`   📅 ${header}: ${stringValue} → ${rowData[header]} (converted date)`);
                             } else {
                                 rowData[header] = stringValue;
@@ -3068,8 +3149,12 @@ exports.uploadExcelStudents = async (req, res) => {
                 }
 
                 // Parse dates before capacity (shared rooms need date window)
-                const startDate = row.startDate || row.startdate || row.start_date ? new Date(row.startDate || row.startdate || row.start_date) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
-                const endDate = row.endDate || row.enddate || row.end_date ? new Date(row.endDate || row.enddate || row.end_date) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+                const startDate = row.startDate || row.startdate || row.start_date
+                    ? parseUploadDate(row.startDate || row.startdate || row.start_date, 'start')
+                    : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : new Date());
+                const endDate = row.endDate || row.enddate || row.end_date
+                    ? parseUploadDate(row.endDate || row.enddate || row.end_date, 'end')
+                    : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : new Date());
 
                 if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     results.failed.push({
@@ -3844,8 +3929,12 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                     console.log(`   - Current occupancy: ${roomData.currentOccupancy}/${roomData.capacity}`);
                     
                     // Shared rooms allowed in one upload (e.g. 2×BHM1, 3×BHM2) up to capacity
-                    const startDateForCap = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
-                    const endDateForCap = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+                    const startDateForCap = row.startDate
+                        ? parseUploadDate(row.startDate, 'start')
+                        : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : new Date());
+                    const endDateForCap = row.endDate
+                        ? parseUploadDate(row.endDate, 'end')
+                        : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : new Date());
                     const capacityCheck = await checkUploadRoomCapacity({
                         residenceId,
                         roomNumber: roomData.roomNumber,
@@ -3869,8 +3958,12 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                 }
                 
                 // Parse dates
-                const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
-                const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+                const startDate = row.startDate
+                    ? parseUploadDate(row.startDate, 'start')
+                    : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : new Date());
+                const endDate = row.endDate
+                    ? parseUploadDate(row.endDate, 'end')
+                    : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : new Date());
                 const monthlyRent = resolveUploadMonthlyRent(row, defaultMonthlyRent, roomData);
                 
                 if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
