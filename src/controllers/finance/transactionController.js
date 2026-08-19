@@ -3198,7 +3198,9 @@ class TransactionController {
                 createPaymentRecordForJournal,
                 detectStudentPaymentFromEntries
             } = require('../../services/journalPaymentRecordService');
+            const { resolveDebtorForCustomer } = require('../../services/journalExcelUploadService');
             const createdByUserId = await TransactionController.resolveUploadUserId(req);
+            const debtorCache = new Map();
             
             console.log('📁 Processing CSV upload for residence:', residence);
             
@@ -3299,6 +3301,36 @@ class TransactionController {
                         row.invoiceRowType === 'payment' ||
                         Boolean(paymentHint && (row.studentId || row.student || row.debtorId || row.customer || row.name));
 
+                    const customer = row.customer || row.name || row.studentName || null;
+                    let roomNumber = row.room || row.roomNumber || null;
+                    let studentId = row.studentId || row.student || null;
+                    let debtorId = row.debtorId || null;
+                    let accountCode = paymentHint?.accountCode || row.accountCode || null;
+
+                    if (isStudentPayment && customer) {
+                        const resolved = await resolveDebtorForCustomer(customer, {
+                            roomNumber,
+                            residenceId,
+                            cache: debtorCache
+                        });
+                        if (resolved.ok) {
+                            studentId = studentId || resolved.studentId;
+                            debtorId = debtorId || resolved.debtorId;
+                            accountCode = resolved.accountCode;
+                            if (!roomNumber && resolved.roomNumber) {
+                                roomNumber = resolved.roomNumber;
+                            }
+                            if (accountCode) {
+                                for (const e of validEntries) {
+                                    const code = String(e.account || '').trim();
+                                    if (/^1100/.test(code) && e.credit > 0) {
+                                        e.account = accountCode;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     const transactionEntry = new TransactionEntry({
                         transactionId,
                         date: txnDate,
@@ -3327,12 +3359,13 @@ class TransactionController {
                             balanced: true,
                             csvRow: rowNumber,
                             invoiceRowType: isStudentPayment ? 'payment' : undefined,
-                            customer: row.customer || row.name || row.studentName || null,
-                            studentId: row.studentId || row.student || null,
-                            debtorId: row.debtorId || null,
+                            customer,
+                            studentId,
+                            debtorId,
                             paymentType: row.paymentType || 'rent',
                             sheetName: row.sheetName || row.sheet || null,
-                            roomNumber: row.room || row.roomNumber || null
+                            roomNumber: roomNumber || null,
+                            accountCode
                         }
                     });
 
@@ -3345,14 +3378,14 @@ class TransactionController {
                                 transactionEntry,
                                 residenceId,
                                 createdByUserId,
-                                studentId: row.studentId || row.student,
-                                debtorId: row.debtorId,
-                                customer: row.customer || row.name || row.studentName,
-                                accountCode: paymentHint?.accountCode || row.accountCode,
+                                studentId,
+                                debtorId,
+                                customer,
+                                accountCode,
                                 paymentType: row.paymentType || 'rent',
                                 method: row.method || 'Cash',
                                 paymentMonth: row.paymentMonth,
-                                roomNumber: row.room || row.roomNumber,
+                                roomNumber,
                                 adminFee: Number(row.adminFee) || 0,
                                 rental: Number(row.rental || row.rent) || 0
                             });
@@ -4403,7 +4436,7 @@ class TransactionController {
                                 extraMeta: {
                                     invoiceRowType: row.type,
                                     customer: row.customer,
-                                    roomNumber: row.roomNumber,
+                                    roomNumber: row.roomNumber || resolvedDebtor.roomNumber || null,
                                     invoiceNumber: row.invoiceNumber,
                                     missingInvoiceNumber: Boolean(row.missingInvoiceNumber),
                                     sheetName: sheet.name,

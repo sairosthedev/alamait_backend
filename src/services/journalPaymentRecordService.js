@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const TransactionEntry = require('../models/TransactionEntry');
 const Debtor = require('../models/Debtor');
+const { lookupRoomForDebtor } = require('./journalExcelUploadService');
 
 function detectStudentPaymentFromEntries(entries = []) {
     const lines = entries.map((e) => ({
@@ -118,6 +119,21 @@ async function createPaymentRecordForJournal({
         );
     }
 
+    let resolvedRoomNumber =
+        roomNumber && String(roomNumber).trim() ? String(roomNumber).trim() : null;
+    if (!resolvedRoomNumber) {
+        let debtorDoc = null;
+        if (debtorId && mongoose.Types.ObjectId.isValid(debtorId)) {
+            debtorDoc = await Debtor.findById(debtorId).lean();
+        }
+        if (!debtorDoc) {
+            debtorDoc = await Debtor.findOne({ user: resolvedStudentId }).lean();
+        }
+        if (debtorDoc) {
+            resolvedRoomNumber = await lookupRoomForDebtor(debtorDoc, residenceId);
+        }
+    }
+
     const totalAmount = detected.amount;
     const txDate = transactionEntry.date || new Date();
     const month = paymentMonth || paymentMonthFromDate(txDate);
@@ -137,7 +153,7 @@ async function createPaymentRecordForJournal({
         user: resolvedStudentId,
         student: resolvedStudentId,
         residence: residenceId,
-        room: roomNumber || 'Not Assigned',
+        room: resolvedRoomNumber || 'Not Assigned',
         payments: paymentsBreakdown,
         totalAmount,
         paymentMonth: month,

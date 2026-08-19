@@ -749,6 +749,46 @@ async function getDebtorNameIndex(cache) {
  * Exact match first, then first+last ignoring middle names, then fuzzy spelling.
  * Caches by normalized name; reuses a debtor name index on the same cache Map.
  */
+/**
+ * Resolve room from debtor record or latest approved application for the student.
+ */
+async function lookupRoomForDebtor(debtor, residenceId = null) {
+    if (!debtor) return null;
+
+    const fromDebtor = String(debtor.roomNumber || '').trim();
+    if (fromDebtor && fromDebtor.toLowerCase() !== 'not assigned') {
+        return fromDebtor;
+    }
+
+    const Application = require('../models/Application');
+    const mongoose = require('mongoose');
+    const studentId = debtor.user;
+    if (!studentId) return null;
+
+    const query = {
+        student: studentId,
+        status: { $in: ['approved', 'active', 'Approved'] }
+    };
+    if (residenceId && mongoose.Types.ObjectId.isValid(residenceId)) {
+        query.residence = residenceId;
+    }
+
+    const app = await Application.findOne(query)
+        .sort({ updatedAt: -1 })
+        .select('allocatedRoom allocatedRoomDetails preferredRoom currentRoom')
+        .lean();
+
+    if (!app) return null;
+
+    const room =
+        app.allocatedRoomDetails?.roomNumber ||
+        app.allocatedRoom ||
+        app.preferredRoom ||
+        app.currentRoom;
+
+    return room ? String(room).trim() : null;
+}
+
 async function resolveDebtorForCustomer(customerName, { roomNumber = null, residenceId = null, cache = null } = {}) {
     const Debtor = require('../models/Debtor');
     const User = require('../models/User');
@@ -938,12 +978,18 @@ async function resolveDebtorForCustomer(customerName, { roomNumber = null, resid
     }
 
     const debtorDisplay = debtor.contactInfo?.name || matchedName || name;
+    const resolvedRoom =
+        roomNumber && String(roomNumber).trim()
+            ? String(roomNumber).trim()
+            : await lookupRoomForDebtor(debtor, residenceId);
+
     return finish({
         ok: true,
         debtor,
         studentId: debtor.user?.toString?.() || debtor.user,
         debtorId: debtor._id.toString(),
         accountCode,
+        roomNumber: resolvedRoom || null,
         matchMethod,
         matchedName: debtorDisplay,
         nameMatchedAs:
@@ -1222,6 +1268,7 @@ module.exports = {
     buildEntriesFromInvoiceRow,
     buildExcelPaymentDedupKey,
     resolveDebtorForCustomer,
+    lookupRoomForDebtor,
     scorePersonNameMatch,
     transactionSourceForInvoiceRow,
     isClassicJournalHeaders,
