@@ -3175,11 +3175,30 @@ class TransactionController {
     }
 
     /**
+     * Resolve Mongo user id for Payment.createdBy from auth req.
+     */
+    static async resolveUploadUserId(req) {
+        if (req.user?._id) return req.user._id;
+        if (req.user?.id) return req.user.id;
+        if (req.user?.email) {
+            const User = require('../../models/User');
+            const u = await User.findOne({ email: req.user.email }).select('_id').lean();
+            if (u?._id) return u._id;
+        }
+        return null;
+    }
+
+    /**
      * Upload CSV and create multiple transaction entries
      */
     static async uploadCsvTransactions(req, res) {
         try {
             const { csvData, residence, defaultDate } = req.body;
+            const {
+                createPaymentRecordForJournal,
+                detectStudentPaymentFromEntries
+            } = require('../../services/journalPaymentRecordService');
+            const createdByUserId = await TransactionController.resolveUploadUserId(req);
             
             console.log('📁 Processing CSV upload for residence:', residence);
             
@@ -3205,7 +3224,8 @@ class TransactionController {
                     totalSuccessful: 0,
                     totalFailed: 0,
                     totalDebits: 0,
-                    totalCredits: 0
+                    totalCredits: 0,
+                    totalPaymentRecords: 0
                 }
             };
             
@@ -3265,38 +3285,101 @@ class TransactionController {
                     const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
                     
                     // Create transaction entry
+                    const residenceId = residence._id || residence;
+                    const txnDate = row.date ? new Date(row.date) : (defaultDate ? new Date(defaultDate) : new Date());
+                    const paymentHint = detectStudentPaymentFromEntries(
+                        validEntries.map((e) => ({
+                            account: e.account,
+                            debit: e.debit,
+                            credit: e.credit
+                        }))
+                    );
+                    const isStudentPayment =
+                        row.source === 'payment' ||
+                        row.invoiceRowType === 'payment' ||
+                        Boolean(paymentHint && (row.studentId || row.student || row.debtorId || row.customer || row.name));
+
                     const transactionEntry = new TransactionEntry({
                         transactionId,
-                        date: row.date ? new Date(row.date) : (defaultDate ? new Date(defaultDate) : new Date()),
+                        date: txnDate,
                         description: row.description,
                         reference: row.reference || transactionId,
-                        entries: validEntries,
+                        entries: validEntries.map((e) => ({
+                            accountCode: e.account,
+                            accountName: e.accountName || e.account,
+                            accountType: e.accountType || 'asset',
+                            debit: e.debit,
+                            credit: e.credit,
+                            description: e.description || row.description
+                        })),
                         totalDebit,
                         totalCredit,
-                        source: 'manual',
+                        source: isStudentPayment ? 'payment' : 'manual',
                         sourceId: null,
                         sourceModel: 'TransactionEntry',
-                        residence: residence._id || residence,
+                        residence: residenceId,
                         createdBy: req.user.email,
                         metadata: {
-                            residenceId: residence._id || residence,
+                            residenceId,
                             residenceName: residence?.name || 'Unknown',
                             createdBy: req.user.email,
                             transactionType: 'manual_double_entry_csv',
                             balanced: true,
-                            csvRow: rowNumber
+                            csvRow: rowNumber,
+                            invoiceRowType: isStudentPayment ? 'payment' : undefined,
+                            customer: row.customer || row.name || row.studentName || null,
+                            studentId: row.studentId || row.student || null,
+                            debtorId: row.debtorId || null,
+                            paymentType: row.paymentType || 'rent',
+                            sheetName: row.sheetName || row.sheet || null,
+                            roomNumber: row.room || row.roomNumber || null
                         }
                     });
-                    
+
                     await transactionEntry.save();
-                    
+
+                    let paymentRecord = null;
+                    if (isStudentPayment && createdByUserId) {
+                        try {
+                            const { payment, created } = await createPaymentRecordForJournal({
+                                transactionEntry,
+                                residenceId,
+                                createdByUserId,
+                                studentId: row.studentId || row.student,
+                                debtorId: row.debtorId,
+                                customer: row.customer || row.name || row.studentName,
+                                accountCode: paymentHint?.accountCode || row.accountCode,
+                                paymentType: row.paymentType || 'rent',
+                                method: row.method || 'Cash',
+                                paymentMonth: row.paymentMonth,
+                                roomNumber: row.room || row.roomNumber,
+                                adminFee: Number(row.adminFee) || 0,
+                                rental: Number(row.rental || row.rent) || 0
+                            });
+                            paymentRecord = { paymentId: payment.paymentId, created };
+                            if (created) results.summary.totalPaymentRecords++;
+                        } catch (payErr) {
+                            results.failed.push({
+                                row: rowNumber,
+                                error: `Journal saved but payment record failed: ${payErr.message}`,
+                                data: row,
+                                transactionId: transactionEntry.transactionId
+                            });
+                            results.summary.totalFailed++;
+                            continue;
+                        }
+                    } else if (isStudentPayment && !createdByUserId) {
+                        console.warn(`CSV row ${rowNumber}: student payment journal without user id — skipped Payment record`);
+                    }
+
                     results.successful.push({
                         row: rowNumber,
                         transactionId: transactionEntry.transactionId,
                         description: transactionEntry.description,
                         totalDebit: transactionEntry.totalDebit,
                         totalCredit: transactionEntry.totalCredit,
-                        entryCount: validEntries.length
+                        entryCount: validEntries.length,
+                        paymentRecord
                     });
                     
                     results.summary.totalSuccessful++;
@@ -3398,7 +3481,9 @@ class TransactionController {
                     'Total debits must equal total credits for each transaction',
                     'Date format: YYYY-MM-DD',
                     'Account types: asset, liability, equity, revenue, expense',
-                    'Only one of debit or credit should have a value per entry'
+                    'Only one of debit or credit should have a value per entry',
+                    'Student payments (DR 1000 / CR 1100-*): include customer or studentId; a Payment record is created automatically',
+                    'Optional payment fields: studentId, debtorId, customer, paymentMonth, method, paymentType, room'
                 ]
             };
             
@@ -3644,9 +3729,13 @@ class TransactionController {
                 resolveSheetsToProcess,
                 detectAndParseSheet,
                 buildEntriesFromInvoiceRow,
+                buildExcelPaymentDedupKey,
+                isMonthSheetName,
+                normalizeSheetName,
                 resolveDebtorForCustomer,
                 transactionSourceForInvoiceRow
             } = require('../../services/journalExcelUploadService');
+            const { createPaymentRecordForJournal } = require('../../services/journalPaymentRecordService');
 
             if (!req.file || !req.file.buffer) {
                 return res.status(400).json({
@@ -3716,6 +3805,13 @@ class TransactionController {
                 });
             }
 
+            const monthSheetsInBatch = resolved.sheets.filter((s) => isMonthSheetName(s.name));
+            const singleMonthTabName =
+                monthSheetsInBatch.length === 1
+                    ? normalizeSheetName(monthSheetsInBatch[0].name)
+                    : null;
+            const createdByUserId = await TransactionController.resolveUploadUserId(req);
+
             const results = {
                 format: null,
                 mode,
@@ -3737,7 +3833,8 @@ class TransactionController {
                     totalLinkedToDebtor: 0,
                     totalUnmatchedStudents: 0,
                     totalDebits: 0,
-                    totalCredits: 0
+                    totalCredits: 0,
+                    totalPaymentRecords: 0
                 }
             };
 
@@ -3747,6 +3844,7 @@ class TransactionController {
             const allowDuplicates = String(req.body.allowDuplicates || '').toLowerCase() === 'true';
             const debtorCache = new Map();
             const seenJournalKeys = new Set();
+            const seenPaymentDedupKeys = new Set();
 
             const findExistingExcelDuplicate = async ({
                 journalKey,
@@ -3760,6 +3858,53 @@ class TransactionController {
                 // Same invoice payment/charge (real invoice #) + amount + type + residence
                 const ref = reference && String(reference).trim();
                 const isGeneratedRef = !ref || /MISSING-INV/i.test(ref) || /^EXCEL-/i.test(ref);
+
+                // Cross-format payment dedup: same tenant + amount + month/residence
+                if (
+                    !allowDuplicates &&
+                    extraMeta.invoiceRowType === 'payment' &&
+                    extraMeta.customer &&
+                    Number(totalDebit) > 0
+                ) {
+                    const dedupKey = buildExcelPaymentDedupKey({
+                        customer: extraMeta.customer,
+                        amount: totalDebit,
+                        date: date || defaultDate,
+                        sheetName: extraMeta.sheetName
+                    });
+                    const cust = String(extraMeta.customer).trim();
+                    const amt = Math.round(Number(totalDebit) * 100) / 100;
+                    const paymentBase = {
+                        status: { $ne: 'reversed' },
+                        residence: residenceId,
+                        totalDebit: amt,
+                        'metadata.invoiceRowType': 'payment',
+                        'metadata.customer': new RegExp(
+                            `^${cust.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+                            'i'
+                        )
+                    };
+                    if (dedupKey && dedupKey.includes('|tab:')) {
+                        const tab = dedupKey.split('|tab:')[1];
+                        orConditions.push({
+                            ...paymentBase,
+                            'metadata.sheetName': new RegExp(`^${tab}$`, 'i')
+                        });
+                    } else if (date) {
+                        const d = new Date(date);
+                        if (!Number.isNaN(d.getTime())) {
+                            const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
+                            const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+                            orConditions.push({
+                                ...paymentBase,
+                                date: { $gte: monthStart, $lte: monthEnd }
+                            });
+                        }
+                    } else {
+                        orConditions.push(paymentBase);
+                    }
+                }
+
                 if (!isGeneratedRef) {
                     const fingerprint = {
                         reference: ref,
@@ -3831,6 +3976,47 @@ class TransactionController {
                     }
                     seenJournalKeys.add(normalizedKey);
 
+                    if (
+                        extraMeta.invoiceRowType === 'payment' &&
+                        extraMeta.customer &&
+                        Number(totalDebit) > 0
+                    ) {
+                        const paymentDedupKey = buildExcelPaymentDedupKey({
+                            customer: extraMeta.customer,
+                            amount: totalDebit,
+                            date: date || defaultDate,
+                            sheetName: extraMeta.sheetName
+                        });
+                        if (paymentDedupKey) {
+                            if (seenPaymentDedupKeys.has(paymentDedupKey)) {
+                                const err = new Error(
+                                    `Duplicate blocked: payment for "${extraMeta.customer}" ($${totalDebit}) already in this upload`
+                                );
+                                err.code = 'DUPLICATE_JOURNAL';
+                                throw err;
+                            }
+                            seenPaymentDedupKeys.add(paymentDedupKey);
+                        }
+                        if (singleMonthTabName) {
+                            const name = String(extraMeta.customer || '')
+                                .trim()
+                                .toLowerCase()
+                                .replace(/[^a-z0-9]+/g, ' ')
+                                .replace(/\s+/g, ' ')
+                                .trim();
+                            const amt = (Math.round(Number(totalDebit) * 100) / 100).toFixed(2);
+                            const batchKey = `${name}|${amt}|batch:${singleMonthTabName}`;
+                            if (seenPaymentDedupKeys.has(batchKey)) {
+                                const err = new Error(
+                                    `Duplicate blocked: payment for "${extraMeta.customer}" ($${totalDebit}) already imported for ${monthSheetsInBatch[0].name}`
+                                );
+                                err.code = 'DUPLICATE_JOURNAL';
+                                throw err;
+                            }
+                            seenPaymentDedupKeys.add(batchKey);
+                        }
+                    }
+
                     const existing = await findExistingExcelDuplicate({
                         journalKey: normalizedKey,
                         reference: reference || `EXCEL-${normalizedKey}`,
@@ -3877,7 +4063,7 @@ class TransactionController {
                         residenceName,
                         createdBy: req.user?.email || 'system',
                         transactionType:
-                            format === 'invoice_payment'
+                            format === 'invoice_payment' || format === 'cash_receipt'
                                 ? 'manual_double_entry_excel_invoice'
                                 : 'manual_double_entry_excel',
                         balanced: true,
@@ -3891,6 +4077,37 @@ class TransactionController {
                 });
 
                 await transactionEntry.save();
+
+                let paymentRecord = null;
+                const isLinkedPayment =
+                    transactionSource === 'payment' &&
+                    (extraMeta.studentId || extraMeta.customer || extraMeta.debtorId);
+                if (isLinkedPayment && createdByUserId) {
+                    try {
+                        const { payment, created } = await createPaymentRecordForJournal({
+                            transactionEntry,
+                            residenceId,
+                            createdByUserId,
+                            studentId: extraMeta.studentId,
+                            debtorId: extraMeta.debtorId,
+                            customer: extraMeta.customer,
+                            accountCode: extraMeta.accountCode,
+                            paymentType: extraMeta.paymentType || 'rent',
+                            method: extraMeta.method || 'Cash',
+                            paymentMonth: extraMeta.paymentMonth,
+                            roomNumber: extraMeta.roomNumber,
+                            adminFee: Number(extraMeta.adminFee) || 0,
+                            rental: Number(extraMeta.rental) || 0
+                        });
+                        paymentRecord = { paymentId: payment.paymentId, created };
+                        if (created) results.summary.totalPaymentRecords++;
+                    } catch (payErr) {
+                        results.warnings.push(
+                            `${extraMeta.sheetName || 'sheet'} ${normalizedKey}: journal saved but payment record failed — ${payErr.message}`
+                        );
+                    }
+                }
+
                 const warning = extraMeta.missingInvoiceNumber
                     ? 'Missing Invoice Number — journal created with generated reference'
                     : null;
@@ -3909,6 +4126,7 @@ class TransactionController {
                     accountCode: extraMeta.accountCode || null,
                     missingInvoiceNumber: Boolean(extraMeta.missingInvoiceNumber),
                     linkedToDebtor: Boolean(extraMeta.debtorId),
+                    paymentRecord,
                     warning
                 });
                 if (extraMeta.missingInvoiceNumber) {
@@ -4180,7 +4398,7 @@ class TransactionController {
                                 reference: row.reference,
                                 date: row.date || parsed.reportingDate || defaultDate,
                                 entries,
-                                format: 'invoice_payment',
+                                format: parsed.format || 'invoice_payment',
                                 sourceOverride,
                                 extraMeta: {
                                     invoiceRowType: row.type,

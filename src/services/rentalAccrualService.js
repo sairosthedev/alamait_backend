@@ -61,9 +61,13 @@ class RentalAccrualService {
             return false;
         }
 
-        // Only charge countBillingMonths months from start (start month is lease_start / index 0).
         const monthIndex = RentalAccrualService.monthIndexFromLeaseStart(leaseStart, month, year);
         if (monthIndex < 0) return false;
+
+        // Month index 0 is always billed via lease_start, never monthly_rent_accrual.
+        if (monthIndex === 0) return false;
+
+        // Only charge countBillingMonths months from start (indices 1 .. billingMonths-1 via monthly accrual).
         const billingMonths = RentalAccrualService.countBillingMonths(leaseStart, leaseEnd);
         if (monthIndex >= billingMonths) {
             return false;
@@ -2069,43 +2073,27 @@ class RentalAccrualService {
     static async createStudentRentAccrual(student, month, year) {
         try {
             // Use UTC to ensure date is always the 1st of the month, not end of previous month
-            const monthStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
-            const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
-            
-            // Skip creating a monthly accrual for the lease start month
-            // The lease start month is handled by lease_start process, not monthly accrual
-            if (student && (student.startDate || student.leaseStartDate)) {
-                const leaseStartDate = new Date(student.startDate || student.leaseStartDate);
-                if (!isNaN(leaseStartDate)) {
-                    const leaseStartMonth = leaseStartDate.getMonth() + 1;
-                    const leaseStartYear = leaseStartDate.getFullYear();
-                    if (leaseStartMonth === month && leaseStartYear === year) {
-                        // Get residence to check rent proration configuration
-                        const { Residence } = require('../models/Residence');
-                        const residence = await Residence.findById(student.residence);
-                        
-                        if (residence && residence.paymentConfiguration && residence.paymentConfiguration.rentProration) {
-                            const prorationEnabled = residence.paymentConfiguration.rentProration.enabled;
-                            if (!prorationEnabled) {
-                                return { 
-                                    success: false, 
-                                    error: 'Lease start month handled by lease_start (full month charged). No monthly accrual needed when rent proration is disabled.' 
-                                };
-                            } else {
-                                return { 
-                                    success: false, 
-                                    error: 'Lease start month handled by lease_start (prorated). No monthly accrual needed.' 
-                                };
-                            }
-                        } else {
-                            return { 
-                                success: false, 
-                                error: 'Lease start month is always handled by lease_start. Skipping monthly accrual.' 
-                            };
-                        }
-                    }
+            const monthStart = new Date(Date.UTC(year, month - 1, 1, 12, 0, 0, 0));
+
+            if (student?.startDate && student?.endDate) {
+                if (!this.shouldAccrueMonthForLease(student.startDate, student.endDate, month, year)) {
+                    return {
+                        success: false,
+                        error: `Month ${month}/${year} is outside the billing window or covered by lease_start`
+                    };
+                }
+            } else if (student && (student.startDate || student.leaseStartDate)) {
+                const leaseStartDate = parseCalendarDate(student.startDate || student.leaseStartDate);
+                const startCal = getCalendarParts(leaseStartDate);
+                if (startCal && startCal.month === month && startCal.year === year) {
+                    return {
+                        success: false,
+                        error: 'Lease start month is always handled by lease_start. Skipping monthly accrual.'
+                    };
                 }
             }
+
+            const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
 
             // 🆕 ENHANCED: Comprehensive duplicate detection for monthly accruals
             // Multiple checks to prevent duplicates from any source or ID format

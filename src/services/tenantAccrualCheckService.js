@@ -354,6 +354,21 @@ class TenantAccrualCheckService {
                         }
                         
                         if (!existingAccrual) {
+                            if (!RentalAccrualService.shouldAccrueMonthForLease(
+                                application.startDate,
+                                application.endDate,
+                                month,
+                                year
+                            )) {
+                                console.log(`      ⏭️ Skipping ${month}/${year} — lease_start month or outside billing window`);
+                                month++;
+                                if (month > 12) {
+                                    month = 1;
+                                    year++;
+                                }
+                                continue;
+                            }
+
                             console.log(`      ⚠️ Monthly accrual missing for ${month}/${year} - will create`);
                             monthsMissing.push(`${month}/${year}`);
                             // Create missing monthly accrual

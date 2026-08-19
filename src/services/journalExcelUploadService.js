@@ -46,8 +46,28 @@ function toDate(v) {
     if (mdy) {
         let year = parseInt(mdy[3], 10);
         if (year < 100) year += 2000;
-        const d = new Date(year, parseInt(mdy[1], 10) - 1, parseInt(mdy[2], 10));
+        const p0 = parseInt(mdy[1], 10);
+        const p1 = parseInt(mdy[2], 10);
+        // D/M/Y (Zimbabwe) when first part > 12, else treat as M/D/Y
+        const day = p0 > 12 ? p0 : p1 > 12 ? p1 : p0;
+        const month = p0 > 12 ? p1 : p1 > 12 ? p0 : p1;
+        const d = new Date(year, month - 1, day);
         if (!Number.isNaN(d.getTime())) return d;
+    }
+    const dmyText = s.match(/^(\d{1,2})[-\/]([A-Za-z]{3})[-\/](\d{2,4})$/i);
+    if (dmyText) {
+        const months = {
+            jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+            jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+        };
+        const day = parseInt(dmyText[1], 10);
+        const mon = months[dmyText[2].toLowerCase().slice(0, 3)];
+        let year = parseInt(dmyText[3], 10);
+        if (year < 100) year += 2000;
+        if (mon != null && !Number.isNaN(day) && !Number.isNaN(year)) {
+            const d = new Date(year, mon, day);
+            if (!Number.isNaN(d.getTime())) return d;
+        }
     }
     const d = new Date(s);
     return Number.isNaN(d.getTime()) ? null : d;
@@ -78,28 +98,63 @@ function scoreHeaderRow(normalizedKeys) {
     if (normalizedKeys.some((k) => k.includes('account_code') || k === 'account' || k === 'code')) score += 5;
     if (normalizedKeys.some((k) => k.includes('debit'))) score += 3;
     if (normalizedKeys.some((k) => k.includes('credit'))) score += 3;
+    if (normalizedKeys.some((k) => k === 'dr')) score += 4;
+    if (normalizedKeys.some((k) => k === 'cr')) score += 4;
+    if (normalizedKeys.some((k) => k === 'date')) score += 3;
+    if (normalizedKeys.some((k) => k === 'name')) score += 3;
+    if (normalizedKeys.some((k) => k === 'narration' || k.includes('narration'))) score += 2;
     if (normalizedKeys.some((k) => k.startsWith('invoice') || k.includes('invoice'))) score += 4;
     if (normalizedKeys.some((k) => k.startsWith('custome') || k.includes('customer') || k.includes('student'))) score += 4;
     if (normalizedKeys.some((k) => k === 'rental' || k === 'rent')) score += 3;
     if (normalizedKeys.some((k) => k.startsWith('admin'))) score += 3;
     if (normalizedKeys.some((k) => k.startsWith('payment') || k === 'payment')) score += 3;
+    if (normalizedKeys.some((k) => k === 'amount' || k.includes('amount') || k.includes('paid') || k.includes('received'))) score += 3;
+    if (normalizedKeys.some((k) => k.includes('email'))) score += 2;
+    if (normalizedKeys.some((k) => k.includes('lease') || k.includes('start_date') || k.includes('end_date'))) score += 2;
+    if (normalizedKeys.some((k) => k === 'firstname' || k === 'lastname' || k === 'first_name')) score += 2;
     if (normalizedKeys.some((k) => k.startsWith('room'))) score += 2;
     if (joined.includes('current_date') || joined.includes('reporting_date')) score -= 2;
     return score;
 }
 
-function detectHeaderRow(sheet, maxScan = 15) {
-    let best = { rowNumber: 1, score: -1, headers: {} };
+function looksLikeDataHeaderRow(keys) {
+    if (!keys.length) return false;
+    const hasRealHeaders = keys.some(
+        (k) =>
+            k === 'date' ||
+            k === 'name' ||
+            k === 'dr' ||
+            k === 'cr' ||
+            k === 'customer' ||
+            k.includes('journal_key') ||
+            k.includes('account_code') ||
+            k.startsWith('invoice') ||
+            k === 'payment' ||
+            k === 'rental'
+    );
+    if (hasRealHeaders) return false;
+
+    let dataLike = 0;
+    for (const k of keys) {
+        if (/^\d+$/.test(k)) dataLike++;
+        else if (k.includes('_gmt_') || (k.includes('_202') && k.length > 12)) dataLike++;
+        else if (k.endsWith('_received') || k.includes('cash_received')) dataLike++;
+    }
+    return dataLike >= 1;
+}
+
+function detectHeaderRow(sheet, maxScan = 25) {
+    let best = { rowNumber: 1, score: -1, headers: {}, keys: [], format: null };
+    let bestScored = { rowNumber: 1, score: -1, headers: {}, keys: [] };
     const last = Math.min(maxScan, sheet.rowCount || maxScan);
-    for (let r = 1; r <= last; r++) {
-        const row = sheet.getRow(r);
+
+    const rowHeaders = (row) => {
         const headers = {};
         const keys = [];
         row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
             const key = normalizeHeader(cellRaw(cell));
             if (!key) return;
             keys.push(key);
-            // keep first occurrence; later duplicates get suffix
             if (headers[key] == null) headers[key] = colNumber;
             else {
                 let i = 2;
@@ -107,10 +162,44 @@ function detectHeaderRow(sheet, maxScan = 15) {
                 headers[`${key}_${i}`] = colNumber;
             }
         });
+        return { headers, keys };
+    };
+
+    for (let r = 1; r <= last; r++) {
+        const row = sheet.getRow(r);
+        const { headers, keys } = rowHeaders(row);
+        if (!keys.length) continue;
+        if (looksLikeDataHeaderRow(keys)) continue;
+
         const score = scoreHeaderRow(keys);
-        if (score > best.score) best = { rowNumber: r, score, headers, keys };
+        if (score > bestScored.score) {
+            bestScored = { rowNumber: r, score, headers, keys };
+        }
+
+        let format = null;
+        if (isClassicJournalHeaders(headers)) format = 'classic';
+        else if (isInvoicePaymentHeaders(headers)) format = 'invoice_payment';
+        else if (isCashReceiptHeaders(headers)) format = 'cash_receipt';
+        else if (isLedgerDateHeaders(headers)) format = 'ledger_date';
+
+        if (format && (format !== best.format || score > best.score)) {
+            best = { rowNumber: r, score, headers, keys, format };
+        }
     }
-    return best;
+
+    if (best.format) return best;
+    return { ...bestScored, format: null };
+}
+
+function isLedgerDateHeaders(headers) {
+    const hasDate = matchCol(headers, ['date', 'transaction_date', 'txn_date', 'payment_date', 'invoice_date']);
+    const hasCustomer = matchCol(headers, [
+        'customer', 'custome', 'customer_name', 'student', 'name', 'tenant', 'description'
+    ]);
+    const hasMoney =
+        collectPaymentCols(headers).length > 0 ||
+        matchCol(headers, ['amount', 'paid', 'received', 'rental', 'rent', 'total']);
+    return Boolean(hasDate && hasCustomer && hasMoney);
 }
 
 function matchCol(headers, candidates) {
@@ -125,11 +214,41 @@ function matchCol(headers, candidates) {
 }
 
 function collectPaymentCols(headers) {
-    // Prefer explicit payment / payment_2 / payment_3, else any key starting with payment in column order
     const paymentEntries = Object.entries(headers)
-        .filter(([k]) => k === 'payment' || /^payment_?\d*$/.test(k) || k.startsWith('payment'))
+        .filter(([k]) =>
+            k === 'payment' ||
+            /^payment_?\d*$/.test(k) ||
+            k.startsWith('payment') ||
+            k === 'amount' ||
+            k === 'amount_paid' ||
+            k === 'paid' ||
+            k === 'payment_amount' ||
+            k.startsWith('paid_') ||
+            k.includes('amount_paid') ||
+            k === 'received' ||
+            k === 'total_paid'
+        )
         .sort((a, b) => a[1] - b[1]);
     return paymentEntries.map(([, col]) => col);
+}
+
+/** Tenant/student CSV columns — wrong endpoint for journal upload */
+function isTenantUploadHeaders(headers) {
+    const hasEmail = matchCol(headers, ['email', 'e_mail', 'mail']);
+    const hasLease = matchCol(headers, [
+        'lease_start', 'lease_end', 'leasestart', 'leaseend',
+        'start_date', 'end_date', 'startdate', 'enddate'
+    ]);
+    const hasName = matchCol(headers, ['name', 'first_name', 'firstname', 'student', 'tenant']);
+    return Boolean(hasEmail && (hasLease || hasName));
+}
+
+function isCashReceiptHeaders(headers) {
+    const hasDate = matchCol(headers, ['date', 'transaction_date', 'txn_date', 'payment_date']);
+    const hasName = matchCol(headers, ['name', 'customer', 'student', 'tenant']);
+    const hasDr = matchCol(headers, ['dr', 'debit', 'debit_amount']);
+    const hasCr = matchCol(headers, ['cr', 'credit', 'credit_amount']);
+    return Boolean(hasDate && hasName && (hasDr || hasCr));
 }
 
 function isClassicJournalHeaders(headers) {
@@ -141,12 +260,35 @@ function isClassicJournalHeaders(headers) {
 }
 
 function isInvoicePaymentHeaders(headers) {
-    const hasCustomer = matchCol(headers, ['customer', 'custome', 'student', 'name', 'tenant']);
-    const hasRental = matchCol(headers, ['rental', 'rent']);
+    const hasCustomer = matchCol(headers, [
+        'customer', 'custome', 'customer_name', 'student', 'name', 'tenant', 'tenant_name',
+        'client', 'debtor', 'resident', 'occupant', 'payer', 'payor'
+    ]);
+    const hasRental = matchCol(headers, ['rental', 'rent', 'rent_amount', 'monthly_rent']);
     const hasPayment = collectPaymentCols(headers).length > 0;
-    const hasInvoice = matchCol(headers, ['invoice_date', 'invoice_d', 'invoice_number', 'invoice_n', 'invoice_no']);
-    const hasAdmin = matchCol(headers, ['admin_fee', 'admin_fe', 'admin']);
-    return Boolean(hasCustomer && (hasRental || hasAdmin || hasPayment || hasInvoice));
+    const hasInvoice = matchCol(headers, [
+        'invoice_date', 'invoice_d', 'inv_date', 'invoice_number', 'invoice_n', 'invoice_no', 'invoice_num', 'inv_no', 'invoice'
+    ]);
+    const hasAdmin = matchCol(headers, ['admin_fee', 'admin_fe', 'admin', 'adminfee']);
+    const hasAmount = matchCol(headers, ['total_amount', 'total_am', 'total', 'amount', 'paid', 'received']);
+    const hasMoney = hasRental || hasAdmin || hasPayment || hasInvoice || hasAmount;
+    if (hasCustomer && hasMoney) return true;
+    // Names often sit in column A with no header (headers start at Invoice # / Invoice Date)
+    const headerCols = new Set(Object.values(headers));
+    if (!hasCustomer && hasMoney && hasPayment && !headerCols.has(1)) return true;
+    return false;
+}
+
+function inferCustomerColumn(headers, col) {
+    if (col.customer) return;
+    const mapped = new Set(Object.values(col).filter(Boolean));
+    for (let c = 1; c <= 30; c++) {
+        if (mapped.has(c)) continue;
+        if (!Object.values(headers).includes(c)) {
+            col.customer = c;
+            return;
+        }
+    }
 }
 
 /**
@@ -211,9 +353,13 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
     const headers = headerInfo.headers;
     const col = {
         invoiceDate: matchCol(headers, ['invoice_date', 'invoice_d', 'inv_date']),
-        invoiceNumber: matchCol(headers, ['invoice_number', 'invoice_n', 'invoice_no', 'invoice_num', 'inv_no']),
+        invoiceNumber: matchCol(headers, [
+            'invoice_number', 'invoice_n', 'invoice_no', 'invoice_num', 'inv_no', 'invoice'
+        ]),
         roomNumber: matchCol(headers, ['room_number', 'room_nu', 'room_no', 'room']),
-        customer: matchCol(headers, ['customer', 'custome', 'student', 'name', 'tenant']),
+        customer: matchCol(headers, [
+            'customer', 'custome', 'student', 'name', 'tenant', 'client', 'debtor', 'resident'
+        ]),
         totalAmount: matchCol(headers, ['total_amount', 'total_am', 'total', 'amount']),
         rental: matchCol(headers, ['rental', 'rent', 'rent_amount']),
         adminFee: matchCol(headers, ['admin_fee', 'admin_fe', 'admin', 'adminfee']),
@@ -228,6 +374,8 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
         .sort((a, b) => a[1] - b[1])
         .map(([, c]) => c);
     if (!col.balanceIn && balanceCols[0]) col.balanceIn = balanceCols[0];
+
+    inferCustomerColumn(headers, col);
 
     if (!col.customer) {
         throw new Error('Invoice/payment sheet needs a Customer column');
@@ -300,7 +448,7 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
                 journalKey: `PAY-${sheetPrefix ? `${sheetPrefix}-` : ''}${baseKey}`,
                 description: `Payment received — ${label}`,
                 reference: invoiceNumber || `MISSING-INV-${sheetPrefix || 'SHEET'}-R${rowNumber}`,
-                date: reportingDate || invoiceDate || defaultDate,
+                date: invoiceDate || reportingDate || defaultDate,
                 rowNumber,
                 sheetName: sheetPrefix || null,
                 customer,
@@ -323,6 +471,64 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
             currentDate: findLabelDate(sheet, 'current_date'),
             reportingDate: reportingDate || findLabelDate(sheet, 'reporting_date')
         }
+    };
+}
+
+/**
+ * Cash receipt ledger: Date | Name | Narration | Dr | Cr
+ * Credit rows (e.g. "rental received") → tenant payment journals.
+ */
+function parseCashReceiptSheet(sheet, headerInfo, { defaultDate, mode = 'payments', sheetName = null }) {
+    const headers = headerInfo.headers;
+    const col = {
+        date: matchCol(headers, ['date', 'transaction_date', 'txn_date', 'payment_date']),
+        name: matchCol(headers, ['name', 'customer', 'student', 'tenant']),
+        narration: matchCol(headers, ['narration', 'description', 'memo', 'particulars', 'details']),
+        dr: matchCol(headers, ['dr', 'debit', 'debit_amount']),
+        cr: matchCol(headers, ['cr', 'credit', 'credit_amount'])
+    };
+    const get = (row, field) => (col[field] ? cellRaw(row.getCell(col[field])) : null);
+    const proposed = [];
+    const sheetPrefix = sheetName ? String(sheetName).trim() : '';
+
+    sheet.eachRow((row, rowNumber) => {
+        if (rowNumber <= headerInfo.rowNumber) return;
+
+        const customer = String(get(row, 'name') ?? '').trim();
+        const narration = String(get(row, 'narration') ?? '').trim();
+        const dr = toNumber(get(row, 'dr'));
+        const cr = toNumber(get(row, 'cr'));
+        const rowDate = toDate(get(row, 'date')) || defaultDate;
+
+        if (dr === 0 && cr === 0) return;
+
+        if ((mode === 'payments' || mode === 'both') && cr > 0) {
+            if (!customer) return;
+            proposed.push({
+                type: 'payment',
+                journalKey: `PAY-${sheetPrefix ? `${sheetPrefix}-` : ''}R${rowNumber}`,
+                description: `Payment received — ${customer}${narration ? ` (${narration})` : ''}`,
+                reference: `EXCEL-${sheetPrefix || 'SHEET'}-R${rowNumber}`,
+                date: rowDate,
+                rowNumber,
+                sheetName: sheetPrefix || null,
+                customer,
+                roomNumber: null,
+                invoiceNumber: null,
+                missingInvoiceNumber: true,
+                rental: cr,
+                adminFee: 0,
+                paymentTotal: cr,
+                payments: [cr]
+            });
+        }
+    });
+
+    return {
+        format: 'cash_receipt',
+        sheetName: sheetPrefix || sheet.name,
+        proposed,
+        meta: {}
     };
 }
 
@@ -786,10 +992,30 @@ function isMonthSheetName(name) {
     const n = normalizeSheetName(name);
     if (!n || SKIP_SHEET_NAMES.has(n)) return false;
     if (MONTH_ABBR.includes(n) || MONTH_NAMES.includes(n)) return true;
-    // e.g. Jan2026, July-2026, 2026-01
-    if (MONTH_ABBR.some((m) => n.startsWith(m)) || MONTH_NAMES.some((m) => n.startsWith(m))) return true;
+    // Jan2026, june2026, jul26 — month immediately followed by year digits only
     if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\d{2,4}$/.test(n)) return true;
+    if (/^(january|february|march|april|may|june|july|august|september|october|november|december)\d{2,4}$/.test(n)) return true;
     return false;
+}
+
+/** One payment per tenant + amount per month tab (or per calendar month). */
+function buildExcelPaymentDedupKey({ customer, amount, date, sheetName }) {
+    const name = String(customer || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!name || !amount) return null;
+    const amt = (Math.round(Number(amount) * 100) / 100).toFixed(2);
+    if (sheetName && isMonthSheetName(sheetName)) {
+        return `${name}|${amt}|tab:${normalizeSheetName(sheetName)}`;
+    }
+    const d = date ? new Date(date) : null;
+    if (d && !Number.isNaN(d.getTime())) {
+        return `${name}|${amt}|${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+    return `${name}|${amt}|sheet:${normalizeSheetName(sheetName || 'unknown')}`;
 }
 
 /**
@@ -811,6 +1037,12 @@ function listWorkbookSheets(workbook) {
                     } else if (isInvoicePaymentHeaders(headerInfo.headers)) {
                         parseable = true;
                         format = 'invoice_payment';
+                    } else if (isCashReceiptHeaders(headerInfo.headers)) {
+                        parseable = true;
+                        format = 'cash_receipt';
+                    } else if (isLedgerDateHeaders(headerInfo.headers)) {
+                        parseable = true;
+                        format = 'ledger_date';
                     }
                 }
             } catch (_) {
@@ -917,8 +1149,17 @@ function detectAndParseSheet(sheet, options = {}) {
     const headerInfo = detectHeaderRow(sheet);
 
     if (headerInfo.score < 3) {
+        if (isTenantUploadHeaders(headerInfo.headers)) {
+            throw new Error(
+                `Sheet "${sheetName}" looks like a tenant/student list (Name, Email, Lease Start/End). ` +
+                `Use Admin → Upload Students (CSV/Excel), not Finance → journal Excel upload.`
+            );
+        }
+        const cols = Object.keys(headerInfo.headers).filter(Boolean).join(', ') || '(no column headers found)';
         throw new Error(
-            `Sheet "${sheetName}": could not detect header row. Expected Customer / Rental / Payment (or classic journal) columns.`
+            `Sheet "${sheetName}": could not detect header row (columns seen: ${cols}). ` +
+            `For payments use: Customer, Payment (or Amount), optional Rental/Admin Fee/Invoice #. ` +
+            `For classic journals use: journal_key, description, account_code, debit, credit.`
         );
     }
 
@@ -936,7 +1177,7 @@ function detectAndParseSheet(sheet, options = {}) {
         };
     }
 
-    if (isInvoicePaymentHeaders(headerInfo.headers)) {
+    if (isInvoicePaymentHeaders(headerInfo.headers) || isLedgerDateHeaders(headerInfo.headers)) {
         return {
             ...parseInvoicePaymentSheet(sheet, headerInfo, {
                 defaultDate,
@@ -949,8 +1190,23 @@ function detectAndParseSheet(sheet, options = {}) {
         };
     }
 
+    if (isCashReceiptHeaders(headerInfo.headers)) {
+        return {
+            ...parseCashReceiptSheet(sheet, headerInfo, {
+                defaultDate,
+                mode,
+                sheetName
+            }),
+            headerRow: headerInfo.rowNumber,
+            reportingDate
+        };
+    }
+
+    const seenCols = Object.keys(headerInfo.headers).join(', ') || '(none)';
     throw new Error(
-        `Sheet "${sheetName}": unrecognized format. Supported: classic journals or Invoice/Customer/Rental/Payment columns.`
+        `Sheet "${sheetName}": unrecognized format (header row ${headerInfo.rowNumber}: ${seenCols}). ` +
+        `Supported: Customer/Invoice/Payment columns, Date/Name/Narration/Dr/Cr cash receipt, ` +
+        `or classic journal_key, account_code, debit, credit.`
     );
 }
 
@@ -964,10 +1220,14 @@ module.exports = {
     resolveSheetsToProcess,
     detectAndParseSheet,
     buildEntriesFromInvoiceRow,
+    buildExcelPaymentDedupKey,
     resolveDebtorForCustomer,
     scorePersonNameMatch,
     transactionSourceForInvoiceRow,
     isClassicJournalHeaders,
     isInvoicePaymentHeaders,
-    isMonthSheetName
+    isCashReceiptHeaders,
+    isTenantUploadHeaders,
+    isMonthSheetName,
+    normalizeSheetName
 };

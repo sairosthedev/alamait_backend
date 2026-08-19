@@ -12,7 +12,7 @@ const ExpiredStudent = require('../../models/ExpiredStudent');
 const EmailNotificationService = require('../../services/emailNotificationService');
 const Payment = require('../../models/Payment');
 const { getStudentInfo } = require('../../utils/studentUtils');
-const { toCalendarIso } = require('../../utils/calendarDate');
+const { toCalendarIso, toApiCalendarIso } = require('../../utils/calendarDate');
 const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
 
 // Get all applications with room status (paginated — never dump full collection)
@@ -80,9 +80,9 @@ exports.getApplications = async (req, res) => {
             requestType: app.requestType,
             status: app.status,
             paymentStatus: app.paymentStatus,
-            applicationDate: app.applicationDate ? toCalendarIso(app.applicationDate) : null,
-            startDate: app.startDate ? toCalendarIso(app.startDate) : null,
-            endDate: app.endDate ? toCalendarIso(app.endDate) : null,
+            applicationDate: app.applicationDate ? toApiCalendarIso(app.applicationDate) : null,
+            startDate: app.startDate ? toApiCalendarIso(app.startDate) : null,
+            endDate: app.endDate ? toApiCalendarIso(app.endDate) : null,
             preferredRoom: app.preferredRoom,
             alternateRooms: app.alternateRooms || [],
             currentRoom: app.currentRoom,
@@ -293,9 +293,9 @@ exports.getApplicationById = async (req, res) => {
             requestType: application.requestType,
             status: application.status,
             paymentStatus: application.paymentStatus,
-            applicationDate: toCalendarIso(application.applicationDate),
-            startDate: application.startDate ? toCalendarIso(application.startDate) : null,
-            endDate: application.endDate ? toCalendarIso(application.endDate) : null,
+            applicationDate: toApiCalendarIso(application.applicationDate),
+            startDate: application.startDate ? toApiCalendarIso(application.startDate) : null,
+            endDate: application.endDate ? toApiCalendarIso(application.endDate) : null,
             preferredRoom: application.preferredRoom,
             alternateRooms: application.alternateRooms || [],
             currentRoom: application.currentRoom,

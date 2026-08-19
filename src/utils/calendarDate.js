@@ -149,6 +149,12 @@ function toCalendarIso(value) {
     return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
 }
 
+/** ISO datetime at UTC noon — safe for JSON APIs (avoids US TZ showing previous day on date-only strings). */
+function toApiCalendarIso(value) {
+    const iso = toCalendarIso(value);
+    return iso ? `${iso}T12:00:00.000Z` : null;
+}
+
 /** Same lease window exactly, or ±1 day (timezone off-by-one on stored dates). */
 function isEquivalentLeaseWindow(startA, endA, startB, endB) {
     const isoAStart = toCalendarIso(startA);
@@ -185,5 +191,6 @@ module.exports = {
     SLASH_DATE_RE,
     getCalendarParts,
     toCalendarIso,
+    toApiCalendarIso,
     isEquivalentLeaseWindow
 };

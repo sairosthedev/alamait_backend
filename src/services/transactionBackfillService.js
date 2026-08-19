@@ -2,6 +2,7 @@ const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
 const DebtorTransactionSyncService = require('./debtorTransactionSyncService');
 const DebtorDataSyncService = require('./debtorDataSyncService');
+const { parseCalendarDate, getCalendarParts, calendarDateUtc } = require('../utils/calendarDate');
 
 /**
  * Calculate prorated rent for the first month
@@ -222,8 +223,12 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
         
         // Get financial data from debtor
         const monthlyRent = debtor.roomPrice || debtor.financialBreakdown?.monthlyRent || 500;
-        const startDate = debtor.startDate || debtor.billingPeriod?.startDate || new Date();
-        const endDate = debtor.endDate || debtor.billingPeriod?.endDate || new Date(new Date().setMonth(new Date().getMonth() + 6));
+        const startDate = parseCalendarDate(debtor.startDate || debtor.billingPeriod?.startDate || new Date());
+        const endDate = parseCalendarDate(debtor.endDate || debtor.billingPeriod?.endDate || startDate);
+        const startCal = getCalendarParts(startDate);
+        const monthKeyForLeaseStart = startCal
+            ? `${startCal.year}-${String(startCal.month).padStart(2, '0')}`
+            : null;
         const applicationCode = debtor.applicationCode || 'MANUAL';
         
         // Get residence and payment configuration
@@ -291,11 +296,12 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 		
 		// 🚫 PREVENT FUTURE MONTH LEASE STARTS: Only create lease starts for current or past months
 		const now = new Date();
-		const leaseStartDate = new Date(startDate);
+		const leaseStartDate = parseCalendarDate(startDate);
+		const leaseStartParts = getCalendarParts(leaseStartDate);
 		const currentMonth = now.getMonth() + 1;
 		const currentYear = now.getFullYear();
-		const leaseStartMonth = leaseStartDate.getMonth() + 1;
-		const leaseStartYear = leaseStartDate.getFullYear();
+		const leaseStartMonth = leaseStartParts?.month;
+		const leaseStartYear = leaseStartParts?.year;
 		
 		// Check if lease starts in a future month
 		const isFutureMonth = leaseStartYear > currentYear || (leaseStartYear === currentYear && leaseStartMonth > currentMonth);
@@ -400,7 +406,9 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 					studentName: `${debtor.user.firstName} ${debtor.user.lastName}`,
 					residenceId: debtor.residence?._id,
 					residenceName: debtor.residence?.name || 'Unknown Residence',
-					month: startDate.toISOString().substring(0, 7) // YYYY-MM format
+					month: monthKeyForLeaseStart,
+					accrualMonth: startCal?.month,
+					accrualYear: startCal?.year
 				}
 			});
             
@@ -483,7 +491,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 			if (!existingMonthlyAccrual) {
             const monthlyAccrualTransaction = new TransactionEntry({
                 transactionId: `MONTHLY_ACCRUAL_${monthKey}_${applicationCode}_${Date.now()}`,
-					date: new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0)), // Use UTC to ensure date is always the 1st of the month
+					date: calendarDateUtc(year, month, 1),
 					description: `Monthly rent accrual for ${debtor.user.firstName} ${debtor.user.lastName} - ${monthKey}`,
                 reference: `MONTHLY_ACCRUAL_${monthKey}_${applicationCode}`,
                 entries: [
