@@ -37,6 +37,67 @@ function clearTxnListCache() {
 }
 
 /**
+ * Resolve index of a line inside TransactionEntry.entries from various ID formats:
+ * - subdocument _id
+ * - `{parentId}_{index}` (stable UI id)
+ * - `{parentId}_{accountCode}` (legacy UI id)
+ * - `{parentId}_debit` / `{parentId}_credit` (legacy flattened ids)
+ */
+function resolveSubEntryIndex(entries, entryId, parentId) {
+    if (!Array.isArray(entries) || !entries.length || !entryId) return -1;
+
+    const idStr = String(entryId);
+    const parentStr = String(parentId);
+
+    let idx = entries.findIndex((e) => e._id && String(e._id) === idStr);
+    if (idx !== -1) return idx;
+
+    const parentPrefix = `${parentStr}_`;
+    if (idStr.startsWith(parentPrefix)) {
+        const suffix = idStr.slice(parentPrefix.length);
+
+        if (/^\d+$/.test(suffix)) {
+            const i = parseInt(suffix, 10);
+            if (i >= 0 && i < entries.length) return i;
+        }
+
+        if (suffix && suffix !== 'undefined') {
+            idx = entries.findIndex((e) => {
+                const code = String(e.accountCode || e.account || '').trim();
+                return code === suffix;
+            });
+            if (idx !== -1) return idx;
+
+            if (suffix === 'debit') {
+                idx = entries.findIndex((e) => (e.debit || 0) > 0);
+                if (idx !== -1) return idx;
+            }
+            if (suffix === 'credit') {
+                idx = entries.findIndex((e) => (e.credit || 0) > 0);
+                if (idx !== -1) return idx;
+            }
+        }
+
+        if (suffix === 'undefined') {
+            const missingCode = entries
+                .map((e, i) => ({ e, i }))
+                .filter(({ e }) => !e.accountCode && !e.account);
+            if (missingCode.length === 1) return missingCode[0].i;
+        }
+    }
+
+    idx = entries.findIndex((e) => {
+        const code = String(e.accountCode || e.account || '').trim();
+        return code && code === idStr;
+    });
+    return idx;
+}
+
+function isCompositeEntryIdForParent(entryId, parentId) {
+    return String(entryId).startsWith(`${String(parentId)}_`);
+}
+
+/**
  * Transaction Controller
  * 
  * Handles automatic creation of transaction entries for all financial operations
@@ -1578,11 +1639,61 @@ class TransactionController {
             // Store original data for audit
             const originalData = transactionEntry.toObject();
             
-            // Find the entry within the entries array
-            const entryIndex = transactionEntry.entries.findIndex(
-                entry => entry._id.toString() === entryId
+            // Find the entry within the entries array (supports subdoc _id and legacy composite UI ids)
+            let entryIndex = resolveSubEntryIndex(
+                transactionEntry.entries,
+                entryId,
+                id
             );
-            
+
+            // Legacy UI ids like `{parentId}_undefined` cannot identify a single line — delete whole journal
+            if (entryIndex === -1 && isCompositeEntryIdForParent(entryId, id)) {
+                console.log(
+                    `⚠️ Could not resolve sub-entry "${entryId}" — deleting entire transaction entry ${id}`
+                );
+
+                const DeletionLogService = require('../../services/deletionLogService');
+                try {
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntry',
+                        documentId: id,
+                        deletedData: originalData,
+                        deletedBy: userId,
+                        reason: 'Could not resolve flattened entry id; entire transaction deleted.',
+                        context: 'delete_entry_cascade',
+                        metadata: {
+                            transactionId: transactionEntry.transactionId,
+                            requestedEntryId: entryId,
+                            reason: 'Composite entry id could not be mapped to a sub-entry',
+                            deletionType: 'cascade_delete_entire_transaction'
+                        },
+                        session: session
+                    });
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for transaction entry (${id}):`, logError.message);
+                }
+
+                await TransactionEntry.findByIdAndDelete(id).session(session);
+
+                const Transaction = require('../../models/Transaction');
+                await Transaction.findOneAndDelete({ transactionId: transactionEntry.transactionId }).session(
+                    session
+                );
+
+                await session.commitTransaction();
+
+                return res.status(200).json({
+                    success: true,
+                    message:
+                        'Could not identify individual line (legacy entry id). Entire transaction entry deleted instead.',
+                    deletedEntireTransaction: true,
+                    data: {
+                        deletedTransactionEntry: originalData,
+                        reason: `Entry id "${entryId}" could not be matched to a journal line`
+                    }
+                });
+            }
+
             if (entryIndex === -1) {
                 await session.abortTransaction();
                 return res.status(404).json({

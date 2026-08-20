@@ -21,10 +21,12 @@ exports.getAllTransactions = async (req, res) => {
     ]);
 
     const transactionsWithEntries = transactionEntries.map(entry => {
-      const transformedEntries = (entry.entries || []).map(entryItem => ({
-        _id: `${entry._id}_${entryItem.accountCode}`,
+      const transformedEntries = (entry.entries || []).map((entryItem, idx) => {
+        const accountCode = entryItem.accountCode || entryItem.account;
+        return {
+        _id: entryItem._id?.toString?.() || `${entry._id}_${idx}`,
         account: {
-          code: entryItem.accountCode,
+          code: accountCode,
           name: entryItem.accountName,
           type: entryItem.accountType
         },
@@ -32,7 +34,8 @@ exports.getAllTransactions = async (req, res) => {
         credit: entryItem.credit || 0,
         type: entryItem.accountType,
         date: entry.date
-      }));
+      };
+      });
 
       return {
         _id: entry._id,
