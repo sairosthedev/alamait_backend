@@ -7,7 +7,7 @@ const SimpleBalanceSheetService = require('../services/simpleBalanceSheetService
 const Account = require('../models/Account');
 const { validateToken } = require('../middleware/auth');
 const cacheService = require('../services/cacheService');
-const { financialCacheKey, TTL } = require('../utils/financialCache');
+const { financialCacheKey, TTL, getOrSetReport } = require('../utils/financialCache');
 
 function isReportDebugMode() {
     return process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
@@ -585,29 +585,19 @@ class FinancialReportsController {
             }
 
             const cacheKey = financialCacheKey('income-statement', { period, basis, residence: residence || null });
-            const cached = cacheService.get(cacheKey);
-            if (cached) {
-                return res.json({
-                    success: true,
-                    data: cached,
-                    cached: true,
-                    message: `Income statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
-                });
-            }
-            
-            let incomeStatement;
-            if (residence) {
-                incomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
-            } else {
-                incomeStatement = await FinancialReportingService.generateIncomeStatement(period, basis);
-            }
+            const cachedBefore = cacheService.get(cacheKey);
 
-            cacheService.set(cacheKey, incomeStatement, TTL.REPORT);
-            
+            const incomeStatement = await getOrSetReport(cacheKey, TTL.REPORT, async () => {
+                if (residence) {
+                    return FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
+                }
+                return FinancialReportingService.generateIncomeStatement(period, basis);
+            });
+
             res.json({
                 success: true,
                 data: incomeStatement,
-                cached: false,
+                cached: cachedBefore !== null,
                 message: `Income statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
@@ -754,36 +744,22 @@ class FinancialReportsController {
                         const monthExpenses = monthData.total_expenses || 0;
                         const monthNetIncome = monthRevenue - monthExpenses;
                         
-                        // Separate rental income from admin income based on account codes
-                        let rentalIncome = 0;
-                        let adminIncome = 0;
-                        
-                        if (monthData.revenue) {
-                            // Look for account codes in the revenue object keys
-                            Object.keys(monthData.revenue).forEach(key => {
-                                if (key.includes('4001') || key.includes('Rental')) {
-                                    rentalIncome += monthData.revenue[key] || 0;
-                                } else if (key.includes('4002') || key.includes('Administrative') || key.includes('Admin')) {
-                                    adminIncome += monthData.revenue[key] || 0;
+                        // Separate rental income from admin income (avoid double-counting name + code keys)
+                        let rentalIncome = monthData.rental_total ?? 0;
+                        let adminIncome = monthData.admin_total ?? 0;
+
+                        if (rentalIncome === 0 && adminIncome === 0 && monthData.revenue) {
+                            Object.entries(monthData.revenue).forEach(([key, amount]) => {
+                                if (key.startsWith('4001 - ')) {
+                                    rentalIncome += amount || 0;
+                                } else if (key.startsWith('4002 - ')) {
+                                    adminIncome += amount || 0;
                                 }
                             });
-                            
-                            // If no specific account codes found, try to parse from the revenue object structure
-                            if (rentalIncome === 0 && adminIncome === 0 && monthRevenue > 0) {
-                                // Fallback: check if there are any revenue entries
-                                console.log(`🔍 Month ${month} revenue structure:`, monthData.revenue);
-                                // For now, assume all revenue is rental income if we can't determine the type
-                                rentalIncome = monthRevenue;
-                            }
-                            
-                            // Debug: Log account breakdown for months with revenue
-                            if (monthRevenue > 0) {
-                                console.log(`📊 Month ${month} (${monthData.month}) Revenue Breakdown:`);
-                                console.log(`  Total Revenue: $${monthRevenue.toFixed(2)}`);
-                                console.log(`  Rental Income (4001): $${rentalIncome.toFixed(2)}`);
-                                console.log(`  Admin Income (4002): $${adminIncome.toFixed(2)}`);
-                                console.log(`  All Revenue Accounts:`, Object.keys(monthData.revenue).map(code => `${code}: $${monthData.revenue[code].toFixed(2)}`));
-                            }
+                        }
+
+                        if (rentalIncome === 0 && adminIncome === 0 && monthRevenue > 0) {
+                            rentalIncome = monthRevenue;
                         }
                         
                         monthlyData[month] = {

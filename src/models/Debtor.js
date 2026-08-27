@@ -1121,10 +1121,9 @@ debtorSchema.index({ status: 1, currentBalance: -1, residence: 1 });
 debtorSchema.index({ 'contactInfo.email': 1 });
 debtorSchema.index({ 'contactInfo.name': 1 });
 
-// Pre-save middleware to update timestamps
-debtorSchema.pre('save', function(next) {
+// Pre-save middleware to update timestamps (Mongoose 7+ — no next callback)
+debtorSchema.pre('save', function() {
   this.updatedAt = new Date();
-  next();
 });
 
 // Static method to generate debtor code

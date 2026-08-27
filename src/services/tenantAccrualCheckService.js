@@ -1167,6 +1167,21 @@ class TenantAccrualCheckService {
             // Iterate through expected months
             while (checkYear < endCheckYear || (checkYear === endCheckYear && checkMonth <= endCheckMonth)) {
                 const monthKey = `${checkYear}-${String(checkMonth).padStart(2, '0')}`;
+
+                if (!RentalAccrualService.shouldAccrueMonthForLease(
+                    application.startDate,
+                    application.endDate,
+                    checkMonth,
+                    checkYear
+                )) {
+                    checkMonth++;
+                    if (checkMonth > 12) {
+                        checkMonth = 1;
+                        checkYear++;
+                    }
+                    continue;
+                }
+
                 validation.monthlyAccruals.expected.push(monthKey);
                 
                 // Check for existing accrual

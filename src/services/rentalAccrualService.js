@@ -37,7 +37,11 @@ class RentalAccrualService {
         const start = getCalendarParts(leaseStart);
         const end = getCalendarParts(leaseEnd);
         if (!start || !end) return 1;
-        const diff = (end.year - start.year) * 12 + (end.month - start.month);
+        let diff = (end.year - start.year) * 12 + (end.month - start.month);
+        // Include the end month for monthly billing when lease runs past early-leave cutoff.
+        if (end.day > RentalAccrualService.END_MONTH_CUTOFF_DAY) {
+            diff += 1;
+        }
         return Math.max(1, diff);
     }
 
@@ -49,6 +53,30 @@ class RentalAccrualService {
         const start = getCalendarParts(leaseStart);
         if (!start) return 0;
         return (year - start.year) * 12 + (month - start.month);
+    }
+
+    /** Posted reversal that voids an accrual (e.g. wrongful left-early cleanup). */
+    static async isAccrualVoidedByReversal(accrualId) {
+        if (!accrualId) return false;
+        const idStr = accrualId.toString();
+        const idCandidates = [idStr];
+        if (mongoose.Types.ObjectId.isValid(idStr)) {
+            idCandidates.push(new mongoose.Types.ObjectId(idStr));
+        }
+        const reversal = await TransactionEntry.findOne({
+            status: 'posted',
+            'metadata.originalAccrualId': { $in: idCandidates },
+            $or: [
+                { description: { $regex: /reversal/i } },
+                { source: 'rental_accrual_reversal' }
+            ]
+        }).select('_id').lean();
+        return !!reversal;
+    }
+
+    static async existingAccrualBlocksCreate(existingAccrual) {
+        if (!existingAccrual?._id) return false;
+        return !(await RentalAccrualService.isAccrualVoidedByReversal(existingAccrual._id));
     }
 
     static shouldAccrueMonthForLease(leaseStart, leaseEnd, month, year) {
@@ -2070,13 +2098,13 @@ class RentalAccrualService {
      * 🆕 ENHANCED: Create rent accrual for a specific student
      * Now handles full month rent (not prorated) and excludes admin fees
      */
-    static async createStudentRentAccrual(student, month, year) {
+    static async createStudentRentAccrual(student, month, year, options = {}) {
         try {
             // Use UTC to ensure date is always the 1st of the month, not end of previous month
             const monthStart = new Date(Date.UTC(year, month - 1, 1, 12, 0, 0, 0));
 
             if (student?.startDate && student?.endDate) {
-                if (!this.shouldAccrueMonthForLease(student.startDate, student.endDate, month, year)) {
+                if (!options.forceAccrue && !this.shouldAccrueMonthForLease(student.startDate, student.endDate, month, year)) {
                     return {
                         success: false,
                         error: `Month ${month}/${year} is outside the billing window or covered by lease_start`
@@ -2111,8 +2139,27 @@ class RentalAccrualService {
                     // Otherwise use student.student directly (could be ObjectId or string)
                     studentIdValue = student.student;
                 }
-            } else if (student._id) {
-                // Fallback to application ID if student ID is not available
+            }
+
+            if (!studentIdValue && student.debtor) {
+                const Debtor = require('../models/Debtor');
+                const debtorDoc = await Debtor.findById(student.debtor).select('user').lean();
+                const debtorUserId = debtorDoc?.user?.toString();
+                if (debtorUserId && debtorUserId !== student.application?.toString()) {
+                    studentIdValue = debtorDoc.user;
+                }
+            }
+
+            if (!studentIdValue && student.application) {
+                const Application = require('../models/Application');
+                const appDoc = await Application.findById(student.application).select('student').lean();
+                if (appDoc?.student) {
+                    studentIdValue = appDoc.student;
+                }
+            }
+
+            if (!studentIdValue && student._id && !student.applicationCode) {
+                // Legacy fallback — only when payload looks like a User, not Application
                 studentIdValue = student._id;
             }
             
@@ -2146,8 +2193,10 @@ class RentalAccrualService {
             });
             
             if (existingAccrualExact) {
-                console.log(`   ⚠️ Monthly accrual already exists (metadata check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingAccrualExact._id}, created: ${existingAccrualExact.createdAt})`);
-                return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrualExact._id };
+                if (await RentalAccrualService.existingAccrualBlocksCreate(existingAccrualExact)) {
+                    console.log(`   ⚠️ Monthly accrual already exists (metadata check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingAccrualExact._id}, created: ${existingAccrualExact.createdAt})`);
+                    return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrualExact._id };
+                }
             }
             
             // Check 2: By sourceId + date (catches duplicates with same lease ID and date)
@@ -2160,8 +2209,10 @@ class RentalAccrualService {
             });
             
             if (existingBySourceId) {
-                console.log(`   ⚠️ Monthly accrual already exists (sourceId + date check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingBySourceId._id}, sourceId: ${sourceId})`);
-                return { success: false, error: 'Accrual already exists for this lease and month', existingTransaction: existingBySourceId._id };
+                if (await RentalAccrualService.existingAccrualBlocksCreate(existingBySourceId)) {
+                    console.log(`   ⚠️ Monthly accrual already exists (sourceId + date check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingBySourceId._id}, sourceId: ${sourceId})`);
+                    return { success: false, error: 'Accrual already exists for this lease and month', existingTransaction: existingBySourceId._id };
+                }
             }
             
             // 🆕 Check 2.5: By debtor ID + month + year (if debtor ID available)
@@ -2179,8 +2230,10 @@ class RentalAccrualService {
                 });
                 
                 if (existingByDebtorId) {
-                    console.log(`   ⚠️ Monthly accrual already exists (debtor ID check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingByDebtorId._id}, debtorId: ${debtorIdForCheck})`);
-                    return { success: false, error: 'Accrual already exists for this debtor and month', existingTransaction: existingByDebtorId._id };
+                    if (await RentalAccrualService.existingAccrualBlocksCreate(existingByDebtorId)) {
+                        console.log(`   ⚠️ Monthly accrual already exists (debtor ID check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingByDebtorId._id}, debtorId: ${debtorIdForCheck})`);
+                        return { success: false, error: 'Accrual already exists for this debtor and month', existingTransaction: existingByDebtorId._id };
+                    }
                 }
             }
             
@@ -2192,8 +2245,10 @@ class RentalAccrualService {
             });
             
             if (existingByDescription) {
-                console.log(`   ⚠️ Monthly accrual already exists (description check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingByDescription._id})`);
-                return { success: false, error: 'Accrual already exists (description match)', existingTransaction: existingByDescription._id };
+                if (await RentalAccrualService.existingAccrualBlocksCreate(existingByDescription)) {
+                    console.log(`   ⚠️ Monthly accrual already exists (description check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingByDescription._id})`);
+                    return { success: false, error: 'Accrual already exists (description match)', existingTransaction: existingByDescription._id };
+                }
             }
             
             // Check 4: Also check using the general method as a backup
@@ -2207,8 +2262,10 @@ class RentalAccrualService {
             );
             
             if (existingAccrual) {
-                console.log(`   ⚠️ Monthly accrual already exists (general check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingAccrual._id})`);
-                return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrual._id };
+                if (await RentalAccrualService.existingAccrualBlocksCreate(existingAccrual)) {
+                    console.log(`   ⚠️ Monthly accrual already exists (general check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingAccrual._id})`);
+                    return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrual._id };
+                }
             }
             
             // Get residence and room details for pricing
@@ -2225,7 +2282,9 @@ class RentalAccrualService {
             }
             
             // Full month rent (admin fee was already accrued at lease start)
-            const rentAmount = room.price;
+            const rentAmount = options.rentAmount != null
+                ? Math.round(Number(options.rentAmount) * 100) / 100
+                : room.price;
             
             console.log(`   ${student.firstName} ${student.lastName}: $${rentAmount} rent for ${month}/${year}`);
             console.log(`   📅 Month start date: ${monthStart.toISOString()}`);
@@ -2477,7 +2536,8 @@ class RentalAccrualService {
                 ]
             });
             
-            if (finalDuplicateCheck) {
+            if (finalDuplicateCheck
+                && await RentalAccrualService.existingAccrualBlocksCreate(finalDuplicateCheck)) {
                 console.log(`   ⚠️ Final duplicate check: Accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} - aborting`);
                 console.log(`   Existing transaction ID: ${finalDuplicateCheck._id}, created: ${finalDuplicateCheck.createdAt}`);
                 // Clean up the transaction we created
@@ -2512,7 +2572,10 @@ class RentalAccrualService {
                     rentAmount,
                     levies: monthlyLevies,
                     totalAmount: totalEntryAmount,
-                    ...(debtorIdForCheck ? { debtorId: debtorIdForCheck } : {})
+                    ...(debtorIdForCheck ? { debtorId: debtorIdForCheck } : {}),
+                    ...(student.application
+                        ? { applicationId: student.application.toString?.() || String(student.application) }
+                        : {})
                 }
             });
             

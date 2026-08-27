@@ -29,18 +29,10 @@ router.use(checkRole('admin', 'finance_admin', 'finance_user', 'ceo'));
 router.get('/find-issues', AccrualCorrectionController.findIncorrectAccruals);
 
 /**
- * Correct accruals for a student who left early
- * POST /api/finance/accrual-correction/correct
- * 
- * Request Body:
- * {
- *   "studentId": "application_id",
- *   "actualLeaseEndDate": "2025-10-31",
- *   "reason": "Student left early - lease ended in October",
- *   "updateLeaseEndDate": true  // Optional, defaults to true
- * }
+ * Correct accruals for a student who left early (admin only — updates lease end date).
+ * Prefer PUT /api/admin/leases/students/:studentId/lease which auto-reverses accruals.
  */
-router.post('/correct', AccrualCorrectionController.correctAccrualsForStudent);
+router.post('/correct', checkRole('admin'), AccrualCorrectionController.correctAccrualsForStudent);
 
 module.exports = router;
 

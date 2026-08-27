@@ -75,187 +75,33 @@ class IncomeStatementController {
             console.log(`🔍 Searching for transactions for account ${accountCode} in ${month} ${period}`);
             console.log(`📅 Date range: ${startOfMonth.toLocaleDateString()} to ${endOfMonth.toLocaleDateString()}`);
             
-            // Check if this is a parent account that should include child accounts
+            const calendarMonth = monthNumber + 1;
+            const { loadProcessedRentTransactionsForPeriod } = require('../../utils/incomeStatementRentUtils');
+
+            // Check if this is a parent account that should include child accounts (for display)
             const mainAccount = await Account.findOne({ code: accountCode });
             let childAccounts = [];
-            let allAccountCodes = [accountCode];
-            
+
             if (mainAccount && (accountCode.startsWith('400') || accountCode.startsWith('500'))) {
-                console.log(`🔗 Found parent account ${accountCode}, looking for child accounts...`);
-                
-                // Find child accounts for income or expense accounts
                 childAccounts = await Account.find({
                     parentAccount: mainAccount._id,
                     isActive: true,
                     type: mainAccount.type
                 }).select('code name type category');
-                
-                // Add child account codes to the search
-                allAccountCodes = [accountCode, ...childAccounts.map(child => child.code)];
-                
-                console.log(`📊 Found ${childAccounts.length} child accounts for ${accountCode}:`, 
-                    childAccounts.map(c => `${c.code} - ${c.name}`));
             }
-            
-            // Build comprehensive query for the specific month - handle ALL possible transaction structures
-            const query = {
-                $or: [
-                    // Actual transactions created in the month
-                    {
-                        date: { 
-                            $gte: startOfMonth,
-                            $lte: endOfMonth
-                        },
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // All transactions with accrual metadata for this month
-                    {
-                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
-                        'metadata.accrualYear': parseInt(period),
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // Transactions with monthSettled metadata (your payment structure)
-                    {
-                        'metadata.monthSettled': `${period}-${String(monthNumber + 1).padStart(2, '0')}`,
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // Rental accrual transactions for this month
-                    {
-                        source: 'rental_accrual',
-                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
-                        'metadata.accrualYear': parseInt(period),
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // Lease start transactions for this month (by metadata)
-                    {
-                        source: 'rental_accrual',
-                        'metadata.type': 'lease_start',
-                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
-                        'metadata.accrualYear': parseInt(period),
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // Lease start transactions for this month (by date and description)
-                    {
-                        source: 'rental_accrual',
-                        description: { $regex: /lease start/i },
-                        date: { 
-                            $gte: startOfMonth,
-                            $lte: endOfMonth
-                        },
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // Monthly rent accruals for this month (exclude wrong accrual month)
-                    {
-                        source: 'rental_accrual',
-                        'metadata.type': 'monthly_rent_accrual',
-                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
-                        'metadata.accrualYear': parseInt(period),
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // Any transaction with month metadata for this month (exclude wrong month metadata)
-                    {
-                        'metadata.month': `${period}-${String(monthNumber + 1).padStart(2, '0')}`,
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // Find original accruals that are referenced by adjustments (but only if they affect this month)
-                    {
-                        'metadata.originalAccrualId': { $exists: true },
-                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
-                        'metadata.accrualYear': parseInt(period),
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    },
-                    // Manual transactions (negotiated payments, adjustments, etc.) for this month
-                    {
-                        source: 'manual',
-                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
-                        'metadata.accrualYear': parseInt(period),
-                        status: 'posted',
-                        'entries.accountCode': { $in: allAccountCodes }
-                    }
-                ]
-            };
-            
-            // Skip the original accrual lookup for now to avoid including transactions from other months
-            // This ensures we only get transactions that directly affect the selected month
-            
-            if (residenceId) {
-                // Add residence filtering to each condition in the $or array
-                query.$or = query.$or.map(condition => ({
-                    ...condition,
-                    $or: [
-                        { residence: residenceId },
-                        { 'metadata.residenceId': residenceId },
-                        { 'metadata.residence': residenceId }
-                    ]
-                }));
-            }
-            
-            console.log(`📊 Income Statement Query:`, JSON.stringify(query, null, 2));
-            
-            // Find all relevant transactions
-            const transactions = await TransactionEntry.find(query)
-                .sort({ date: 1 })
-                .lean();
-            
-            // Filter out transactions with wrong month metadata
-            const filteredTransactions = transactions.filter(transaction => {
-                // For monthly accruals, check if the accrual month matches the requested month
-                if (transaction.metadata?.type === 'monthly_rent_accrual') {
-                    const accrualMonth = transaction.metadata?.accrualMonth;
-                    const accrualYear = transaction.metadata?.accrualYear;
-                    return accrualMonth === (monthNumber + 1) && accrualYear === parseInt(period);
-                }
-                
-                // For lease start transactions, check if they're in the requested month
-                // Lease start transactions can be identified by:
-                // 1. metadata.type === 'lease_start' with accrualMonth/accrualYear
-                // 2. metadata.type === 'lease_start' with date in the requested month
-                // 3. Description contains "Lease start" and date in the requested month
-                if (transaction.metadata?.type === 'lease_start' || 
-                    (transaction.description && transaction.description.toLowerCase().includes('lease start'))) {
-                    // Check if it has accrualMonth/accrualYear metadata
-                    if (transaction.metadata?.accrualMonth && transaction.metadata?.accrualYear) {
-                        const accrualMonth = transaction.metadata.accrualMonth;
-                        const accrualYear = transaction.metadata.accrualYear;
-                        return accrualMonth === (monthNumber + 1) && accrualYear === parseInt(period);
-                    }
-                    // Otherwise, check if the transaction date is in the requested month
-                    const transactionDate = new Date(transaction.date);
-                    const transactionYear = transactionDate.getFullYear();
-                    const transactionMonth = transactionDate.getMonth() + 1;
-                    return transactionYear === parseInt(period) && transactionMonth === (monthNumber + 1);
-                }
-                
-                // For negotiated payment adjustments, check if they're for the requested month
-                if (transaction.metadata?.transactionType === 'negotiated_payment_adjustment') {
-                    const accrualMonth = transaction.metadata?.accrualMonth;
-                    const accrualYear = transaction.metadata?.accrualYear;
-                    return accrualMonth === (monthNumber + 1) && accrualYear === parseInt(period);
-                }
-                
-                // For other transactions, include them if they're dated in the requested month
-                const transactionDate = new Date(transaction.date);
-                const transactionYear = transactionDate.getFullYear();
-                const transactionMonth = transactionDate.getMonth() + 1;
-                return transactionYear === parseInt(period) && transactionMonth === (monthNumber + 1);
-            });
-            
-            const processedTransactions = IncomeStatementController.removeReversalsAndCollapseNegotiations(
-                filteredTransactions,
+
+            const rentLedger = await loadProcessedRentTransactionsForPeriod({
+                month: calendarMonth,
+                year: parseInt(period, 10),
+                residenceId: residenceId || undefined,
                 accountCode
-            );
-            
-            console.log(`📈 Transactions for account ${accountCode} in ${month} ${period}: ${processedTransactions.length} after removing reversals/negotiations (original ${filteredTransactions.length})`);
-            
+            });
+
+            const allAccountCodes = rentLedger.accountCodes;
+            const processedTransactions = rentLedger.processedTransactions;
+
+            console.log(`📈 Transactions for account ${accountCode} in ${month} ${period}: ${processedTransactions.length} processed (${rentLedger.rawCount} raw, residence: ${residenceId || 'all'})`);
+
             // Extract account-specific transactions (including child accounts)
             const accountTransactions = [];
             let totalDebits = 0;
@@ -430,7 +276,8 @@ class IncomeStatementController {
                 totalTransactions: accountTransactions.length,
                 totalAmount: Math.abs(totalDebits - totalCredits),
                 totalDebits,
-                totalCredits,
+                totalCredits: isIncomeAccount ? runningBalance : totalCredits,
+                netRevenue: isIncomeAccount ? runningBalance : Math.abs(totalDebits - totalCredits),
                 finalBalance: runningBalance,
                 uniqueStudents: uniqueStudents.size,
                 dateRange: {
@@ -510,197 +357,34 @@ class IncomeStatementController {
         }
     }
 
-    /**
-     * Remove accrual reversals and merge negotiated adjustments so only net rent shows
-     */
     static removeReversalsAndCollapseNegotiations(transactions = [], accountCode) {
-        if (!Array.isArray(transactions) || transactions.length === 0) {
-            return [];
-        }
-
-        const accrualTransactions = new Map(); // accrualId -> accrual transaction
-        const negotiationAdjustments = new Map(); // accrualId -> [adjustments]
-        const reversalAccrualIds = new Set();
-        const remainingTransactions = [];
-
-        transactions.forEach(transaction => {
-            const txId = IncomeStatementController.getTransactionId(transaction);
-            const originalAccrualId = transaction?.metadata?.originalAccrualId
-                ? String(transaction.metadata.originalAccrualId)
-                : null;
-
-            if (IncomeStatementController.isReversalTransaction(transaction)) {
-                if (originalAccrualId) {
-                    reversalAccrualIds.add(originalAccrualId);
-                    console.log(`⛔️ Removing accrual ${originalAccrualId} due to reversal ${txId || transaction.transactionId}`);
-                }
-                return; // Skip reversal entries entirely
-            }
-
-            if (IncomeStatementController.isNegotiationAdjustment(transaction) && originalAccrualId) {
-                if (!negotiationAdjustments.has(originalAccrualId)) {
-                    negotiationAdjustments.set(originalAccrualId, []);
-                }
-                negotiationAdjustments.get(originalAccrualId).push(transaction);
-                console.log(`🤝 Captured negotiation adjustment ${txId} for accrual ${originalAccrualId}`);
-                return;
-            }
-
-            if (IncomeStatementController.isAccrualTransaction(transaction) && txId) {
-                accrualTransactions.set(txId, transaction);
-                return;
-            }
-
-            remainingTransactions.push(transaction);
-        });
-
-        // Process accruals after collecting adjustments and reversals
-        for (const [accrualId, accrualTransaction] of accrualTransactions.entries()) {
-            if (reversalAccrualIds.has(accrualId)) {
-                continue; // Skip accruals that were reversed
-            }
-
-            if (negotiationAdjustments.has(accrualId)) {
-                const merged = IncomeStatementController.mergeNegotiatedAccrual(
-                    accrualTransaction,
-                    negotiationAdjustments.get(accrualId),
-                    accountCode
-                );
-                if (merged) {
-                    remainingTransactions.push(merged);
-                }
-                negotiationAdjustments.delete(accrualId);
-            } else {
-                remainingTransactions.push(accrualTransaction);
-            }
-        }
-
-        // Edge case: negotiation adjustments referencing accruals that weren't in the result set
-        negotiationAdjustments.forEach(adjustments => {
-            adjustments.forEach(adj => remainingTransactions.push(adj));
-        });
-
-        // Preserve chronological order (ascending) before later processing
-        remainingTransactions.sort((a, b) => new Date(a.date) - new Date(b.date));
-
-        return remainingTransactions;
-    }
-
-    static getTransactionId(transaction) {
-        if (!transaction) return null;
-        if (transaction._id) return transaction._id.toString();
-        if (transaction.id) return transaction.id.toString();
-        if (transaction.transactionId) return transaction.transactionId;
-        return null;
-    }
-
-    static isAccrualTransaction(transaction = {}) {
-        const source = transaction.source || '';
-        const metadataType = transaction.metadata?.type || '';
-        return source === 'rental_accrual'
-            || metadataType === 'monthly_rent_accrual'
-            || metadataType === 'lease_start';
-    }
-
-    static isReversalTransaction(transaction = {}) {
-        const source = (transaction.source || '').toLowerCase();
-        const metadataType = (transaction.metadata?.type || '').toLowerCase();
-        const transactionType = (transaction.metadata?.transactionType || '').toLowerCase();
-        const description = (transaction.description || '').toLowerCase();
-
-        return source.includes('reversal')
-            || metadataType.includes('reversal')
-            || transactionType.includes('reversal')
-            || description.includes('reversal');
-    }
-
-    static isNegotiationAdjustment(transaction = {}) {
-        const transactionType = (transaction.metadata?.transactionType || '').toLowerCase();
-        const description = (transaction.description || '').toLowerCase();
-        return transactionType === 'negotiated_payment_adjustment'
-            || description.includes('negotiated payment')
-            || description.includes('negotiated rent')
-            || description.includes('negotiated discount');
+        const { removeReversalsAndCollapseNegotiations } = require('../../utils/incomeStatementRentUtils');
+        return removeReversalsAndCollapseNegotiations(transactions, accountCode);
     }
 
     static mergeNegotiatedAccrual(accrualTransaction, adjustmentTransactions = [], accountCode) {
-        if (!accrualTransaction) {
-            return null;
-        }
+        const { mergeNegotiatedAccrual } = require('../../utils/incomeStatementRentUtils');
+        return mergeNegotiatedAccrual(accrualTransaction, adjustmentTransactions, accountCode);
+    }
 
-        const mergedTransaction = {
-            ...accrualTransaction,
-            metadata: {
-                ...accrualTransaction.metadata,
-                negotiatedAdjustmentCount: adjustmentTransactions.length,
-                negotiatedDiscountTotal: 0,
-                negotiatedNetAmount: 0
-            },
-            entries: (accrualTransaction.entries || []).map(entry => ({ ...entry }))
-        };
+    static getTransactionId(transaction) {
+        const { getTransactionId } = require('../../utils/incomeStatementRentUtils');
+        return getTransactionId(transaction);
+    }
 
-        const adjustmentTotalsByAccount = new Map();
+    static isAccrualTransaction(transaction = {}) {
+        const { isAccrualTransaction } = require('../../utils/incomeStatementRentUtils');
+        return isAccrualTransaction(transaction);
+    }
 
-        adjustmentTransactions.forEach(adj => {
-            (adj.entries || []).forEach(entry => {
-                const key = entry.accountCode;
-                if (!key) return;
-                const netEffect = (entry.debit || 0) - (entry.credit || 0); // Debit positive, credit negative
-                adjustmentTotalsByAccount.set(key, (adjustmentTotalsByAccount.get(key) || 0) + netEffect);
-            });
-        });
+    static isReversalTransaction(transaction = {}) {
+        const { isReversalTransaction } = require('../../utils/incomeStatementRentUtils');
+        return isReversalTransaction(transaction);
+    }
 
-        mergedTransaction.entries = mergedTransaction.entries.map(entry => {
-            const adjustment = adjustmentTotalsByAccount.get(entry.accountCode);
-            if (!adjustment) {
-                return entry;
-            }
-
-            const adjustedEntry = { ...entry };
-            adjustedEntry.debit = adjustedEntry.debit || 0;
-            adjustedEntry.credit = adjustedEntry.credit || 0;
-
-            if (adjustment > 0) {
-                // Net debit adjustment reduces credit amounts first
-                if (adjustedEntry.credit >= adjustment) {
-                    adjustedEntry.credit -= adjustment;
-                } else {
-                    const remaining = adjustment - adjustedEntry.credit;
-                    adjustedEntry.credit = 0;
-                    adjustedEntry.debit += remaining;
-                }
-            } else if (adjustment < 0) {
-                // Net credit adjustment reduces debit amounts first
-                const creditAmount = Math.abs(adjustment);
-                if (adjustedEntry.debit >= creditAmount) {
-                    adjustedEntry.debit -= creditAmount;
-                } else {
-                    const remaining = creditAmount - adjustedEntry.debit;
-                    adjustedEntry.debit = 0;
-                    adjustedEntry.credit += remaining;
-                }
-            }
-
-            return adjustedEntry;
-        });
-
-        // Update metadata to show final negotiated amount for the requested account code
-        if (accountCode) {
-            const netEntry = mergedTransaction.entries.find(entry =>
-                entry.accountCode === accountCode || entry.accountCode?.startsWith(`${accountCode}-`)
-            );
-
-            if (netEntry) {
-                mergedTransaction.metadata.negotiatedNetAmount = (netEntry.credit || 0) - (netEntry.debit || 0);
-                mergedTransaction.description = `${mergedTransaction.description || ''} (Negotiated to $${mergedTransaction.metadata.negotiatedNetAmount || 0})`.trim();
-            }
-        }
-
-        mergedTransaction.metadata.negotiatedDiscountTotal = Array.from(adjustmentTotalsByAccount.values())
-            .filter(value => value > 0)
-            .reduce((sum, value) => sum + value, 0);
-
-        return mergedTransaction;
+    static isNegotiationAdjustment(transaction = {}) {
+        const { isNegotiationAdjustment } = require('../../utils/incomeStatementRentUtils');
+        return isNegotiationAdjustment(transaction);
     }
 
     /**

@@ -409,6 +409,14 @@ app.use('/api/admin/students', studentStatusRoutes);
 const adminPaymentAllocationRoutes = require('./routes/admin/paymentAllocationRoutes');
 app.use('/api/admin/payment-allocation', adminPaymentAllocationRoutes);
 
+// Billing discrepancy detection and automated repair
+const billingDiscrepancyRoutes = require('./routes/admin/billingDiscrepancyRoutes');
+app.use('/api/admin/billing-discrepancies', billingDiscrepancyRoutes);
+
+// Admin rent accrual reconciliation
+const adminRentAccrualReconciliationRoutes = require('./routes/admin/rentAccrualReconciliationRoutes');
+app.use('/api/admin/rent-accrual-reconciliation', adminRentAccrualReconciliationRoutes);
+
 // Admin dashboard routes
 app.use('/api/admin/dashboard', adminDashboardRoutes);
 app.use('/api/admin/performance', adminPerformanceRoutes);
@@ -501,6 +509,10 @@ app.use('/api/rental-accrual', rentalAccrualRoutes);
 // Accrual correction routes
 const accrualCorrectionRoutes = require('./routes/finance/accrualCorrectionRoutes');
 app.use('/api/finance/accrual-correction', accrualCorrectionRoutes);
+
+// Rent accrual reconciliation (missing lease_start / monthly accruals)
+const rentAccrualReconciliationRoutes = require('./routes/finance/rentAccrualReconciliationRoutes');
+app.use('/api/finance/rent-accrual-reconciliation', rentAccrualReconciliationRoutes);
 
 // Accounting routes (Accrual vs Cash Basis)
 const accountingRoutes = require('./routes/accountingRoutes');

@@ -24,19 +24,19 @@ router.get('/students/:studentId/lease',
     leaseController.getStudentLeaseInfo
 );
 
-// PUT /api/admin/students/:studentId/lease - Update student lease dates
+// PUT /api/admin/students/:studentId/lease - Update student lease dates (admin only)
 router.put('/students/:studentId/lease', 
     auth, 
-    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
+    checkRole('admin'), 
     validateStudentId, 
     validateLeaseDates, 
     leaseController.updateStudentLeaseDates
 );
 
-// PUT /api/admin/students/lease/bulk - Bulk update lease dates
+// PUT /api/admin/students/lease/bulk - Bulk update lease dates (admin only)
 router.put('/students/lease/bulk', 
     auth, 
-    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
+    checkRole('admin'), 
     validateBulkLeaseUpdates, 
     leaseController.bulkUpdateLeaseDates
 );

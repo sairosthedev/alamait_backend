@@ -338,10 +338,9 @@ const applicationSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Pre-save middleware to update timestamps
-applicationSchema.pre('save', function(next) {
+// Pre-save middleware to update timestamps (Mongoose 7+ — no next callback)
+applicationSchema.pre('save', function() {
     this.updatedAt = new Date();
-    next();
 });
 
 // Indexes for efficient queries

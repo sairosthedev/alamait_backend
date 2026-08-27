@@ -4,13 +4,18 @@ const Application = require('../models/Application');
 const DeletionLogService = require('./deletionLogService');
 const { createAuditLog } = require('../utils/auditLogger');
 const RentalAccrualService = require('./rentalAccrualService');
+const { getCalendarParts } = require('../utils/calendarDate');
 
 /**
  * Service to correct accruals for students who left early
  * Handles reversing accruals created for months after the actual lease end date
  */
 class AccrualCorrectionService {
-    
+    static calendarKey(parts) {
+        if (!parts) return null;
+        return parts.year * 10000 + parts.month * 100 + parts.day;
+    }
+
     /**
      * Find and reverse incorrect accruals for a student
      * Accruals are considered incorrect if they were created for months after the actual lease end date
@@ -57,10 +62,13 @@ class AccrualCorrectionService {
             let debtorIdString = null;
             if (actualStudentIdObj) {
                 debtor = await Debtor.findOne({ user: actualStudentIdObj }).session(session).lean();
-                if (debtor) {
-                    debtorIdString = debtor._id.toString();
-                    console.log(`   Found debtor: ${debtor.debtorCode} (ID: ${debtorIdString})`);
-                }
+            }
+            if (!debtor) {
+                debtor = await Debtor.findOne({ application: applicationIdObj }).session(session).lean();
+            }
+            if (debtor) {
+                debtorIdString = debtor._id.toString();
+                console.log(`   Found debtor: ${debtor.debtorCode} (ID: ${debtorIdString})`);
             }
             
             // Find all accrual transactions for this student - check multiple ID formats
@@ -134,7 +142,10 @@ class AccrualCorrectionService {
                 }).session(session).select('_id').lean();
                 
                 const allStudentDebtors = await Debtor.find({
-                    user: actualStudentIdObj
+                    $or: [
+                        ...(actualStudentIdObj ? [{ user: actualStudentIdObj }] : []),
+                        { application: applicationIdObj }
+                    ]
                 }).session(session).select('_id accountCode').lean();
                 
                 // Build comprehensive list of possible account codes
@@ -263,40 +274,43 @@ class AccrualCorrectionService {
                 }
                 
                 // Also check if it's a lease start transaction
-                const isLeaseStart = accrual.metadata?.type === 'lease_start' || 
-                                    (accrual.description && /lease start/i.test(accrual.description));
-                
-                // 🆕 CRITICAL: Check if lease was cancelled before it started
-                // If end date is before start date, the lease never actually started, so lease start should be reversed
-                const leaseStartDate = application.startDate ? new Date(application.startDate) : null;
-                const leaseWasCancelledBeforeStart = leaseStartDate && leaseEndDate < leaseStartDate;
-                
+                const isLeaseStart = accrual.metadata?.type === 'lease_start'
+                    || (accrual.description && /lease start/i.test(accrual.description));
+
+                const startParts = getCalendarParts(application.startDate);
+                const endParts = getCalendarParts(leaseEndDate);
+                const leaseCancelledOrZeroLength = startParts && endParts
+                    && AccrualCorrectionService.calendarKey(endParts) <= AccrualCorrectionService.calendarKey(startParts);
+
                 // Check if this accrual is for the lease start month
                 let isLeaseStartMonth = false;
-                if (leaseStartDate && isLeaseStart) {
-                    const startYear = leaseStartDate.getFullYear();
-                    const startMonth = leaseStartDate.getMonth() + 1;
-                    isLeaseStartMonth = (accrualYear === startYear && accrualMonth === startMonth);
+                if (startParts && isLeaseStart) {
+                    isLeaseStartMonth = accrualYear === startParts.year && accrualMonth === startParts.month;
                 }
-                
-                console.log(`  📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Covered by renewal: ${isCoveredByRenewedLease} | Is lease start: ${isLeaseStart} | Cancelled before start: ${leaseWasCancelledBeforeStart} | Is lease start month: ${isLeaseStartMonth}`);
-                
+
+                console.log(`  📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Covered by renewal: ${isCoveredByRenewedLease} | Is lease start: ${isLeaseStart} | Cancelled/zero-length: ${leaseCancelledOrZeroLength} | Is lease start month: ${isLeaseStartMonth}`);
+
                 // Determine if this accrual should be reversed
                 let shouldReverse = false;
                 let reversalReason = '';
-                
-                if (leaseWasCancelledBeforeStart && isLeaseStart && isLeaseStartMonth) {
-                    // 🆕 CRITICAL: If lease was cancelled before start, reverse the lease start accrual
+
+                if (isLeaseStart && isLeaseStartMonth && leaseCancelledOrZeroLength) {
                     shouldReverse = true;
-                    reversalReason = `Lease start accrual reversed - lease was cancelled before start date (end date ${leaseEndDate.toISOString().split('T')[0]} is before start date ${leaseStartDate.toISOString().split('T')[0]})`;
-                } else if (isAfterLeaseEnd && !isCoveredByRenewedLease && !isLeaseStart) {
-                    // Regular monthly accrual after lease end (but not lease start)
-                    shouldReverse = true;
-                    reversalReason = `Accrual for ${accrualMonth}/${accrualYear} is after lease end date (${leaseEndMonth}/${leaseEndYear}) and not covered by renewed lease`;
+                    reversalReason = 'Lease start accrual reversed — lease cancelled or zero-length (left early)';
+                } else if (!isLeaseStart && !isCoveredByRenewedLease) {
+                    const shouldAccrue = RentalAccrualService.shouldAccrueMonthForLease(
+                        application.startDate,
+                        leaseEndDate,
+                        accrualMonth,
+                        accrualYear
+                    );
+                    if (!shouldAccrue) {
+                        shouldReverse = true;
+                        reversalReason = `Accrual for ${accrualMonth}/${accrualYear} should not exist after lease end ${endParts?.year}-${endParts?.month}-${endParts?.day}`;
+                    }
                 } else if (isAfterLeaseEnd && !isCoveredByRenewedLease && isLeaseStart) {
-                    // Lease start that occurred after the (early) lease end date
                     shouldReverse = true;
-                    reversalReason = `Lease start accrual reversed - lease end date (${leaseEndDate.toISOString().split('T')[0]}) is before or same as accrual date`;
+                    reversalReason = `Lease start accrual reversed — after early lease end date`;
                 }
                 
                 if (shouldReverse) {
@@ -330,13 +344,17 @@ class AccrualCorrectionService {
                     console.log(`🔄 Checking accrual for reversal: ${accrual._id} (${accrualMonth}/${accrualYear})`);
                     
                     // 🆕 ENHANCED: Check if reversal already exists before creating
+                    const accrualIdStr = accrual._id.toString();
+                    const accrualIdObj = accrual._id;
                     const existingReversal = await TransactionEntry.findOne({
                         source: 'rental_accrual_reversal',
                         $or: [
-                            { 'metadata.originalAccrualId': accrual._id },
+                            { 'metadata.originalAccrualId': accrualIdStr },
+                            { 'metadata.originalAccrualId': accrualIdObj },
                             { 'metadata.originalTransactionId': accrual.transactionId },
-                            { sourceId: accrual._id },
-                            { reference: accrual._id.toString() }
+                            { sourceId: accrualIdObj },
+                            { sourceId: accrualIdStr },
+                            { reference: accrualIdStr }
                         ],
                         status: { $ne: 'deleted' }
                     }).session(session);
@@ -455,7 +473,7 @@ class AccrualCorrectionService {
                             modelName: 'TransactionEntry',
                             documentId: accrual._id,
                             deletedData: accrual.toObject(),
-                            deletedBy: adminUser._id,
+                            deletedBy: adminUser._id || adminUser.id,
                             reason: `Accrual correction: ${reason} - Accrual for ${accrualMonth}/${accrualYear} reversed`,
                             context: 'accrual_correction',
                             metadata: {
@@ -468,8 +486,7 @@ class AccrualCorrectionService {
                                 actualLeaseEndDate: leaseEndDate,
                                 correctionType: 'early_lease_end',
                                 reversalEntryId: reversalEntry._id
-                            },
-                            session: session
+                            }
                         });
                     } catch (logError) {
                         console.error(`⚠️ Error logging deletion for accrual ${accrual._id}:`, logError.message);
@@ -538,38 +555,17 @@ class AccrualCorrectionService {
                 }
             }
             
-            // 🆕 CRITICAL: Update debtor status if application is expired
-            if (applicationExpired && debtorIdString) {
-                try {
-                    // Fetch debtor document (not lean) so we can save it
-                    const Debtor = require('../models/Debtor');
-                    const debtorDoc = await Debtor.findById(debtorIdString).session(session);
-                    if (debtorDoc) {
-                        debtorDoc.status = 'expired';
-                        debtorDoc.isExpired = true;
-                        await debtorDoc.save({ session });
-                        console.log(`✅ Debtor ${debtorDoc.debtorCode} status updated to expired`);
-                    }
-                } catch (debtorError) {
-                    console.error(`⚠️ Error updating debtor status: ${debtorError.message}`);
+            // Defer debtor/room side effects until after commit (hooks cause write conflicts in txn)
+            const postCommitExpiry = applicationExpired
+                ? {
+                    applicationId: application._id,
+                    residence: application.residence,
+                    allocatedRoom: application.allocatedRoom,
+                    debtorId: debtorIdString,
+                    reason: reason || 'Lease ended early - student left'
                 }
-            }
-            
-            // 🆕 CRITICAL: Update room status if application is expired
-            if (applicationExpired && application.residence && application.allocatedRoom) {
-                try {
-                    const RoomStatusManager = require('../utils/roomStatusManager');
-                    const roomResult = await RoomStatusManager.updateRoomOnStatusChange(
-                        application._id,
-                        'expired',
-                        reason || 'Lease ended early - student left'
-                    );
-                    console.log(`✅ Room status updated: ${roomResult.success ? 'Success' : 'Failed'}`);
-                } catch (roomError) {
-                    console.error(`⚠️ Error updating room status: ${roomError.message}`);
-                }
-            }
-            
+                : null;
+
             // Log to audit trail
             try {
                 await createAuditLog({
@@ -602,6 +598,36 @@ class AccrualCorrectionService {
             }
             
             await session.commitTransaction();
+
+            if (postCommitExpiry) {
+                if (postCommitExpiry.debtorId) {
+                    try {
+                        const Debtor = require('../models/Debtor');
+                        const debtorDoc = await Debtor.findById(postCommitExpiry.debtorId);
+                        if (debtorDoc) {
+                            debtorDoc.status = 'expired';
+                            debtorDoc.isExpired = true;
+                            await debtorDoc.save();
+                            console.log(`✅ Debtor ${debtorDoc.debtorCode} status updated to expired`);
+                        }
+                    } catch (debtorError) {
+                        console.error(`⚠️ Error updating debtor status: ${debtorError.message}`);
+                    }
+                }
+                if (postCommitExpiry.residence && postCommitExpiry.allocatedRoom) {
+                    try {
+                        const RoomStatusManager = require('../utils/roomStatusManager');
+                        const roomResult = await RoomStatusManager.updateRoomOnStatusChange(
+                            postCommitExpiry.applicationId,
+                            'expired',
+                            postCommitExpiry.reason
+                        );
+                        console.log(`✅ Room status updated: ${roomResult.success ? 'Success' : 'Failed'}`);
+                    } catch (roomError) {
+                        console.error(`⚠️ Error updating room status: ${roomError.message}`);
+                    }
+                }
+            }
             
             console.log(`✅ Accrual correction completed: ${reversedAccruals.length} accruals reversed`);
             
@@ -621,7 +647,9 @@ class AccrualCorrectionService {
             };
             
         } catch (error) {
-            await session.abortTransaction();
+            if (session.inTransaction()) {
+                await session.abortTransaction();
+            }
             console.error('❌ Error correcting accruals:', error);
             return {
                 success: false,

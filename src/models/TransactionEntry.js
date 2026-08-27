@@ -112,20 +112,18 @@ const transactionEntrySchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Ensure debits equal credits
-transactionEntrySchema.pre('save', function(next) {
+// Ensure debits equal credits (Mongoose 9+: no callback `next`)
+transactionEntrySchema.pre('save', function() {
   if (this.totalDebit !== this.totalCredit) {
-    return next(new Error('Total debits must equal total credits'));
+    throw new Error('Total debits must equal total credits');
   }
-  next();
 });
 
 // Generate transaction ID if not provided
-transactionEntrySchema.pre('save', function(next) {
+transactionEntrySchema.pre('save', function() {
   if (!this.transactionId) {
     this.transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
   }
-  next();
 });
 
 // 🆕 NEW: Auto-update debtor totals when AR transactions are created

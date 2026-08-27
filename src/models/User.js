@@ -195,17 +195,12 @@ userSchema.virtual('activeMaintenanceRequests').get(function() {
   return this.maintenanceRequests.filter(req => req.status !== 'completed').length;
 });
 
-// Hash password before saving
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
-  }
+// Hash password before saving (async hook — do not use next() with Mongoose 7+)
+userSchema.pre('save', async function() {
+  if (!this.isModified('password')) return;
+
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
 });
 
 // Pre-save middleware removed - no more auto-creation of StudentAccount or TenantAccount

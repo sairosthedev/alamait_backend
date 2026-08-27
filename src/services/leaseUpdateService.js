@@ -2,54 +2,110 @@ const mongoose = require('mongoose');
 const Application = require('../models/Application');
 const Debtor = require('../models/Debtor');
 const User = require('../models/User');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
+const { parseCalendarDate, getCalendarParts } = require('../utils/calendarDate');
 // const { createAuditLog } = require('./auditService'); // TODO: Implement audit service
 
 /**
  * Service to handle updating student lease dates and automatically updating debtor records
  */
 class LeaseUpdateService {
+    static calendarDateKey(parts) {
+        return parts.year * 10000 + parts.month * 100 + parts.day;
+    }
+
+    static assertStartBeforeEnd(startDate, endDate) {
+        const start = parseCalendarDate(startDate);
+        const end = parseCalendarDate(endDate);
+        if (!start || !end) {
+            throw new Error('Both startDate and endDate are required');
+        }
+        const startParts = getCalendarParts(start);
+        const endParts = getCalendarParts(end);
+        if (!startParts || !endParts) {
+            throw new Error('Invalid start or end date');
+        }
+        if (LeaseUpdateService.calendarDateKey(startParts) > LeaseUpdateService.calendarDateKey(endParts)) {
+            throw new Error('Start date must be before end date');
+        }
+    }
     
+    static async updateApplicationLeaseById(applicationId, leaseUpdates, updatedBy, options = {}) {
+        return LeaseUpdateService.updateStudentLeaseDates(
+            null,
+            leaseUpdates,
+            updatedBy,
+            { applicationId, applicationOnly: true, adminUser: options.adminUser }
+        );
+    }
+
     /**
      * Update student lease dates and automatically update debtor record
-     * @param {string} studentId - Student/User ID
+     * @param {string|null} studentId - Student/User ID (optional when applicationId provided)
      * @param {Object} leaseUpdates - Lease date updates
      * @param {Date} leaseUpdates.startDate - New lease start date
      * @param {Date} leaseUpdates.endDate - New lease end date
      * @param {string} updatedBy - User ID who is making the update
+     * @param {Object} [options] - Optional { applicationId, applicationOnly }
      * @returns {Promise<Object>} Update result
      */
-    static async updateStudentLeaseDates(studentId, leaseUpdates, updatedBy) {
+    static async updateStudentLeaseDates(studentId, leaseUpdates, updatedBy, options = {}) {
         const session = await mongoose.startSession();
+        let resolvedApplicationId = options.applicationId || null;
+        let resolvedStudentId = studentId || null;
+        let accrualReversalContext = null;
         
         try {
             await session.withTransaction(async () => {
-                console.log(`🔄 Starting lease date update for student: ${studentId}`);
+                console.log(`🔄 Starting lease date update for application/student: ${options.applicationId || studentId || 'unknown'}`);
                 
                 // Validate input
                 if (!leaseUpdates.startDate || !leaseUpdates.endDate) {
                     throw new Error('Both startDate and endDate are required');
                 }
                 
-                if (new Date(leaseUpdates.startDate) >= new Date(leaseUpdates.endDate)) {
-                    throw new Error('Start date must be before end date');
+                LeaseUpdateService.assertStartBeforeEnd(leaseUpdates.startDate, leaseUpdates.endDate);
+
+                const normalizedStartDate = parseCalendarDate(leaseUpdates.startDate);
+                const normalizedEndDate = parseCalendarDate(leaseUpdates.endDate);
+
+                let application = null;
+                let student = null;
+
+                if (options.applicationId) {
+                    application = await Application.findById(options.applicationId).session(session);
                 }
-                
-                // Find the student
-                const student = await User.findById(studentId).session(session);
-                if (!student) {
+
+                if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+                    student = await User.findById(studentId).session(session);
+                }
+
+                if (!application && student) {
+                    application = await Application.findOne({
+                        student: studentId,
+                        status: { $in: ['approved', 'expired'] }
+                    })
+                        .sort({ endDate: -1 })
+                        .session(session);
+                }
+
+                if (!application) {
+                    throw new Error('No application found for this lease update');
+                }
+
+                if (!student && application.student) {
+                    student = await User.findById(application.student).session(session);
+                }
+
+                if (!student && !options.applicationOnly && !options.applicationId) {
                     throw new Error('Student not found');
                 }
-                
-                // Find the student's application
-                const application = await Application.findOne({ 
-                    student: studentId,
-                    status: 'approved'
-                }).session(session);
-                
-                if (!application) {
-                    throw new Error('No approved application found for this student');
-                }
+
+                const effectiveStudentId = student?._id?.toString()
+                    || application.student?.toString()
+                    || studentId;
+                resolvedApplicationId = application._id.toString();
+                resolvedStudentId = effectiveStudentId || null;
                 
                 console.log(`📋 Found application: ${application.applicationCode}`);
                 
@@ -58,8 +114,8 @@ class LeaseUpdateService {
                 const originalEndDate = application.endDate;
                 
                 // Update application lease dates
-                application.startDate = new Date(leaseUpdates.startDate);
-                application.endDate = new Date(leaseUpdates.endDate);
+                application.startDate = normalizedStartDate;
+                application.endDate = normalizedEndDate;
                 application.updatedBy = updatedBy;
                 application.updatedAt = new Date();
                 
@@ -68,45 +124,14 @@ class LeaseUpdateService {
                 console.log(`   Start: ${originalStartDate?.toISOString().split('T')[0]} → ${application.startDate.toISOString().split('T')[0]}`);
                 console.log(`   End: ${originalEndDate?.toISOString().split('T')[0]} → ${application.endDate.toISOString().split('T')[0]}`);
                 
-                // 🆕 CRITICAL: Handle lease date changes - reverse or create accruals as needed
-                // Do this BEFORE updating debtor so we have the correct dates
-                
-                // 1. If end date was moved earlier, reverse accruals for months after new end date
                 if (originalEndDate && new Date(leaseUpdates.endDate) < new Date(originalEndDate)) {
-                    console.log(`⚠️ Application end date moved earlier - automatically reversing accruals...`);
-                    console.log(`   Original end date: ${originalEndDate.toISOString().split('T')[0]}`);
-                    console.log(`   New end date: ${leaseUpdates.endDate}`);
-                    
-                    try {
-                        const AccrualCorrectionService = require('./accrualCorrectionService');
-                        const User = require('../models/User');
-                        const adminUser = await User.findById(updatedBy).session(session).lean();
-                        
-                        if (adminUser) {
-                            const correctionResult = await AccrualCorrectionService.correctAccrualsForEarlyLeaseEnd(
-                                application._id.toString(),
-                                leaseUpdates.endDate,
-                                adminUser,
-                                `Lease end date updated - student left early`,
-                                false // Don't update lease end date again (already updated)
-                            );
-                            
-                            if (correctionResult.success) {
-                                console.log(`✅ Automatically reversed ${correctionResult.reversedCount || 0} accrual(s) for months after new lease end date`);
-                                console.log(`   Reversed transactions: ${correctionResult.reversedTransactions?.length || 0}`);
-                            } else {
-                                console.error(`❌ Failed to automatically reverse accruals: ${correctionResult.error}`);
-                            }
-                        } else {
-                            console.warn(`⚠️ Could not find admin user ${updatedBy} for accrual reversal`);
-                        }
-                    } catch (accrualError) {
-                        console.error(`❌ Error automatically reversing accruals: ${accrualError.message}`);
-                        // Don't throw - lease update should still succeed even if accrual reversal fails
-                    }
+                    accrualReversalContext = {
+                        applicationId: application._id.toString(),
+                        endDate: leaseUpdates.endDate
+                    };
                 }
                 
-                // 2. If lease was extended (end date moved later), check for missing accruals and create them
+                // If lease was extended (end date moved later), check for missing accruals and create them
                 if (originalEndDate && new Date(leaseUpdates.endDate) > new Date(originalEndDate)) {
                     console.log(`📅 Application end date moved later - checking for missing accruals...`);
                     console.log(`   Original end date: ${originalEndDate.toISOString().split('T')[0]}`);
@@ -147,7 +172,13 @@ class LeaseUpdateService {
                 }
                 
                 // Find and update debtor record
-                const debtor = await Debtor.findOne({ user: studentId }).session(session);
+                let debtor = null;
+                if (effectiveStudentId) {
+                    debtor = await Debtor.findOne({ user: effectiveStudentId }).session(session);
+                }
+                if (!debtor) {
+                    debtor = await Debtor.findOne({ application: application._id }).session(session);
+                }
                 
                 if (debtor) {
                     console.log(`💰 Found debtor: ${debtor.debtorCode}`);
@@ -169,9 +200,17 @@ class LeaseUpdateService {
                     debtor.updatedAt = new Date();
                     
                     // Recalculate financial information based on new lease dates
-                    await this.recalculateDebtorFinancials(debtor, application, session);
+                    try {
+                        await this.recalculateDebtorFinancials(debtor, application, session);
+                    } catch (recalcError) {
+                        console.error(`❌ Error recalculating debtor financials: ${recalcError.message}`);
+                    }
                     
-                    await debtor.save({ session });
+                    try {
+                        await debtor.save({ session });
+                    } catch (debtorSaveError) {
+                        console.error(`❌ Error saving debtor after lease update: ${debtorSaveError.message}`);
+                    }
                     
                     console.log(`✅ Updated debtor lease dates and financials:`);
                     console.log(`   Start: ${originalDebtorStartDate?.toISOString().split('T')[0]} → ${debtor.leaseInfo.startDate.toISOString().split('T')[0]}`);
@@ -184,7 +223,7 @@ class LeaseUpdateService {
                     console.log(`   Before: Start: ${originalDebtorStartDate?.toISOString().split('T')[0]}, End: ${originalDebtorEndDate?.toISOString().split('T')[0]}, Total: $${originalTotalOwed}`);
                     console.log(`   After: Start: ${debtor.leaseInfo.startDate.toISOString().split('T')[0]}, End: ${debtor.leaseInfo.endDate.toISOString().split('T')[0]}, Total: $${debtor.totalOwed}`);
                 } else {
-                    console.log(`⚠️ No debtor record found for student: ${studentId}`);
+                    console.log(`⚠️ No debtor record found for application: ${application.applicationCode}`);
                 }
                 
                 // TODO: Create audit log for application update
@@ -192,13 +231,44 @@ class LeaseUpdateService {
                 console.log(`   Before: Start: ${originalStartDate?.toISOString().split('T')[0]}, End: ${originalEndDate?.toISOString().split('T')[0]}`);
                 console.log(`   After: Start: ${application.startDate.toISOString().split('T')[0]}, End: ${application.endDate.toISOString().split('T')[0]}`);
                 
-                console.log(`🎉 Lease date update completed successfully for student: ${student.email}`);
+                console.log(`🎉 Lease date update completed for application: ${application.applicationCode}`);
             });
+
+            if (accrualReversalContext) {
+                console.log(`⚠️ Application end date moved earlier - reversing accruals after lease commit...`);
+                try {
+                    const AccrualCorrectionService = require('./accrualCorrectionService');
+                    const adminUser = options.adminUser
+                        || await User.findById(updatedBy).lean();
+
+                    if (adminUser) {
+                        const correctionResult = await AccrualCorrectionService.correctAccrualsForEarlyLeaseEnd(
+                            accrualReversalContext.applicationId,
+                            accrualReversalContext.endDate,
+                            adminUser,
+                            'Lease end date updated - student left early',
+                            false
+                        );
+
+                        if (correctionResult.success) {
+                            const reversed = correctionResult.correctedAccruals?.length || 0;
+                            console.log(`✅ Automatically reversed ${reversed} accrual(s) for months after new lease end date`);
+                        } else {
+                            console.error(`❌ Failed to automatically reverse accruals: ${correctionResult.error}`);
+                        }
+                    } else {
+                        console.warn(`⚠️ Could not find admin user ${updatedBy} for accrual reversal`);
+                    }
+                } catch (accrualError) {
+                    console.error(`❌ Error automatically reversing accruals: ${accrualError.message}`);
+                }
+            }
             
             return {
                 success: true,
                 message: 'Lease dates updated successfully',
-                studentId: studentId,
+                studentId: resolvedStudentId,
+                applicationId: resolvedApplicationId,
                 updatedDates: {
                     startDate: leaseUpdates.startDate,
                     endDate: leaseUpdates.endDate
@@ -592,19 +662,21 @@ class LeaseUpdateService {
         }
         
         if (leaseUpdates.startDate && leaseUpdates.endDate) {
-            const startDate = new Date(leaseUpdates.startDate);
-            const endDate = new Date(leaseUpdates.endDate);
+            try {
+                LeaseUpdateService.assertStartBeforeEnd(leaseUpdates.startDate, leaseUpdates.endDate);
+            } catch (validationError) {
+                errors.push(validationError.message);
+            }
+
+            const startDate = parseCalendarDate(leaseUpdates.startDate);
+            const endDate = parseCalendarDate(leaseUpdates.endDate);
             
-            if (isNaN(startDate.getTime())) {
+            if (!startDate || isNaN(startDate.getTime())) {
                 errors.push('Invalid start date format');
             }
             
-            if (isNaN(endDate.getTime())) {
+            if (!endDate || isNaN(endDate.getTime())) {
                 errors.push('Invalid end date format');
-            }
-            
-            if (startDate >= endDate) {
-                errors.push('Start date must be before end date');
             }
             
             // Check if dates are not too far in the past or future
@@ -612,11 +684,11 @@ class LeaseUpdateService {
             const oneYearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
             const twoYearsFromNow = new Date(now.getFullYear() + 2, now.getMonth(), now.getDate());
             
-            if (startDate < oneYearAgo) {
+            if (startDate && startDate < oneYearAgo) {
                 errors.push('Start date cannot be more than one year in the past');
             }
             
-            if (endDate > twoYearsFromNow) {
+            if (endDate && endDate > twoYearsFromNow) {
                 errors.push('End date cannot be more than two years in the future');
             }
         }

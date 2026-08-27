@@ -36,78 +36,74 @@ class FinancialReportingService {
             
             if (basis === 'accrual') {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred');
-                
-                // For accrual basis, look at transaction entries with rental_accrual source for income
-                // Also include forfeiture transactions and reversals (which are debits to income accounts)
-                const accrualQuery = {
-                    date: { $gte: startDate, $lte: endDate },
-                    source: { $in: ['rental_accrual', 'manual', 'payment', 'rental_accrual_reversal'] },
-                    status: 'posted'
-                };
-                
-                // Add residence filtering if specified
-                if (residenceId) {
-                    accrualQuery.$or = [
-                        { residence: residenceId },
-                        { 'metadata.residenceId': residenceId }
-                    ];
-                }
-                
-                let accrualEntries = await TransactionEntry.find(accrualQuery)
-                    .select('date entries source status residence metadata')
-                    .lean();
-                
-                // For accrual basis, include only expense accruals (and optionally manual adjustments)
+
+                const { loadYearMonthlyRentRevenue } = require('../utils/incomeStatementRentUtils');
+                const yearNum = parseInt(period, 10);
+                const rentAccountCodes = ['4001', '4002'];
+                const rentCodeSet = new Set(rentAccountCodes);
+
                 const expenseQuery = {
                     date: { $gte: startDate, $lte: endDate },
                     source: { $in: ['expense_accrual', 'manual'] },
                     status: 'posted'
                 };
-                
-                // Add residence filtering if specified
+
+                const otherIncomeQuery = {
+                    date: { $gte: startDate, $lte: endDate },
+                    status: 'posted',
+                    source: { $in: ['manual', 'payment', 'rental_accrual_reversal'] }
+                };
+
                 if (residenceId) {
-                    expenseQuery.$or = [
+                    const residenceOr = [
                         { residence: residenceId },
                         { 'metadata.residenceId': residenceId }
                     ];
+                    expenseQuery.$or = residenceOr;
+                    otherIncomeQuery.$or = residenceOr;
                 }
-                
-                const expenseEntries = await TransactionEntry.find(expenseQuery)
-                    .select('date entries source status residence metadata')
-                    .lean();
-                
-                console.log(`Found ${accrualEntries.length} rental accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
-                
-                accrualEntries = this.netRentalAccrualEntries(accrualEntries);
-                console.log(`📊 Rental accrual entries after netting reversals/negotiations: ${accrualEntries.length}`);
-                
+
+                const entrySelect = 'date entries source status residence metadata transactionId';
+                const [expenseEntries, yearRentByMonth, otherIncomeEntries] = await Promise.all([
+                    TransactionEntry.find(expenseQuery).select(entrySelect).lean(),
+                    loadYearMonthlyRentRevenue({
+                        year: yearNum,
+                        residenceId: residenceId || undefined,
+                        accountCodes: rentAccountCodes
+                    }),
+                    TransactionEntry.find(otherIncomeQuery).select(entrySelect).lean()
+                ]);
+
+                console.log(`Found ${otherIncomeEntries.length} other income entries and ${expenseEntries.length} expense entries for accrual basis`);
+
                 let totalRevenue = 0;
                 const revenueByAccount = {};
-            const residences = new Set();
-            
-                // Process rental accruals (income when earned) and forfeitures (income when forfeited)
-                accrualEntries.forEach(entry => {
-                    if (entry.entries && Array.isArray(entry.entries)) {
-                        entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Income') {
-                                // For income accounts: credits increase revenue, debits decrease revenue
-                                const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
-                                totalRevenue += amount;
-                                
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
-                                revenueByAccount[key] = (revenueByAccount[key] || 0) + amount;
-                                
-                                // Log forfeiture and reversal transactions for debugging
-                                if (entry.metadata && entry.metadata.isForfeiture) {
-                                    console.log(`🔄 Forfeiture transaction: ${entry.transactionId}, Amount: ${amount}, Account: ${lineItem.accountName}`);
-                                }
-                                if (entry.source === 'rental_accrual_reversal') {
-                                    console.log(`🔄 Reversal transaction: ${entry.transactionId}, Amount: ${amount}, Account: ${lineItem.accountName}`);
-                                }
-                            }
-                        });
+                const residences = new Set();
+                let rentTransactionCount = 0;
+
+                for (let month = 1; month <= 12; month++) {
+                    rentTransactionCount += yearRentByMonth[month]?.transactionCount || 0;
+                    const rentRevenue = yearRentByMonth[month]?.byAccountName || {};
+                    for (const [key, amount] of Object.entries(rentRevenue)) {
+                        revenueByAccount[key] = (revenueByAccount[key] || 0) + amount;
+                        totalRevenue += amount;
                     }
-                    
+                }
+
+                otherIncomeEntries.forEach(entry => {
+                    if (!entry.entries || !Array.isArray(entry.entries)) return;
+
+                    entry.entries.forEach(lineItem => {
+                        if (lineItem.accountType !== 'Income') return;
+                        if (rentCodeSet.has(lineItem.accountCode)) return;
+
+                        const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
+                        totalRevenue += amount;
+
+                        const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                        revenueByAccount[key] = (revenueByAccount[key] || 0) + amount;
+                    });
+
                     if (entry.residence) {
                         residences.add(entry.residence.toString());
                     }
@@ -123,42 +119,30 @@ class FinancialReportingService {
                             if (lineItem.accountType === 'Expense') {
                                 const amount = lineItem.debit || 0;
                                 totalExpenses += amount;
-                                
+
                                 const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
                                 expensesByAccount[key] = (expensesByAccount[key] || 0) + amount;
-                        }
-                    });
-                }
-                    
-                    if (entry.residence) {
-                        residences.add(entry.residence.toString());
-                    }
-            });
-            
-            const netIncome = totalRevenue - totalExpenses;
-            
-                // Create monthly breakdown for revenue
-                const monthlyRevenue = {};
-                accrualEntries.forEach(entry => {
-                    const entryDate = new Date(entry.date);
-                    const monthKey = entryDate.getMonth() + 1; // 1-12
-                    
-                    if (entry.entries && Array.isArray(entry.entries)) {
-                        entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Income') {
-                                // For income accounts: credits increase revenue, debits decrease revenue
-                                const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
-                                if (!monthlyRevenue[monthKey]) {
-                                    monthlyRevenue[monthKey] = {};
-                                }
-                                
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
-                                monthlyRevenue[monthKey][key] = (monthlyRevenue[monthKey][key] || 0) + amount;
                             }
                         });
                     }
+
+                    if (entry.residence) {
+                        residences.add(entry.residence.toString());
+                    }
                 });
-                
+
+                const netIncome = totalRevenue - totalExpenses;
+
+                const monthlyRevenue = {};
+                for (let month = 1; month <= 12; month++) {
+                    const rentRevenue = yearRentByMonth[month] || { byAccountName: {}, byAccountCode: {} };
+                    monthlyRevenue[month] = {
+                        ...rentRevenue.byAccountName,
+                        rental_total: rentRevenue.byAccountCode['4001'] || 0,
+                        admin_total: rentRevenue.byAccountCode['4002'] || 0
+                    };
+                }
+            
                 // Create monthly breakdown for expenses
                 const monthlyExpenses = {};
                 expenseEntries.forEach(entry => {
@@ -198,7 +182,7 @@ class FinancialReportingService {
                     operating_income: totalRevenue - totalExpenses,
                     residences_included: residences.size > 0,
                     residences_processed: Array.from(residences),
-                    transaction_count: accrualEntries.length + expenseEntries.length,
+                    transaction_count: rentTransactionCount + expenseEntries.length + otherIncomeEntries.length,
                     accounting_notes: {
                         accrual_basis: "Income/expenses shown when earned/incurred",
                         includes_rental_accruals: true,
@@ -600,192 +584,90 @@ class FinancialReportingService {
                     'January', 'February', 'March', 'April', 'May', 'June',
                     'July', 'August', 'September', 'October', 'November', 'December'
                 ];
+                const { loadYearMonthlyRentRevenue } = require('../utils/incomeStatementRentUtils');
                 const allAccountCodes = ['4001', '4002']; // Rental and Admin income
-                
-                // Process each month separately (same as account details)
-                for (let month = 1; month <= 12; month++) {
-                    const monthIndex = month - 1; // 0-based
-                    const monthName = monthNames[monthIndex];
-                    const startOfMonth = new Date(Date.UTC(parseInt(period), monthIndex, 1, 0, 0, 0, 0));
-                    const endOfMonth = new Date(Date.UTC(parseInt(period), monthIndex + 1, 0, 23, 59, 59, 999));
-                    
-                    console.log(`\n📅 Processing ${monthName} ${period}...`);
-                    
-                    // Build query EXACTLY like account details
-                    const query = {
-                        $or: [
+                const yearNum = parseInt(period, 10);
+                const yearRentByMonth = await loadYearMonthlyRentRevenue({
+                    year: yearNum,
+                    residenceId: residence || undefined,
+                    accountCodes: allAccountCodes
+                });
+
+                let yearExpenseQuery = {
+                    'entries.accountType': 'Expense',
+                    date: { $gte: startDate, $lte: endDate },
+                    status: 'posted'
+                };
+
+                if (residence) {
+                    const residenceId = mongoose.Types.ObjectId.isValid(residence)
+                        ? new mongoose.Types.ObjectId(residence)
+                        : residence;
+
+                    yearExpenseQuery = {
+                        $and: [
                             {
-                                date: { $gte: startOfMonth, $lte: endOfMonth },
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
+                                'entries.accountType': 'Expense',
+                                date: { $gte: startDate, $lte: endDate },
+                                status: 'posted'
                             },
                             {
-                                'metadata.accrualMonth': month,
-                                'metadata.accrualYear': parseInt(period),
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
-                            },
-                            {
-                                'metadata.monthSettled': `${period}-${String(month).padStart(2, '0')}`,
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
-                            },
-                            {
-                                source: 'rental_accrual',
-                                'metadata.accrualMonth': month,
-                                'metadata.accrualYear': parseInt(period),
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
-                            },
-                            {
-                                source: 'rental_accrual',
-                                'metadata.type': 'lease_start',
-                                'metadata.accrualMonth': month,
-                                'metadata.accrualYear': parseInt(period),
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
-                            },
-                            {
-                                source: 'rental_accrual',
-                                description: { $regex: /lease start/i },
-                                date: { $gte: startOfMonth, $lte: endOfMonth },
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
-                            },
-                            {
-                                source: 'rental_accrual',
-                                'metadata.type': 'monthly_rent_accrual',
-                                'metadata.accrualMonth': month,
-                                'metadata.accrualYear': parseInt(period),
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
-                            },
-                            {
-                                'metadata.month': `${period}-${String(month).padStart(2, '0')}`,
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
-                            },
-                            {
-                                'metadata.originalAccrualId': { $exists: true },
-                                'metadata.accrualMonth': month,
-                                'metadata.accrualYear': parseInt(period),
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
-                            },
-                            {
-                                source: 'manual',
-                                'metadata.accrualMonth': month,
-                                'metadata.accrualYear': parseInt(period),
-                                status: 'posted',
-                                'entries.accountCode': { $in: allAccountCodes }
+                                $or: [
+                                    { residence: residenceId },
+                                    { residence: residence },
+                                    { 'metadata.residenceId': residence },
+                                    { 'metadata.residence': residence }
+                                ]
                             }
                         ]
                     };
-                    
-                    // Add residence filter if specified (same as account details)
-                    if (residence) {
-                        // Try both ObjectId and string for residence field
-                        const residenceId = mongoose.Types.ObjectId.isValid(residence) 
-                            ? new mongoose.Types.ObjectId(residence) 
-                            : residence;
-                        
-                        query.$or = query.$or.map(condition => ({
-                            $and: [
-                                condition,
-                                {
-                                    $or: [
-                                        { residence: residenceId },
-                                        { residence: residence }, // Also try as string
-                                        { 'metadata.residenceId': residence },
-                                        { 'metadata.residence': residence }
-                                    ]
-                                }
-                            ]
-                        }));
+                }
+
+                const allExpenseEntries = await TransactionEntry.find(yearExpenseQuery)
+                    .select('date entries')
+                    .lean();
+
+                const expensesByMonth = Array.from({ length: 13 }, () => ({
+                    total: 0,
+                    byAccount: {}
+                }));
+
+                for (const entry of allExpenseEntries) {
+                    const monthKey = new Date(entry.date).getMonth() + 1;
+                    if (!entry.entries || !Array.isArray(entry.entries)) continue;
+
+                    for (const subEntry of entry.entries) {
+                        if (subEntry.accountType !== 'Expense' || !(subEntry.debit > 0)) continue;
+                        const amount = subEntry.debit;
+                        expensesByMonth[monthKey].total += amount;
+                        const key = `${subEntry.accountCode} - ${subEntry.accountName}`;
+                        expensesByMonth[monthKey].byAccount[key] = (expensesByMonth[monthKey].byAccount[key] || 0) + amount;
                     }
-                    
-                    // Get transactions for this month
-                    const monthTransactions = await TransactionEntry.find(query).lean();
-                    console.log(`  Found ${monthTransactions.length} raw transactions for ${monthName}`);
-                    
-                    // Apply same netting logic as account details
-                    const processedTransactions = IncomeStatementController.removeReversalsAndCollapseNegotiations(
-                        monthTransactions,
-                        '4001'
-                    );
-                    console.log(`  After netting: ${processedTransactions.length} transactions`);
-                    
-                    // Calculate revenue (same as account details)
-                    let totalRentalIncome = 0;
-                    let totalAdminIncome = 0;
-                    const revenueByAccount = {};
-                    
-                    for (const entry of processedTransactions) {
-                        if (entry.entries && Array.isArray(entry.entries)) {
-                            for (const subEntry of entry.entries) {
-                                if (subEntry.accountCode === '4001') {
-                                    const amount = (subEntry.credit || 0) - (subEntry.debit || 0);
-                                    totalRentalIncome += amount;
-                                    revenueByAccount['4001'] = (revenueByAccount['4001'] || 0) + amount;
-                                } else if (subEntry.accountCode === '4002') {
-                                    const amount = (subEntry.credit || 0) - (subEntry.debit || 0);
-                                    totalAdminIncome += amount;
-                                    revenueByAccount['4002'] = (revenueByAccount['4002'] || 0) + amount;
-                                }
-                            }
-                        }
-                    }
-                    
-                    const totalRevenue = totalRentalIncome + totalAdminIncome;
-                    
-                    // Get expenses for this month
-                    let expenseQuery = {
-                        'entries.accountType': 'Expense',
-                        date: { $gte: startOfMonth, $lte: endOfMonth },
-                        status: 'posted'
+                }
+
+                // Process each month using the same pipeline as account-details drill-down
+                for (let month = 1; month <= 12; month++) {
+                    const monthIndex = month - 1; // 0-based
+                    const monthName = monthNames[monthIndex];
+
+                    console.log(`\n📅 Processing ${monthName} ${period}...`);
+
+                    const rentRevenue = yearRentByMonth[month] || {
+                        total: 0,
+                        byAccountCode: {},
+                        byAccountName: {},
+                        transactionCount: 0
                     };
-                    
-                    if (residence) {
-                        // Try both ObjectId and string for residence field
-                        const residenceId = mongoose.Types.ObjectId.isValid(residence) 
-                            ? new mongoose.Types.ObjectId(residence) 
-                            : residence;
-                        
-                        expenseQuery = {
-                            $and: [
-                                {
-                                    'entries.accountType': 'Expense',
-                                    date: { $gte: startOfMonth, $lte: endOfMonth },
-                                    status: 'posted'
-                                },
-                                {
-                                    $or: [
-                                        { residence: residenceId },
-                                        { residence: residence }, // Also try as string
-                                        { 'metadata.residenceId': residence },
-                                        { 'metadata.residence': residence }
-                                    ]
-                                }
-                            ]
-                        };
-                    }
-                    
-                    const expenseEntries = await TransactionEntry.find(expenseQuery).lean();
-                    let totalExpenses = 0;
-                    const expensesByAccount = {};
-                    
-                    for (const entry of expenseEntries) {
-                        if (entry.entries && Array.isArray(entry.entries)) {
-                            for (const subEntry of entry.entries) {
-                                if (subEntry.accountType === 'Expense' && subEntry.debit > 0) {
-                                    const amount = subEntry.debit;
-                                    totalExpenses += amount;
-                                    const key = `${subEntry.accountCode} - ${subEntry.accountName}`;
-                                    expensesByAccount[key] = (expensesByAccount[key] || 0) + amount;
-                                }
-                            }
-                        }
-                    }
+
+                    console.log(`  Processed ${rentRevenue.transactionCount} rent/admin transactions for ${monthName}`);
+
+                    const totalRentalIncome = rentRevenue.byAccountCode['4001'] || 0;
+                    const totalAdminIncome = rentRevenue.byAccountCode['4002'] || 0;
+                    const totalRevenue = rentRevenue.total;
+                    const revenueByAccount = { ...rentRevenue.byAccountName };
+
+                    const totalExpenses = expensesByMonth[month].total;
+                    const expensesByAccount = { ...expensesByMonth[month].byAccount };
                     
                     const netIncome = totalRevenue - totalExpenses;
                     
@@ -793,6 +675,8 @@ class FinancialReportingService {
                         month: monthName,
                         monthNumber: month,
                         revenue: revenueByAccount,
+                        rental_total: totalRentalIncome,
+                        admin_total: totalAdminIncome,
                         expenses: expensesByAccount,
                         total_revenue: totalRevenue,
                         total_expenses: totalExpenses,

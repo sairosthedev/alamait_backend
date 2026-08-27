@@ -2719,14 +2719,14 @@ class TransactionController {
                 });
             }
 
-            if (negotiated >= original) {
+            if (Math.abs(negotiated - original) < 0.01) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Negotiated amount must be less than original amount'
+                    message: 'Negotiated amount must differ from the current ledger amount'
                 });
             }
 
-            const discountAmount = original - negotiated;
+            const discountAmount = Math.abs(original - negotiated);
 
             // Find the original accrual transaction if provided
             let originalAccrual = null;
