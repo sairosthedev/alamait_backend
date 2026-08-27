@@ -52,9 +52,24 @@ function isHeaderLine(cells) {
     const joined = cells.join(' ').toLowerCase();
     if (!joined.trim()) return true;
     return (
-        /first|last|surname|name|room|email|phone|lease|start|end|rent|tenant/.test(joined)
+        /first|last|surname|name|room|email|phone|lease|start|end|rent|tenant|customer|client|occupant/.test(joined)
         && !/^\d/.test(cells[0] || '')
+        && !looksLikeRoomCode(cells[0])
     );
+}
+
+function looksLikeRoomCode(value) {
+    const s = String(value || '').trim();
+    if (!s) return false;
+    if (/^(single|double|triple|quad|shared)$/i.test(s)) return false;
+    return /^[A-Z]{1,5}\d*[A-Z0-9]*$/i.test(s) || /^[A-Z]+\d+[A-Z]*$/i.test(s);
+}
+
+function splitFullName(fullName) {
+    const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return { firstName: '', lastName: '' };
+    if (parts.length === 1) return { firstName: parts[0], lastName: parts[0] };
+    return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
 }
 
 function mapHeaderColumns(headers) {
@@ -64,14 +79,41 @@ function mapHeaderColumns(headers) {
         if (!c) return;
         if (/^firstname|^given|^name$/.test(c) && map.firstName == null) map.firstName = idx;
         else if (/^lastname|^surname|^family/.test(c)) map.lastName = idx;
-        else if (/^fullname|^studentname|^tenant/.test(c)) map.fullName = idx;
-        else if (/^room|^unit/.test(c)) map.room = idx;
+        else if (/^fullname|^studentname|^tenant|^customer|^client|^occupant|^resident|^student$/.test(c)) {
+            if (map.fullName == null) map.fullName = idx;
+        }
+        else if (/^roomnumber|^roomno|^roomname|^roomcode|^room|^unit/.test(c)) map.room = idx;
         else if (/^email|^mail/.test(c)) map.email = idx;
         else if (/^phone|^mobile|^cell/.test(c)) map.phone = idx;
         else if (/^start|^leasestart/.test(c)) map.startDate = idx;
         else if (/^end|^leaseend/.test(c)) map.endDate = idx;
     });
     return map;
+}
+
+function rowFromTwoColumn(cells, headerMap = null) {
+    if (headerMap?.room != null && (headerMap.fullName != null || headerMap.firstName != null)) {
+        return rowFromHeaders(cells, headerMap);
+    }
+    if (cells.length !== 2) return null;
+
+    const [a, b] = cells.map((c) => String(c || '').trim());
+    const aIsRoom = looksLikeRoomCode(a);
+    const bIsRoom = looksLikeRoomCode(b);
+
+    if (aIsRoom && !bIsRoom) {
+        const { firstName, lastName } = splitFullName(b);
+        return { firstName, lastName, roomNumber: a };
+    }
+    if (bIsRoom && !aIsRoom) {
+        const { firstName, lastName } = splitFullName(a);
+        return { firstName, lastName, roomNumber: b };
+    }
+    return null;
+}
+
+function isValidStudentRow(raw) {
+    return !!(raw && (raw.firstName || raw.lastName || raw.roomNumber));
 }
 
 function rowFromPositional(cells) {
@@ -156,9 +198,11 @@ function parseStudentListText(text) {
 
         const raw = headerMap
             ? rowFromHeaders(cells, headerMap)
-            : rowFromPositional(cells);
+            : (cells.length === 2
+                ? rowFromTwoColumn(cells)
+                : rowFromPositional(cells));
 
-        if (raw && (raw.firstName || raw.lastName)) {
+        if (isValidStudentRow(raw)) {
             rows.push(raw);
         }
     }
@@ -216,9 +260,11 @@ async function parseStudentListFile(buffer, originalName = '', mimetype = '') {
 
         const parsed = headerMap
             ? rowFromHeaders(cells, headerMap)
-            : rowFromPositional(cells);
+            : (cells.length === 2
+                ? rowFromTwoColumn(cells)
+                : rowFromPositional(cells));
 
-        if (parsed?.firstName || parsed?.lastName) {
+        if (isValidStudentRow(parsed)) {
             rows.push(parsed);
         }
     });
@@ -257,10 +303,59 @@ async function parseStudentUpload(req) {
     return null;
 }
 
+/**
+ * Apply default lease dates to rows missing dates.
+ * @param {Array} rows
+ * @param {{ startDate?, endDate?, applyTo?: 'all'|'selected', selectedRoomNumbers?: string[], selectedRows?: number[] }} options
+ */
+function applyLeaseDefaults(rows, options = {}) {
+    const {
+        startDate,
+        endDate,
+        applyTo = 'all',
+        selectedRoomNumbers = [],
+        selectedRows = []
+    } = options;
+
+    if (!startDate && !endDate) return rows;
+
+    const selectedRoomSet = new Set(
+        selectedRoomNumbers.map((r) => String(r || '').trim()).filter(Boolean)
+    );
+    const selectedRowSet = new Set(
+        selectedRows.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)
+    );
+
+    return rows.map((row, index) => {
+        const rowNum = index + 1;
+        const hasDates = row.startDate && row.endDate;
+        if (hasDates) return row;
+
+        let shouldApply = false;
+        if (applyTo === 'selected') {
+            shouldApply = selectedRoomSet.has(String(row.roomNumber || '').trim())
+                || selectedRowSet.has(rowNum);
+        } else {
+            shouldApply = true;
+        }
+
+        if (!shouldApply) return row;
+
+        return {
+            ...row,
+            startDate: row.startDate || startDate,
+            endDate: row.endDate || endDate
+        };
+    });
+}
+
 module.exports = {
     buildGmailFromName,
     parseStudentListText,
     parseStudentListRows,
     parseStudentListFile,
-    parseStudentUpload
+    parseStudentUpload,
+    applyLeaseDefaults,
+    looksLikeRoomCode,
+    splitFullName
 };

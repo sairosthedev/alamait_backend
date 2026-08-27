@@ -23,7 +23,7 @@ const { backfillTransactionsForDebtor } = require('../../services/transactionBac
 const ExcelJS = require('exceljs');
 const StudentDeletionService = require('../../services/studentDeletionService');
 const { getStudentInfo } = require('../../utils/studentUtils');
-const { buildGmailFromName, parseStudentUpload } = require('../../utils/studentListParser');
+const { buildGmailFromName, parseStudentUpload, applyLeaseDefaults } = require('../../utils/studentListParser');
 const { findOverlappingApprovedApplication, isLeasePeriodFullyEnded } = require('../../utils/leaseOverlapUtils');
 const { parseSlashDateToIso, parseCalendarDate, parseUploadCalendarDate, getCalendarParts, toCalendarIso, isEquivalentLeaseWindow, SLASH_DATE_RE } = require('../../utils/calendarDate');
 
@@ -64,7 +64,8 @@ function looksLikeRoomCode(value) {
 }
 
 /** Auto-generate firstname.surname@gmail.com when email omitted; ensure unique for generated addresses. */
-async function ensureUniqueUploadEmail(row) {
+async function ensureUniqueUploadEmail(row, options = {}) {
+    const allowReapplication = options.allowReapplication !== false;
     row.firstName = row.firstName || row.firstname;
     row.lastName = row.lastName || row.lastname;
 
@@ -75,29 +76,38 @@ async function ensureUniqueUploadEmail(row) {
     row.firstname = row.firstName;
     row.lastname = row.lastName;
 
-    if (!row.email) {
-        row.email = buildGmailFromName(row.firstName, row.lastName);
+    const autoEmail = buildGmailFromName(row.firstName, row.lastName);
+    if (!row.email || String(row.email).trim().toLowerCase() === autoEmail) {
+        row.email = autoEmail;
         row._emailGenerated = true;
     } else {
         row.email = String(row.email).trim().toLowerCase();
     }
 
-    if (!row._emailGenerated) {
-        const existing = await User.findOne({ email: row.email });
-        if (existing) {
+    const existing = await User.findOne({ email: row.email });
+    if (existing) {
+        if (allowReapplication) {
+            return { ok: true, isReapplication: true };
+        }
+        if (!row._emailGenerated) {
             return { ok: false, error: `Email already registered: ${row.email}` };
         }
-        return { ok: true };
     }
 
-    const [local] = row.email.split('@');
-    let candidate = row.email;
-    let suffix = 0;
-    while (await User.findOne({ email: candidate })) {
-        suffix += 1;
-        candidate = `${local.replace(/\+[0-9]+$/, '')}+${suffix}@gmail.com`;
+    if (row._emailGenerated) {
+        const [local] = row.email.split('@');
+        let candidate = row.email;
+        let suffix = 0;
+        while (await User.findOne({ email: candidate })) {
+            if (allowReapplication && candidate === row.email) {
+                return { ok: true, isReapplication: true };
+            }
+            suffix += 1;
+            candidate = `${local.replace(/\+[0-9]+$/, '')}+${suffix}@gmail.com`;
+        }
+        row.email = candidate;
     }
-    row.email = candidate;
+
     return { ok: true };
 }
 
@@ -172,6 +182,37 @@ function pickDateFromRow(raw, keys) {
         }
     }
     return undefined;
+}
+
+function parseStringList(value) {
+    if (value == null || value === '') return [];
+    if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean);
+            } catch (_) { /* fall through */ }
+        }
+        return trimmed.split(/[,;\n|]/).map((v) => v.trim()).filter(Boolean);
+    }
+    return [String(value).trim()].filter(Boolean);
+}
+
+function parseNumberList(value) {
+    return parseStringList(value).map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0);
+}
+
+function resolveBulkLeaseOptions(body = {}) {
+    const applyToRaw = String(body.applyLeaseTo || body.leaseApplyTo || 'all').toLowerCase();
+    return {
+        startDate: body.defaultStartDate || body.leaseStart || body.startDate,
+        endDate: body.defaultEndDate || body.leaseEnd || body.endDate,
+        applyTo: applyToRaw === 'selected' ? 'selected' : 'all',
+        selectedRoomNumbers: parseStringList(body.selectedRoomNumbers || body.selectedRooms),
+        selectedRows: parseNumberList(body.selectedRows || body.selectedRowIndexes || body.selectedIndexes)
+    };
 }
 
 function normalizeTenantUploadRow(raw = {}) {
@@ -2319,10 +2360,25 @@ function getLeaseTemplateFile(residenceName) {
 exports.uploadCsvStudents = async (req, res) => {
     try {
         let { csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent } = req.body;
+        const dryRun = req.body.dryRun === true
+            || req.body.preview === true
+            || req.query.dryRun === 'true';
+        const leaseOptions = resolveBulkLeaseOptions(req.body);
+        defaultStartDate = defaultStartDate || leaseOptions.startDate;
+        defaultEndDate = defaultEndDate || leaseOptions.endDate;
+        const allowReapplication = req.body.allowReapplication !== false
+            && req.body.allowExisting !== false;
 
         // Unified input: file, text, csvData, rows, or students array
         let parsedRows = await parseStudentUpload(req);
+        let leaseDefaultsApplied = false;
         if (parsedRows?.length) {
+            parsedRows = applyLeaseDefaults(parsedRows, {
+                ...leaseOptions,
+                startDate: defaultStartDate,
+                endDate: defaultEndDate
+            });
+            leaseDefaultsApplied = true;
             csvData = parsedRows.map((row) => normalizeTenantUploadRow(row)).filter(Boolean);
         }
         
@@ -2350,9 +2406,12 @@ exports.uploadCsvStudents = async (req, res) => {
                 success: false,
                 message: 'Provide pasted text (text/csvData), rows/students array, or upload a file via POST /api/admin/students/bulk-add',
                 formatHint: [
+                    'Room Number, Customer  (or Room + Name — lease dates optional if defaults sent)',
+                    'MR8B3L, Anotida Mashora',
                     'Name, Surname, Room, Phone, Lease Start, Lease End',
                     'John, Doe, M1, 0771234567, 2026-02-01, 2026-06-30',
-                    '{ "rows": [{ "firstName": "John", "lastName": "Doe", "roomNumber": "M1", "startDate": "2026-02-01", "endDate": "2026-06-30" }] }'
+                    'Set defaultStartDate + defaultEndDate (or leaseStart/leaseEnd) to apply to all or selected rows',
+                    '{ "residenceId": "...", "defaultStartDate": "2026-02-01", "defaultEndDate": "2026-06-30", "applyLeaseTo": "all" }'
                 ]
             });
         }
@@ -2371,6 +2430,13 @@ exports.uploadCsvStudents = async (req, res) => {
         
         // FIX: Handle case where csvData might be an array-like object instead of true array
         if (Array.isArray(csvData) && csvData.length > 0) {
+            if (!leaseDefaultsApplied) {
+                csvData = applyLeaseDefaults(csvData, {
+                    ...leaseOptions,
+                    startDate: defaultStartDate,
+                    endDate: defaultEndDate
+                });
+            }
             // Ensure each item is a proper object + normalize header variants
             csvData = csvData.map((item, index) => {
                 if (item && typeof item === 'object') {
@@ -2435,6 +2501,88 @@ exports.uploadCsvStudents = async (req, res) => {
                 message: 'Residence not found'
             });
         }
+
+        if (dryRun) {
+            const preview = {
+                dryRun: true,
+                residence: { id: residence._id.toString(), name: residence.name },
+                leaseDefaults: {
+                    startDate: defaultStartDate || null,
+                    endDate: defaultEndDate || null,
+                    applyTo: leaseOptions.applyTo,
+                    selectedRoomNumbers: leaseOptions.selectedRoomNumbers,
+                    selectedRows: leaseOptions.selectedRows
+                },
+                summary: {
+                    total: nonFailingStudents.length,
+                    ready: 0,
+                    missingDates: 0,
+                    missingRoom: 0,
+                    invalid: 0
+                },
+                rows: []
+            };
+
+            for (let i = 0; i < nonFailingStudents.length; i++) {
+                const row = nonFailingStudents[i];
+                const rowNumber = i + 1;
+                const issues = [];
+                let status = 'ready';
+
+                if (!row.firstName || !row.lastName) {
+                    issues.push('Missing name');
+                    status = 'invalid';
+                    preview.summary.invalid++;
+                } else if (!row.roomNumber && !defaultRoomNumber) {
+                    issues.push('Missing room');
+                    status = 'missingRoom';
+                    preview.summary.missingRoom++;
+                } else {
+                    const startDate = row.startDate
+                        ? parseUploadDate(row.startDate, 'start')
+                        : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : null);
+                    const endDate = row.endDate
+                        ? parseUploadDate(row.endDate, 'end')
+                        : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : null);
+
+                    if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                        issues.push('Missing lease dates — set defaultStartDate/defaultEndDate or applyLeaseTo');
+                        status = 'missingDates';
+                        preview.summary.missingDates++;
+                    } else {
+                        const roomNumber = row.roomNumber || defaultRoomNumber;
+                        const room = residence.rooms.find((r) => r.roomNumber === roomNumber);
+                        if (!room) {
+                            issues.push(`Room "${roomNumber}" not found`);
+                            status = 'invalid';
+                            preview.summary.invalid++;
+                        } else {
+                            preview.summary.ready++;
+                        }
+                    }
+                }
+
+                preview.rows.push({
+                    row: rowNumber,
+                    status,
+                    firstName: row.firstName,
+                    lastName: row.lastName,
+                    roomNumber: row.roomNumber || defaultRoomNumber,
+                    startDate: row.startDate || defaultStartDate || null,
+                    endDate: row.endDate || defaultEndDate || null,
+                    email: row.email || (row.firstName && row.lastName
+                        ? buildGmailFromName(row.firstName, row.lastName)
+                        : null),
+                    issues
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: `Preview: ${preview.summary.ready} ready, ${preview.summary.missingDates} need dates, ${preview.summary.missingRoom} missing room, ${preview.summary.invalid} invalid`,
+                data: preview
+            });
+        }
         
         const results = {
             successful: [],
@@ -2466,7 +2614,7 @@ exports.uploadCsvStudents = async (req, res) => {
             console.log(`🔄 Processing student ${i + 1}/${nonFailingStudents.length}: ${row?.email || 'Unknown'}`);
             
             try {
-                const emailPrep = await ensureUniqueUploadEmail(row);
+                const emailPrep = await ensureUniqueUploadEmail(row, { allowReapplication });
                 if (!emailPrep.ok) {
                     results.failed.push({
                         row: rowNumber,
@@ -2997,14 +3145,17 @@ exports.getStudentCsvTemplate = async (req, res) => {
                     email: 'jane.smith@gmail.com'
                 }
             ],
-            pasteExample: 'Name,Surname,Room,Phone,Lease Start,Lease End\nJohn,Doe,M1,0771234567,2026-02-01,2026-06-30',
+            pasteExample: 'Room Number,Customer\nMR8B3L,Anotida Mashora\nMR7B2U,Blessing Mungwena',
             instructions: [
                 'Each row = one student (tenant application + debtor created automatically)',
-                'Required: Name (firstName), Surname (lastName), Room, Lease Start, Lease End',
+                'Simple format: Room Number + Customer (full name) — no dates required if defaults sent',
+                'Full format: Name, Surname, Room, Phone, Lease Start, Lease End',
+                'Set defaultStartDate + defaultEndDate (or leaseStart/leaseEnd) to apply to all rows',
+                'Set applyLeaseTo: "selected" + selectedRoomNumbers or selectedRows to apply dates to some only',
                 'Optional: Phone, Email (if blank → firstname.surname@gmail.com)',
                 'Date format: YYYY-MM-DD or DD/MM/YYYY',
                 'Rent is taken from the room price on the residence',
-                'Paste tab- or comma-separated text, upload Excel/CSV, or send JSON rows array'
+                'Use dryRun: true to preview before creating students'
             ]
         };
         
@@ -3190,7 +3341,7 @@ exports.uploadExcelStudents = async (req, res) => {
             console.log(`🔄 Processing row ${i + 1}:`, row);
             
             try {
-                const emailPrep = await ensureUniqueUploadEmail(row);
+                const emailPrep = await ensureUniqueUploadEmail(row, { allowReapplication });
                 if (!emailPrep.ok) {
                     results.failed.push({
                         row: rowNumber,
