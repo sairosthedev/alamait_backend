@@ -158,6 +158,21 @@ class TransactionController {
                 query.residence = residence;
             }
 
+            const search = (req.query.search || req.query.q || req.query.transactionId || '').trim();
+            if (search) {
+                const searchOr = [
+                    { transactionId: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+                    { description: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }
+                ];
+                if (mongoose.Types.ObjectId.isValid(search)) {
+                    searchOr.push({ _id: new mongoose.Types.ObjectId(search) });
+                }
+                const searchQuery = { $or: searchOr };
+                query = Object.keys(query).length === 0
+                    ? searchQuery
+                    : { $and: [query, searchQuery] };
+            }
+
             if (studentId) {
                 const canonicalStudentId = await resolveStudentIdentifier(studentId);
                 const identifierVariants = await getLinkedStudentIdentifiers(canonicalStudentId || studentId);
@@ -1502,6 +1517,73 @@ class TransactionController {
                 if (updateData[field] !== undefined) {
                     filteredUpdateData[field] = updateData[field];
                 }
+            }
+
+            // Update journal lines (entries array) — enables balance-sheet fixes from Finance UI
+            if (updateData.entries !== undefined) {
+                if (!Array.isArray(updateData.entries) || updateData.entries.length < 2) {
+                    await session.abortTransaction();
+                    return res.status(400).json({
+                        success: false,
+                        message: 'At least two entries are required for double-entry accounting'
+                    });
+                }
+
+                let totalDebit = 0;
+                let totalCredit = 0;
+                const normalizedEntries = [];
+
+                for (const line of updateData.entries) {
+                    if (!line.accountCode) {
+                        await session.abortTransaction();
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Each entry must have an accountCode'
+                        });
+                    }
+                    const debit = Number(line.debit) || 0;
+                    const credit = Number(line.credit) || 0;
+                    if (debit > 0 && credit > 0) {
+                        await session.abortTransaction();
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Each entry cannot have both debit and credit amounts'
+                        });
+                    }
+                    if (debit <= 0 && credit <= 0) {
+                        await session.abortTransaction();
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Each entry must have a debit or credit amount'
+                        });
+                    }
+                    totalDebit += debit;
+                    totalCredit += credit;
+                    const normalized = {
+                        accountCode: String(line.accountCode),
+                        accountName: line.accountName || '',
+                        accountType: line.accountType || '',
+                        debit,
+                        credit,
+                        description: line.description || ''
+                    };
+                    if (line._id && mongoose.Types.ObjectId.isValid(line._id)) {
+                        normalized._id = new mongoose.Types.ObjectId(line._id);
+                    }
+                    normalizedEntries.push(normalized);
+                }
+
+                if (Math.abs(totalDebit - totalCredit) > 0.01) {
+                    await session.abortTransaction();
+                    return res.status(400).json({
+                        success: false,
+                        message: `Total debits (${totalDebit}) must equal total credits (${totalCredit})`
+                    });
+                }
+
+                filteredUpdateData.entries = normalizedEntries;
+                filteredUpdateData.totalDebit = totalDebit;
+                filteredUpdateData.totalCredit = totalCredit;
             }
             
             // Validate debits and credits if both are provided

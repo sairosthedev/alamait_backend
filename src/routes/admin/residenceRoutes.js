@@ -13,8 +13,10 @@ const {
     getRoomsByResidence,
     getResidenceRooms,
     bulkAddRooms,
-    updateRoom
+    updateRoom,
+    bulkUpdateRooms
 } = require('../../controllers/admin/residenceController');
+const excelUpload = require('../../middleware/excelUpload');
 
 // Validation middleware
 const residenceValidation = [
@@ -188,6 +190,19 @@ router.put(
 router.delete('/:id', deleteResidence);
 router.get('/:residenceId/rooms', getRoomsByResidence);
 router.post('/:id/rooms/bulk', bulkRoomsValidation, bulkAddRooms);
+
+/**
+ * Bulk update room names and/or rent (upload, paste, or JSON rows)
+ * POST /api/admin/residences/:id/rooms/bulk-update
+ * Form: file=rooms.xlsx OR body.text OR body.rows
+ * Query: dryRun=true to preview without saving
+ */
+router.post(
+    '/:id/rooms/bulk-update',
+    excelUpload.single('file'),
+    bulkUpdateRooms
+);
+
 // Update a single room
 router.patch('/:residenceId/rooms/:roomNumber', [
     body('roomNumber').optional().notEmpty().withMessage('Room number cannot be empty'),

@@ -1970,6 +1970,40 @@ class FinancialReportsController {
     }
     
     /**
+     * Balance sheet reconciliation — lists unbalanced journals and equation gap for UI.
+     * GET /api/financial-reports/balance-sheet-reconciliation?asOf=2026-06-30
+     */
+    static async getBalanceSheetReconciliation(req, res) {
+        try {
+            const { asOf, residence } = req.query;
+            if (!asOf) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'asOf parameter is required (e.g., 2026-06-30)'
+                });
+            }
+
+            const BalanceSheetReconciliationService = require('../services/balanceSheetReconciliationService');
+            const data = await BalanceSheetReconciliationService.reconcile(asOf, residence || null);
+
+            res.json({
+                success: true,
+                data,
+                message: data.summary.balanced
+                    ? `Balance sheet reconciled as of ${asOf}`
+                    : `Balance sheet out of balance by $${Math.abs(data.summary.accountingEquationGap).toFixed(2)}`
+            });
+        } catch (error) {
+            console.error('Error running balance sheet reconciliation:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error running balance sheet reconciliation',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Generate Trial Balance
      * GET /api/finance/reports/trial-balance
      */

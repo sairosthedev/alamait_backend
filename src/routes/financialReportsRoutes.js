@@ -123,6 +123,12 @@ router.get('/cash-flow/residences', FinancialReportsController.generateResidence
 router.get('/trial-balance', FinancialReportsController.generateTrialBalance);
 
 /**
+ * Balance sheet reconciliation (unbalanced journals + equation gap for UI)
+ * GET /api/financial-reports/balance-sheet-reconciliation?asOf=2026-06-30
+ */
+router.get('/balance-sheet-reconciliation', FinancialReportsController.getBalanceSheetReconciliation);
+
+/**
  * General Ledger
  * GET /api/financial-reports/general-ledger?accountCode=1000&period=2025&basis=cash
  */

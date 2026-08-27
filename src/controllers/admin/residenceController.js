@@ -3,6 +3,8 @@ const { Residence } = require('../../models/Residence');
 const Application = require('../../models/Application');
 const ResidencePaymentService = require('../../services/residencePaymentService');
 const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
+const RoomBulkUpdateService = require('../../services/roomBulkUpdateService');
+const { parseRoomUpload } = require('../../utils/roomListParser');
 const { body } = require('express-validator');
 
 // Helper function to parse CSV room data
@@ -803,6 +805,64 @@ exports.bulkAddRooms = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error adding rooms in bulk',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Bulk update room names and/or prices — upload Excel/CSV, paste text, or JSON rows.
+ * POST /api/admin/residences/:id/rooms/bulk-update
+ * Body: file | text | csvData | rows[] | rooms[]
+ * Query/body: dryRun=true for preview only
+ */
+exports.bulkUpdateRooms = async (req, res) => {
+    try {
+        const residenceId = req.params.id || req.params.residenceId;
+        const dryRun = req.body.dryRun === true
+            || req.query.dryRun === 'true'
+            || req.body.preview === true;
+
+        const rows = await parseRoomUpload(req);
+        if (!rows?.length) {
+            return res.status(400).json({
+                success: false,
+                message: 'Provide a file (Excel/CSV), pasted text (room, price per line), or body.rows / body.rooms array',
+                formatHint: [
+                    'Room A, 150',
+                    'Old Name, New Name, 180',
+                    'Room A\\t150',
+                    '{ "rows": [{ "roomNumber": "M1", "price": 150 }] }'
+                ]
+            });
+        }
+
+        const result = await RoomBulkUpdateService.bulkUpdateRooms(residenceId, rows, {
+            dryRun,
+            cascade: req.body.cascade !== false
+        });
+
+        if (!result.success) {
+            return res.status(result.message === 'Residence not found' ? 404 : 400).json({
+                success: false,
+                message: result.message,
+                data: result
+            });
+        }
+
+        const { summary } = result;
+        res.status(200).json({
+            success: true,
+            message: dryRun
+                ? `Preview: ${summary.updated} would update, ${summary.skipped} skipped, ${summary.failed} failed`
+                : `Updated ${summary.updated} room(s), ${summary.skipped} skipped, ${summary.failed} failed`,
+            data: result
+        });
+    } catch (error) {
+        console.error('Error in bulkUpdateRooms:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating rooms in bulk',
             error: error.message
         });
     }
