@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 const TransactionEntry = require('../models/TransactionEntry');
+const Account = require('../models/Account');
+const { normalizeAccountType, applyLineToBalance } = require('../utils/accountTypeUtils');
 
 function endOfDayUtc(dateStr) {
     const s = String(dateStr).trim();
@@ -7,17 +9,19 @@ function endOfDayUtc(dateStr) {
     return new Date(s);
 }
 
-function buildBalancesFromEntries(entries) {
+function buildBalancesFromEntries(entries, coaMap = null) {
     const accountBalances = {};
     for (const tx of entries) {
         if (!tx.entries?.length) continue;
         for (const line of tx.entries) {
             const code = String(line.accountCode);
+            const coaType = coaMap?.get(code);
+            const accountType = normalizeAccountType(line.accountType, coaType);
             if (!accountBalances[code]) {
                 accountBalances[code] = {
                     accountCode: code,
                     accountName: line.accountName,
-                    accountType: line.accountType,
+                    accountType,
                     totalDebits: 0,
                     totalCredits: 0,
                     balance: 0
@@ -27,12 +31,12 @@ function buildBalancesFromEntries(entries) {
             const credit = line.credit || 0;
             accountBalances[code].totalDebits += debit;
             accountBalances[code].totalCredits += credit;
-            const t = line.accountType;
-            if (t === 'Asset' || t === 'Expense') {
-                accountBalances[code].balance += debit - credit;
-            } else {
-                accountBalances[code].balance += credit - debit;
-            }
+            accountBalances[code].balance = applyLineToBalance(
+                accountBalances[code].balance,
+                debit,
+                credit,
+                accountType
+            );
         }
     }
     return accountBalances;
@@ -40,7 +44,7 @@ function buildBalancesFromEntries(entries) {
 
 function sumByType(balances, type) {
     return Object.values(balances)
-        .filter((a) => a.accountType === type)
+        .filter((a) => normalizeAccountType(a.accountType) === type)
         .reduce((s, a) => s + a.balance, 0);
 }
 
@@ -73,6 +77,7 @@ async function findUnbalancedTransactions(asOfDate, residenceId) {
                 lineGap,
                 headerBalanced: headerGap <= 0.01,
                 linesBalanced: lineGap <= 0.01,
+                issueType: 'unbalanced_lines',
                 entries: (tx.entries || []).map((e) => ({
                     _id: e._id?.toString(),
                     accountCode: e.accountCode,
@@ -87,6 +92,61 @@ async function findUnbalancedTransactions(asOfDate, residenceId) {
         }
     }
     return bad.sort((a, b) => b.gap - a.gap);
+}
+
+async function findMisclassifiedAccountTypes(asOfDate, coaMap, residenceId) {
+    const query = { date: { $lte: asOfDate }, status: 'posted', voided: { $ne: true } };
+    if (residenceId) query.residence = new mongoose.Types.ObjectId(residenceId);
+
+    const txs = await TransactionEntry.find(query)
+        .select('transactionId date description source entries')
+        .lean();
+
+    const issues = [];
+    for (const tx of txs) {
+        for (const line of tx.entries || []) {
+            const raw = line.accountType || '';
+            const code = String(line.accountCode);
+            const coaType = coaMap.get(code);
+            const normalized = normalizeAccountType(raw, coaType);
+            const rawNormalized = raw.trim();
+            const wrongCase = rawNormalized && normalized && rawNormalized !== normalized;
+            const wrongVsCoa = coaType && normalized && normalizeAccountType(coaType) !== normalized;
+
+            if (!wrongCase && !wrongVsCoa) continue;
+
+            const debit = line.debit || 0;
+            const credit = line.credit || 0;
+            const wrongBalance = applyLineToBalance(0, debit, credit, raw);
+            const correctBalance = applyLineToBalance(0, debit, credit, normalized);
+            const impact = correctBalance - wrongBalance;
+            if (Math.abs(impact) < 0.01) continue;
+
+            issues.push({
+                _id: tx._id.toString(),
+                transactionId: tx.transactionId,
+                date: tx.date,
+                description: tx.description,
+                source: tx.source,
+                issueType: 'misclassified_account_type',
+                entryId: line._id?.toString(),
+                accountCode: code,
+                accountName: line.accountName,
+                accountType: raw,
+                expectedAccountType: coaType ? normalizeAccountType(coaType) : normalized,
+                debit,
+                credit,
+                equationImpact: impact,
+                suggestedFix: {
+                    action: 'fix_account_type',
+                    accountType: normalized,
+                    note: `Change accountType from "${raw}" to "${normalized}" on this journal line`
+                }
+            });
+        }
+    }
+
+    return issues.sort((a, b) => Math.abs(b.equationImpact) - Math.abs(a.equationImpact));
 }
 
 function buildSuggestedFix(tx, lineDr, lineCr) {
@@ -126,12 +186,16 @@ class BalanceSheetReconciliationService {
         };
         if (residence) postedQuery.residence = new mongoose.Types.ObjectId(residence);
 
-        const [unbalanced, postedEntries] = await Promise.all([
+        const accounts = await Account.find({}).select('code type').lean();
+        const coaMap = new Map(accounts.map((a) => [String(a.code), a.type]));
+
+        const [unbalanced, misclassified, postedEntries] = await Promise.all([
             findUnbalancedTransactions(asOfDate, residence),
+            findMisclassifiedAccountTypes(asOfDate, coaMap, residence),
             TransactionEntry.find(postedQuery).lean()
         ]);
 
-        const balances = buildBalancesFromEntries(postedEntries);
+        const balances = buildBalancesFromEntries(postedEntries, coaMap);
         let tbDebits = 0;
         let tbCredits = 0;
         for (const a of Object.values(balances)) {
@@ -150,15 +214,20 @@ class BalanceSheetReconciliationService {
         const accountingEquationGap = totalAssets - rhs;
 
         const re3101 = Object.values(balances).find((a) => a.accountCode === '3101');
+        const journalIssues = [...unbalanced, ...misclassified];
 
         return {
             asOf,
             residence: residence || null,
             summary: {
-                balanced: Math.abs(accountingEquationGap) < 0.01 && unbalanced.length === 0,
+                balanced: Math.abs(accountingEquationGap) < 0.01
+                    && unbalanced.length === 0
+                    && misclassified.length === 0,
                 trialBalanceGap,
                 accountingEquationGap,
                 unbalancedTransactionCount: unbalanced.length,
+                misclassifiedLineCount: misclassified.length,
+                journalIssueCount: journalIssues.length,
                 totalAssets,
                 totalLiabilities,
                 totalEquityLedger,
@@ -166,15 +235,18 @@ class BalanceSheetReconciliationService {
                 retainedEarningsLedger: re3101?.balance || 0
             },
             unbalancedTransactions: unbalanced,
+            misclassifiedLines: misclassified,
+            journalIssues,
             remediationSteps: BalanceSheetReconciliationService.buildSteps(
                 unbalanced,
+                misclassified,
                 trialBalanceGap,
                 accountingEquationGap
             )
         };
     }
 
-    static buildSteps(unbalanced, trialBalanceGap, accountingEquationGap) {
+    static buildSteps(unbalanced, misclassified, trialBalanceGap, accountingEquationGap) {
         const steps = [];
         if (unbalanced.length) {
             steps.push({
@@ -184,17 +256,25 @@ class BalanceSheetReconciliationService {
                 uiPath: '/finance/transactions'
             });
         }
+        if (misclassified.length) {
+            steps.push({
+                order: steps.length + 1,
+                title: 'Fix misclassified account types on journal lines',
+                detail: `${misclassified.length} line(s) use wrong accountType casing (e.g. "asset" vs "Asset") — fix in Finance → Transactions. Total equation impact: $${misclassified.reduce((s, m) => s + Math.abs(m.equationImpact), 0).toFixed(2)}.`,
+                uiPath: '/finance/transactions'
+            });
+        }
         if (Math.abs(trialBalanceGap) > 0.01) {
             steps.push({
-                order: 2,
+                order: steps.length + 1,
                 title: 'Verify trial balance',
                 detail: `Trial balance gap is $${trialBalanceGap.toFixed(2)}. After fixing journals, re-check Financial Reports → Trial Balance.`,
                 uiPath: '/finance/reports/trial-balance'
             });
         }
-        if (Math.abs(accountingEquationGap) > 0.01 && unbalanced.length === 0) {
+        if (Math.abs(accountingEquationGap) > 0.01 && unbalanced.length === 0 && misclassified.length === 0) {
             steps.push({
-                order: 3,
+                order: steps.length + 1,
                 title: 'Drill into accounts',
                 detail: `Equation gap $${accountingEquationGap.toFixed(2)} with balanced journals — use balance sheet account drill-down on AR, cash, AP.`,
                 uiPath: '/finance/reports/balance-sheet'

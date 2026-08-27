@@ -2455,10 +2455,12 @@ class FinancialReportingService {
                         
                         accountBalances[key].debit_total += debit;
                         accountBalances[key].credit_total += credit;
-                        
-                            if (accountType === 'Asset' || accountType === 'Expense') {
+
+                        const { normalizeAccountType } = require('../utils/accountTypeUtils');
+                        const normalizedType = normalizeAccountType(accountType);
+                        if (normalizedType === 'Asset' || normalizedType === 'Expense') {
                             accountBalances[key].balance += debit - credit;
-                            } else {
+                        } else {
                             accountBalances[key].balance += credit - debit;
                         }
                     });
