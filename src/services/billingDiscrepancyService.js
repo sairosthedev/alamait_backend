@@ -1760,7 +1760,7 @@ class BillingDiscrepancyService {
 
         const normalizedEmail = action.email
             ? String(action.email).trim().toLowerCase()
-            : `${firstName.toLowerCase().replace(/[^a-z0-9]/g, '')}.${(lastName || 'tenant').toLowerCase().replace(/[^a-z0-9]/g, '')}.${Date.now()}@reconcile.alamait.local`;
+            : require('../utils/studentListParser').buildGmailFromName(firstName, lastName || 'tenant');
 
         let student = await User.findOne({ email: normalizedEmail });
         if (!student) {

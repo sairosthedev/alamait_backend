@@ -810,6 +810,12 @@ exports.bulkAddRooms = async (req, res) => {
     }
 };
 
+function formatDuplicateSummary(duplicates) {
+    if (!duplicates?.length) return '';
+    const names = duplicates.map((d) => d.roomNumber).join(', ');
+    return `: ${names}`;
+}
+
 /**
  * Bulk update room names and/or prices — upload Excel/CSV, paste text, or JSON rows.
  * POST /api/admin/residences/:id/rooms/bulk-update
@@ -837,9 +843,20 @@ exports.bulkUpdateRooms = async (req, res) => {
             });
         }
 
+        const createMissing = req.body.createMissing !== false
+            && req.query.createMissing !== 'false'
+            && req.body.mode !== 'update-only';
+
+        const replace = req.body.replace === true
+            || req.body.catalogReplace === true
+            || req.body.mode === 'replace'
+            || req.query.replace === 'true';
+
         const result = await RoomBulkUpdateService.bulkUpdateRooms(residenceId, rows, {
             dryRun,
-            cascade: req.body.cascade !== false
+            cascade: req.body.cascade !== false,
+            createMissing,
+            replace
         });
 
         if (!result.success) {
@@ -851,11 +868,25 @@ exports.bulkUpdateRooms = async (req, res) => {
         }
 
         const { summary } = result;
+        const added = summary.added || 0;
+        const updated = summary.updated || 0;
+        const removed = summary.removed || 0;
+        const allNewCatalog = !replace && added === summary.total && summary.total > 0 && updated === 0;
+        const removePart = removed ? `, ${removed} would remove` : '';
+        const removePartApplied = removed ? `, removed ${removed}` : '';
+        const dupPart = summary.duplicatesMerged
+            ? ` (${summary.duplicatesMerged} duplicate row(s) merged${formatDuplicateSummary(result.details?.duplicates)})`
+            : '';
+        const replaceHint = allNewCatalog
+            ? ' — send mode:"replace" or catalogReplace:true to remove old rooms not in this list'
+            : '';
+
         res.status(200).json({
             success: true,
             message: dryRun
-                ? `Preview: ${summary.updated} would update, ${summary.skipped} skipped, ${summary.failed} failed`
-                : `Updated ${summary.updated} room(s), ${summary.skipped} skipped, ${summary.failed} failed`,
+                ? `Preview: ${added} would add, ${updated} would update${removePart}, ${summary.skipped} skipped, ${summary.failed} failed${dupPart}${replaceHint}`
+                : `Added ${added} room(s), updated ${updated}${removePartApplied}, ${summary.skipped} skipped, ${summary.failed} failed${dupPart}`,
+            catalogReplaceRecommended: allNewCatalog,
             data: result
         });
     } catch (error) {

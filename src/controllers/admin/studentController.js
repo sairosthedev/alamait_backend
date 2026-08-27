@@ -23,6 +23,7 @@ const { backfillTransactionsForDebtor } = require('../../services/transactionBac
 const ExcelJS = require('exceljs');
 const StudentDeletionService = require('../../services/studentDeletionService');
 const { getStudentInfo } = require('../../utils/studentUtils');
+const { buildGmailFromName, parseStudentUpload } = require('../../utils/studentListParser');
 const { findOverlappingApprovedApplication, isLeasePeriodFullyEnded } = require('../../utils/leaseOverlapUtils');
 const { parseSlashDateToIso, parseCalendarDate, parseUploadCalendarDate, getCalendarParts, toCalendarIso, isEquivalentLeaseWindow, SLASH_DATE_RE } = require('../../utils/calendarDate');
 
@@ -60,6 +61,44 @@ function looksLikeRoomCode(value) {
     const s = String(value).trim();
     // e.g. BHM1, BHM2, A101, Unit6, STK12
     return /^[A-Za-z]{1,8}\s?\d{1,4}[A-Za-z]?$/i.test(s);
+}
+
+/** Auto-generate firstname.surname@gmail.com when email omitted; ensure unique for generated addresses. */
+async function ensureUniqueUploadEmail(row) {
+    row.firstName = row.firstName || row.firstname;
+    row.lastName = row.lastName || row.lastname;
+
+    if (!row.firstName || !row.lastName) {
+        return { ok: false, error: 'Missing first name and surname (or Name column)' };
+    }
+
+    row.firstname = row.firstName;
+    row.lastname = row.lastName;
+
+    if (!row.email) {
+        row.email = buildGmailFromName(row.firstName, row.lastName);
+        row._emailGenerated = true;
+    } else {
+        row.email = String(row.email).trim().toLowerCase();
+    }
+
+    if (!row._emailGenerated) {
+        const existing = await User.findOne({ email: row.email });
+        if (existing) {
+            return { ok: false, error: `Email already registered: ${row.email}` };
+        }
+        return { ok: true };
+    }
+
+    const [local] = row.email.split('@');
+    let candidate = row.email;
+    let suffix = 0;
+    while (await User.findOne({ email: candidate })) {
+        suffix += 1;
+        candidate = `${local.replace(/\+[0-9]+$/, '')}+${suffix}@gmail.com`;
+    }
+    row.email = candidate;
+    return { ok: true };
 }
 
 function findRoomNumberInRow(raw = {}) {
@@ -197,11 +236,18 @@ function normalizeTenantUploadRow(raw = {}) {
 
     if (!email && !firstName && !lastName) return null;
 
+    const resolvedFirst = firstName ? String(firstName).trim() : firstName;
+    const resolvedLast = lastName ? String(lastName).trim() : lastName;
+    const resolvedEmail = email
+        ? String(email).trim().toLowerCase()
+        : (resolvedFirst && resolvedLast ? buildGmailFromName(resolvedFirst, resolvedLast) : undefined);
+
     return {
         ...raw,
-        email: email ? String(email).trim().toLowerCase() : email,
-        firstName: firstName ? String(firstName).trim() : firstName,
-        lastName: lastName ? String(lastName).trim() : lastName,
+        email: resolvedEmail,
+        _emailGenerated: !email && !!resolvedEmail,
+        firstName: resolvedFirst,
+        lastName: resolvedLast,
         // Keep lowercase aliases used by Excel processing path
         firstname: firstName ? String(firstName).trim() : firstName,
         lastname: lastName ? String(lastName).trim() : lastName,
@@ -2268,10 +2314,17 @@ function getLeaseTemplateFile(residenceName) {
 
 /**
  * Upload CSV and create multiple students
+ * Also used by POST /bulk-add (file upload + paste)
  */
 exports.uploadCsvStudents = async (req, res) => {
     try {
         let { csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent } = req.body;
+
+        // Unified input: file, text, csvData, rows, or students array
+        let parsedRows = await parseStudentUpload(req);
+        if (parsedRows?.length) {
+            csvData = parsedRows.map((row) => normalizeTenantUploadRow(row)).filter(Boolean);
+        }
         
         console.log('📁 Processing CSV upload for students in residence:', residenceId);
         console.log('📊 Original csvData type:', typeof csvData);
@@ -2295,7 +2348,12 @@ exports.uploadCsvStudents = async (req, res) => {
         if (!csvData) {
             return res.status(400).json({
                 success: false,
-                message: 'CSV data is required'
+                message: 'Provide pasted text (text/csvData), rows/students array, or upload a file via POST /api/admin/students/bulk-add',
+                formatHint: [
+                    'Name, Surname, Room, Phone, Lease Start, Lease End',
+                    'John, Doe, M1, 0771234567, 2026-02-01, 2026-06-30',
+                    '{ "rows": [{ "firstName": "John", "lastName": "Doe", "roomNumber": "M1", "startDate": "2026-02-01", "endDate": "2026-06-30" }] }'
+                ]
             });
         }
 
@@ -2408,35 +2466,33 @@ exports.uploadCsvStudents = async (req, res) => {
             console.log(`🔄 Processing student ${i + 1}/${nonFailingStudents.length}: ${row?.email || 'Unknown'}`);
             
             try {
-                // Validate required fields
-                if (!row.email || !row.firstName || !row.lastName) {
+                const emailPrep = await ensureUniqueUploadEmail(row);
+                if (!emailPrep.ok) {
                     results.failed.push({
                         row: rowNumber,
-                        error: 'Missing required fields: email, firstName, lastName',
+                        error: emailPrep.error,
                         data: row
                     });
                     results.summary.totalFailed++;
                     continue;
                 }
-                
-                // Check if user already exists and has an active lease
+
                 const existingUser = await User.findOne({ email: row.email });
                 if (existingUser) {
                     console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
 
-                // Parse dates first (needed for shared-room date capacity)
                 const startDate = row.startDate
                     ? parseUploadDate(row.startDate, 'start')
-                    : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : new Date());
+                    : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : null);
                 const endDate = row.endDate
                     ? parseUploadDate(row.endDate, 'end')
-                    : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : new Date());
+                    : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : null);
 
-                if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     results.failed.push({
                         row: rowNumber,
-                        error: 'Invalid date format',
+                        error: 'Missing or invalid lease start/end dates (or set defaultStartDate/defaultEndDate)',
                         data: row
                     });
                     results.summary.totalFailed++;
@@ -2461,6 +2517,16 @@ exports.uploadCsvStudents = async (req, res) => {
                     findRoomNumberInRow(row) ||
                     coerceRoomNumber(defaultRoomNumber);
                 let room = null;
+
+                if (!roomNumber) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Missing room (Room column or defaultRoomNumber)',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
 
                 if (!roomNumber && row.room && typeof row.room === 'object') {
                     results.failed.push({
@@ -2895,61 +2961,50 @@ exports.getStudentCsvTemplate = async (req, res) => {
     try {
         const template = {
             headers: [
-                'email',
                 'firstName',
                 'lastName',
-                'phone',
-                'status',
                 'roomNumber',
+                'phone',
                 'startDate',
                 'endDate',
-                'monthlyRent',
-                'emergencyContact'
+                'email'
             ],
+            headerAliases: {
+                firstName: ['Name', 'First Name'],
+                lastName: ['Surname', 'Last Name'],
+                roomNumber: ['Room'],
+                startDate: ['Lease Start'],
+                endDate: ['Lease End'],
+                email: ['optional — auto-generated as firstname.surname@gmail.com if blank']
+            },
             sampleData: [
                 {
-                    email: 'john.doe@example.com',
                     firstName: 'John',
                     lastName: 'Doe',
-                    phone: '+1234567890',
-                    status: 'active',
-                    roomNumber: 'A101',
-                    startDate: '2025-01-15',
-                    endDate: '2025-07-15',
-                    monthlyRent: 500,
-                    emergencyContact: {
-                        name: 'Jane Doe',
-                        relationship: 'Parent',
-                        phone: '+1234567891'
-                    }
+                    roomNumber: 'M1',
+                    phone: '+263771234567',
+                    startDate: '2026-02-01',
+                    endDate: '2026-06-30',
+                    email: ''
                 },
                 {
-                    email: 'jane.smith@example.com',
                     firstName: 'Jane',
                     lastName: 'Smith',
-                    phone: '+1234567892',
-                    status: 'active',
-                    roomNumber: 'A102',
-                    startDate: '2025-01-15',
-                    endDate: '2025-07-15',
-                    monthlyRent: 500,
-                    emergencyContact: {
-                        name: 'John Smith',
-                        relationship: 'Parent',
-                        phone: '+1234567893'
-                    }
+                    roomNumber: 'M2',
+                    phone: '',
+                    startDate: '2026-02-01',
+                    endDate: '2026-06-30',
+                    email: 'jane.smith@gmail.com'
                 }
             ],
+            pasteExample: 'Name,Surname,Room,Phone,Lease Start,Lease End\nJohn,Doe,M1,0771234567,2026-02-01,2026-06-30',
             instructions: [
-                'Each row represents one student to be created',
-                'Required fields: email, firstName, lastName',
-                'Optional fields: phone, status, roomNumber, startDate, endDate, monthlyRent, emergencyContact',
-                'Date format: YYYY-MM-DD',
-                'Status options: active, inactive, pending',
-                'If roomNumber is not provided, default room will be used',
-                'If dates are not provided, default dates will be used',
-                'If monthlyRent is not provided, default rent will be used',
-                'Emergency contact should be a JSON object with name, relationship, and phone'
+                'Each row = one student (tenant application + debtor created automatically)',
+                'Required: Name (firstName), Surname (lastName), Room, Lease Start, Lease End',
+                'Optional: Phone, Email (if blank → firstname.surname@gmail.com)',
+                'Date format: YYYY-MM-DD or DD/MM/YYYY',
+                'Rent is taken from the room price on the residence',
+                'Paste tab- or comma-separated text, upload Excel/CSV, or send JSON rows array'
             ]
         };
         
@@ -2981,26 +3036,16 @@ exports.uploadExcelStudents = async (req, res) => {
             mimetype: req.file.mimetype,
             size: req.file.size
         } : 'No file');
-        
-        if (!req.file) {
-            return res.status(400).json({
-                success: false,
-                message: 'Excel or CSV file is required'
-            });
-        }
 
         const { residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent } = req.body;
-        
-        console.log('📁 Processing Excel/CSV upload for students in residence:', residenceId);
-        
+
         if (!residenceId) {
             return res.status(400).json({
                 success: false,
                 message: 'Residence ID is required for all students'
             });
         }
-        
-        // Validate residence exists
+
         const residence = await Residence.findById(residenceId);
         if (!residence) {
             return res.status(404).json({
@@ -3009,7 +3054,13 @@ exports.uploadExcelStudents = async (req, res) => {
             });
         }
 
-        // Convert Excel/CSV rows to normalized student objects
+        // Paste / rows without file → same handler as CSV bulk upload
+        if (!req.file) {
+            req.body.residenceId = residenceId;
+            return exports.uploadCsvStudents(req, res);
+        }
+
+        console.log('📁 Processing Excel/CSV upload for students in residence:', residenceId);
         let csvData = [];
         const originalName = (req.file.originalname || '').toLowerCase();
         const isCsv =
@@ -3115,7 +3166,7 @@ exports.uploadExcelStudents = async (req, res) => {
         if (csvData.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'No valid student data found in file. Need columns: email, firstName, lastName (or Name).'
+                message: 'No valid student data found. Need: Name, Surname, Room, Lease Start, Lease End (email optional — auto-generated as name.surname@gmail.com).'
             });
         }
 
@@ -3139,11 +3190,11 @@ exports.uploadExcelStudents = async (req, res) => {
             console.log(`🔄 Processing row ${i + 1}:`, row);
             
             try {
-                // Validate required fields (support both camelCase and lowercase from CSV/Excel)
-                if (!row.email || !(row.firstName || row.firstname) || !(row.lastName || row.lastname)) {
+                const emailPrep = await ensureUniqueUploadEmail(row);
+                if (!emailPrep.ok) {
                     results.failed.push({
                         row: rowNumber,
-                        error: 'Missing required fields: email, firstName, lastName',
+                        error: emailPrep.error,
                         data: row
                     });
                     results.summary.totalFailed++;
@@ -3157,25 +3208,23 @@ exports.uploadExcelStudents = async (req, res) => {
                 row.roomNumber = row.roomNumber || row.roomnumber;
                 row.monthlyrent = row.monthlyrent ?? row.monthlyRent;
                 row.monthlyRent = row.monthlyRent ?? row.monthlyrent;
-                
-                // Check if user already exists and has an active lease
+
                 const existingUser = await User.findOne({ email: row.email });
                 if (existingUser) {
                     console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
 
-                // Parse dates before capacity (shared rooms need date window)
                 const startDate = row.startDate || row.startdate || row.start_date
                     ? parseUploadDate(row.startDate || row.startdate || row.start_date, 'start')
-                    : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : new Date());
+                    : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : null);
                 const endDate = row.endDate || row.enddate || row.end_date
                     ? parseUploadDate(row.endDate || row.enddate || row.end_date, 'end')
-                    : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : new Date());
+                    : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : null);
 
-                if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     results.failed.push({
                         row: rowNumber,
-                        error: 'Invalid date format',
+                        error: 'Missing or invalid lease start/end dates',
                         data: row
                     });
                     results.summary.totalFailed++;
@@ -3207,6 +3256,16 @@ exports.uploadExcelStudents = async (req, res) => {
                     findRoomNumberInRow(row) ||
                     coerceRoomNumber(defaultRoomNumber);
                 let room = null;
+
+                if (!roomNumber) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Missing room (Room column or defaultRoomNumber)',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
 
                 if (!roomNumber && row.room && typeof row.room === 'object') {
                     results.failed.push({

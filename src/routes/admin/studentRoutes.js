@@ -199,6 +199,24 @@ router.post('/manual-add', manualStudentValidation, manualAddStudent);
 router.post('/upload-csv', auth, checkRole(['admin', 'admin_ceo', 'finance_admin', 'ceo']), uploadCsvStudents);
 
 /**
+ * Bulk add students — upload Excel/CSV, paste text, or JSON rows
+ * POST /api/admin/students/bulk-add
+ * Body: residenceId, text | rows | csvData, optional defaultRoomNumber/defaultStartDate/defaultEndDate
+ * Form: file (optional)
+ */
+router.post('/bulk-add', auth, checkRole(['admin', 'admin_ceo', 'finance_admin', 'ceo']), (req, res, next) => {
+    excelUpload.single('file')(req, res, (err) => {
+        if (err) {
+            return res.status(400).json({
+                success: false,
+                message: err.message || 'File upload failed'
+            });
+        }
+        next();
+    });
+}, uploadCsvStudents);
+
+/**
  * Upload Excel/CSV file for bulk student creation
  * POST /api/admin/students/upload-excel
  */
