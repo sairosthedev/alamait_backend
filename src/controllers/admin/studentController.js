@@ -24,11 +24,12 @@ const ExcelJS = require('exceljs');
 const StudentDeletionService = require('../../services/studentDeletionService');
 const { getStudentInfo } = require('../../utils/studentUtils');
 const { buildGmailFromName, parseStudentUpload, applyLeaseDefaults } = require('../../utils/studentListParser');
+const { resolveResidenceRoomAlias } = require('../../utils/residenceRoomAliases');
 const { findOverlappingApprovedApplication, isLeasePeriodFullyEnded } = require('../../utils/leaseOverlapUtils');
-const { parseSlashDateToIso, parseCalendarDate, parseUploadCalendarDate, getCalendarParts, toCalendarIso, isEquivalentLeaseWindow, SLASH_DATE_RE } = require('../../utils/calendarDate');
+const { parseSlashDateToIso, parseCalendarDate, parseUploadCalendarDate, getCalendarParts, toCalendarIso, toApiCalendarIso, isEquivalentLeaseWindow, SLASH_DATE_RE } = require('../../utils/calendarDate');
 
 /** Alias used throughout upload handlers */
-const parseUploadDate = (value, role = 'start') => parseUploadCalendarDate(value, role);
+const parseUploadDate = (value, role = 'start', options = {}) => parseUploadCalendarDate(value, role, options);
 
 /**
  * Normalize one tenant/student upload row so CSV + Excel headers both work.
@@ -59,8 +60,21 @@ function coerceRoomNumber(value) {
 function looksLikeRoomCode(value) {
     if (!value || typeof value === 'object') return false;
     const s = String(value).trim();
-    // e.g. BHM1, BHM2, A101, Unit6, STK12
-    return /^[A-Za-z]{1,8}\s?\d{1,4}[A-Za-z]?$/i.test(s);
+    // e.g. BHM1, BHM2, A101, Unit6, STK12, Ext 2, BUS 1
+    return /^[A-Za-z]{1,8}(\s+\d+)?$/i.test(s)
+        || /^[A-Za-z]{1,8}\s?\d{1,4}[A-Za-z]?$/i.test(s);
+}
+
+/** Resolve upload room label (Ext 2 → Extension 2) and find catalog room doc. */
+function findResidenceRoom(residence, roomNumber) {
+    if (!roomNumber || !residence?.rooms?.length) {
+        return { roomNumber, room: null };
+    }
+    const resolved = resolveResidenceRoomAlias(roomNumber, residence);
+    const room = residence.rooms.find(
+        (r) => String(r.roomNumber).trim().toLowerCase() === String(resolved).trim().toLowerCase()
+    );
+    return { roomNumber: resolved, room: room || null };
 }
 
 /** Auto-generate firstname.surname@gmail.com when email omitted; ensure unique for generated addresses. */
@@ -240,7 +254,7 @@ function normalizeTenantUploadRow(raw = {}) {
 
     const toDateStr = (value, role = 'start') => {
         if (value === undefined || value === null || value === '') return undefined;
-        const parsed = parseUploadCalendarDate(value, role);
+        const parsed = parseUploadCalendarDate(value, role, { trustLiteralBareIso: true });
         if (!parsed) return String(value).trim();
         return toCalendarIso(parsed);
     };
@@ -352,6 +366,7 @@ async function checkUploadRoomCapacity({
     const reservedInBatch = batchRoomCounts?.get(roomKey) || 0;
 
     let currentOccupancy = Number(roomDoc.currentOccupancy) || 0;
+    let usedLeaseOccupancy = false;
     try {
         const Booking = require('../../models/Booking');
         const availability = await Booking.checkAvailability(
@@ -362,10 +377,7 @@ async function checkUploadRoomCapacity({
         );
         if (typeof availability.currentOccupancy === 'number') {
             currentOccupancy = availability.currentOccupancy;
-        }
-        // Prefer booking-based capacity when provided
-        if (availability.capacity) {
-            // keep local capacity from roomDoc unless booking returned something
+            usedLeaseOccupancy = true;
         }
         if (availability.available === false && reservedInBatch === 0) {
             // Fall through to projected check below for clearer batch-aware message
@@ -374,8 +386,12 @@ async function checkUploadRoomCapacity({
         console.log(`⚠️ Booking availability check failed, using snapshot occupancy: ${err.message}`);
     }
 
-    const projected = currentOccupancy + reservedInBatch;
-    if (projected >= capacity) {
+    // Earlier rows in this upload already have approved applications in DB, so lease
+    // occupancy includes them — do not also add batchRoomCounts (double-count).
+    const projected = usedLeaseOccupancy
+        ? currentOccupancy + 1
+        : currentOccupancy + reservedInBatch + 1;
+    if (projected > capacity) {
         return {
             ok: false,
             error: `Room ${roomNumber} is at full capacity (${projected}/${capacity}) for these dates. Shared rooms are allowed up to capacity.`
@@ -2368,6 +2384,8 @@ exports.uploadCsvStudents = async (req, res) => {
         defaultEndDate = defaultEndDate || leaseOptions.endDate;
         const allowReapplication = req.body.allowReapplication !== false
             && req.body.allowExisting !== false;
+        // Always trust YYYY-MM-DD literally; use Harare offset only for ISO datetimes (T…)
+        const parseRowUploadDate = (value, role = 'start') => parseUploadDate(value, role);
 
         // Unified input: file, text, csvData, rows, or students array
         let parsedRows = await parseStudentUpload(req);
@@ -2436,15 +2454,15 @@ exports.uploadCsvStudents = async (req, res) => {
                     startDate: defaultStartDate,
                     endDate: defaultEndDate
                 });
+                // Legacy csvData/rows payloads — normalize once here
+                csvData = csvData.map((item, index) => {
+                    if (item && typeof item === 'object') {
+                        return normalizeTenantUploadRow(item);
+                    }
+                    console.log(`⚠️ Item ${index} is not an object:`, item);
+                    return null;
+                }).filter(item => item !== null);
             }
-            // Ensure each item is a proper object + normalize header variants
-            csvData = csvData.map((item, index) => {
-                if (item && typeof item === 'object') {
-                    return normalizeTenantUploadRow(item);
-                }
-                console.log(`⚠️ Item ${index} is not an object:`, item);
-                return null;
-            }).filter(item => item !== null);
         }
 
         console.log('✅ Final csvData length:', csvData.length);
@@ -2528,6 +2546,8 @@ exports.uploadCsvStudents = async (req, res) => {
                 const rowNumber = i + 1;
                 const issues = [];
                 let status = 'ready';
+                let startDate = null;
+                let endDate = null;
 
                 if (!row.firstName || !row.lastName) {
                     issues.push('Missing name');
@@ -2538,12 +2558,12 @@ exports.uploadCsvStudents = async (req, res) => {
                     status = 'missingRoom';
                     preview.summary.missingRoom++;
                 } else {
-                    const startDate = row.startDate
-                        ? parseUploadDate(row.startDate, 'start')
-                        : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : null);
-                    const endDate = row.endDate
-                        ? parseUploadDate(row.endDate, 'end')
-                        : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : null);
+                    startDate = row.startDate
+                        ? parseRowUploadDate(row.startDate, 'start')
+                        : (defaultStartDate ? parseRowUploadDate(defaultStartDate, 'start') : null);
+                    endDate = row.endDate
+                        ? parseRowUploadDate(row.endDate, 'end')
+                        : (defaultEndDate ? parseRowUploadDate(defaultEndDate, 'end') : null);
 
                     if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                         issues.push('Missing lease dates — set defaultStartDate/defaultEndDate or applyLeaseTo');
@@ -2551,7 +2571,7 @@ exports.uploadCsvStudents = async (req, res) => {
                         preview.summary.missingDates++;
                     } else {
                         const roomNumber = row.roomNumber || defaultRoomNumber;
-                        const room = residence.rooms.find((r) => r.roomNumber === roomNumber);
+                        const { room, roomNumber: resolvedRoom } = findResidenceRoom(residence, roomNumber);
                         if (!room) {
                             issues.push(`Room "${roomNumber}" not found`);
                             status = 'invalid';
@@ -2568,8 +2588,10 @@ exports.uploadCsvStudents = async (req, res) => {
                     firstName: row.firstName,
                     lastName: row.lastName,
                     roomNumber: row.roomNumber || defaultRoomNumber,
-                    startDate: row.startDate || defaultStartDate || null,
-                    endDate: row.endDate || defaultEndDate || null,
+                    startDate: toCalendarIso(startDate) || row.startDate || defaultStartDate || null,
+                    endDate: toCalendarIso(endDate) || row.endDate || defaultEndDate || null,
+                    resolvedStartDate: toApiCalendarIso(startDate),
+                    resolvedEndDate: toApiCalendarIso(endDate),
                     email: row.email || (row.firstName && row.lastName
                         ? buildGmailFromName(row.firstName, row.lastName)
                         : null),
@@ -2631,11 +2653,11 @@ exports.uploadCsvStudents = async (req, res) => {
                 }
 
                 const startDate = row.startDate
-                    ? parseUploadDate(row.startDate, 'start')
-                    : (defaultStartDate ? parseUploadDate(defaultStartDate, 'start') : null);
+                    ? parseRowUploadDate(row.startDate, 'start')
+                    : (defaultStartDate ? parseRowUploadDate(defaultStartDate, 'start') : null);
                 const endDate = row.endDate
-                    ? parseUploadDate(row.endDate, 'end')
-                    : (defaultEndDate ? parseUploadDate(defaultEndDate, 'end') : null);
+                    ? parseRowUploadDate(row.endDate, 'end')
+                    : (defaultEndDate ? parseRowUploadDate(defaultEndDate, 'end') : null);
 
                 if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     results.failed.push({
@@ -2687,7 +2709,9 @@ exports.uploadCsvStudents = async (req, res) => {
                 }
                 
                 if (roomNumber) {
-                    room = residence.rooms.find(r => String(r.roomNumber).trim().toLowerCase() === String(roomNumber).trim().toLowerCase());
+                    const resolvedRoom = findResidenceRoom(residence, roomNumber);
+                    roomNumber = resolvedRoom.roomNumber;
+                    room = resolvedRoom.room;
                     if (!room) {
                         results.failed.push({
                             row: rowNumber,
@@ -3429,7 +3453,9 @@ exports.uploadExcelStudents = async (req, res) => {
                 }
                 
                 if (roomNumber) {
-                    room = residence.rooms.find(r => String(r.roomNumber).trim().toLowerCase() === String(roomNumber).trim().toLowerCase());
+                    const resolvedRoom = findResidenceRoom(residence, roomNumber);
+                    roomNumber = resolvedRoom.roomNumber;
+                    room = resolvedRoom.room;
                     if (!room) {
                         results.failed.push({
                             row: rowNumber,

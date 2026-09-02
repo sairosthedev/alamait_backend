@@ -3,8 +3,54 @@
  * Store and read YYYY-MM-DD without timezone shifting the month/day.
  */
 
+/** Africa/Harare — uploads are authored in UTC+2 */
+const UPLOAD_TZ_OFFSET_MS = 2 * 60 * 60 * 1000;
+
 function calendarDateUtc(y, m, d) {
     return new Date(Date.UTC(Number(y), Number(m) - 1, Number(d), 12, 0, 0, 0));
+}
+
+/** Map an instant to a calendar day in the upload timezone (Harare). */
+function calendarDateFromInstant(instant) {
+    const shifted = new Date(instant.getTime() + UPLOAD_TZ_OFFSET_MS);
+    return calendarDateUtc(
+        shifted.getUTCFullYear(),
+        shifted.getUTCMonth() + 1,
+        shifted.getUTCDate()
+    );
+}
+
+/**
+ * Frontend date pickers often do:
+ *   new Date(y, m - 1, d).toISOString().slice(0, 10)
+ * which is one day earlier than the picked day in UTC+2.
+ */
+function localMidnightIsoStrip(y, m, d) {
+    return new Date(y, m - 1, d).toISOString().slice(0, 10);
+}
+
+/** Harare-local midnight for calendar day (y,m,d) → UTC YYYY-MM-DD string (server-TZ independent). */
+function harareLocalMidnightIsoStrip(y, m, d) {
+    const utcInstantMs = Date.UTC(y, m - 1, d, 0, 0, 0, 0) - UPLOAD_TZ_OFFSET_MS;
+    return new Date(utcInstantMs).toISOString().slice(0, 10);
+}
+
+function recoverBareIsoFromFrontendStrip(str) {
+    const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(str || '').trim());
+    if (!bare) return null;
+    const y = Number(bare[1]);
+    const m = Number(bare[2]);
+    const d = Number(bare[3]);
+    const trimmed = String(str).trim();
+
+    const stripNext = harareLocalMidnightIsoStrip(y, m, d + 1);
+    const stripSame = harareLocalMidnightIsoStrip(y, m, d);
+    const literalNext = `${y}-${String(m).padStart(2, '0')}-${String(d + 1).padStart(2, '0')}`;
+    // Picker sends strip(nextDay) which is one day earlier in YYYY-MM-DD than the picked day
+    if (stripNext === trimmed && stripSame !== trimmed && trimmed < literalNext) {
+        return calendarDateUtc(y, m, d + 1);
+    }
+    return calendarDateUtc(y, m, d);
 }
 
 function parseSlashDateToIso(value) {
@@ -52,12 +98,7 @@ function parseCalendarDate(value) {
     if (value === undefined || value === null || value === '') return null;
 
     if (value instanceof Date && !Number.isNaN(value.getTime())) {
-        // Use local calendar day — matches how browsers build Date from CSV/UI fields
-        return calendarDateUtc(
-            value.getFullYear(),
-            value.getMonth() + 1,
-            value.getDate()
-        );
+        return calendarDateFromInstant(value);
     }
 
     const stringValue = String(value).trim();
@@ -75,11 +116,7 @@ function parseCalendarDate(value) {
         }
         const instant = new Date(toParse);
         if (!Number.isNaN(instant.getTime())) {
-            return calendarDateUtc(
-                instant.getFullYear(),
-                instant.getMonth() + 1,
-                instant.getDate()
-            );
+            return calendarDateFromInstant(instant);
         }
     }
 
@@ -97,7 +134,7 @@ function parseCalendarDate(value) {
  * Upload-specific date parse — recovers dates broken by `Date.toISOString().slice(0,10)`.
  * e.g. local 1 Apr 2026 in UTC+2 is sent as "2026-03-31".
  */
-function parseUploadCalendarDate(value, role = 'start') {
+function parseUploadCalendarDate(value, role = 'start', options = {}) {
     if (value === undefined || value === null || value === '') return null;
 
     if (isExcelSerialDate(value)) {
@@ -111,22 +148,11 @@ function parseUploadCalendarDate(value, role = 'start') {
 
     const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
     if (bare) {
-        const y = Number(bare[1]);
-        const m = Number(bare[2]);
-        const d = Number(bare[3]);
-        const nextLocal = new Date(y, m - 1, d + 1);
-        if (nextLocal.toISOString().slice(0, 10) === str) {
-            const rd = nextLocal.getDate();
-            const rm = nextLocal.getMonth() + 1;
-            const ry = nextLocal.getFullYear();
-            if (role === 'start' && rd === 1) {
-                return calendarDateUtc(ry, rm, rd);
-            }
-            if (role === 'end' && rd >= 28 && rd !== 1) {
-                return calendarDateUtc(ry, rm, rd);
-            }
+        // YYYY-MM-DD from paste/spreadsheet is the calendar date — never shift it
+        if (options.trustLiteralBareIso !== false) {
+            return calendarDateUtc(Number(bare[1]), Number(bare[2]), Number(bare[3]));
         }
-        return calendarDateUtc(y, m, d);
+        return recoverBareIsoFromFrontendStrip(str);
     }
 
     return parseCalendarDate(value);
@@ -183,6 +209,10 @@ function isEquivalentLeaseWindow(startA, endA, startB, endB) {
 
 module.exports = {
     calendarDateUtc,
+    calendarDateFromInstant,
+    recoverBareIsoFromFrontendStrip,
+    localMidnightIsoStrip,
+    harareLocalMidnightIsoStrip,
     parseSlashDateToIso,
     parseCalendarDate,
     parseUploadCalendarDate,

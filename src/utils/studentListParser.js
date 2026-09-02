@@ -51,8 +51,12 @@ function splitLine(line) {
 function isHeaderLine(cells) {
     const joined = cells.join(' ').toLowerCase();
     if (!joined.trim()) return true;
+    // St Kilda / proration sheets: Name | Room | Days | Start | End
+    if (/^name$/i.test(String(cells[0] || '').trim()) && /^room$/i.test(String(cells[1] || '').trim())) {
+        return true;
+    }
     return (
-        /first|last|surname|name|room|email|phone|lease|start|end|rent|tenant|customer|client|occupant/.test(joined)
+        /first|last|surname|name|room|email|phone|lease|start|end|rent|tenant|customer|client|occupant|days|proration/.test(joined)
         && !/^\d/.test(cells[0] || '')
         && !looksLikeRoomCode(cells[0])
     );
@@ -62,7 +66,54 @@ function looksLikeRoomCode(value) {
     const s = String(value || '').trim();
     if (!s) return false;
     if (/^(single|double|triple|quad|shared)$/i.test(s)) return false;
-    return /^[A-Z]{1,5}\d*[A-Z0-9]*$/i.test(s) || /^[A-Z]+\d+[A-Z]*$/i.test(s);
+    // M8, BHM1, Ext 2, BUS 1 — require a digit so "Name" is not treated as a room
+    return /^[A-Za-z]{1,12}\s*\d+[A-Za-z0-9]*$/i.test(s)
+        || /^[A-Z]+\d+[A-Z]*$/i.test(s);
+}
+
+function looksLikeDayCount(value) {
+    const n = Number(String(value || '').trim());
+    return Number.isFinite(n) && n >= 1 && n <= 31 && String(value).trim() === String(n);
+}
+
+function looksLikeCalendarDate(value) {
+    const s = String(value || '').trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s)
+        || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)
+        || /^[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}$/.test(s);
+}
+
+/** Name | Room | Start | End (ISO dates, no Days column) */
+function rowFromNameRoomDates(cells) {
+    if (cells.length !== 4) return null;
+    const [name, room, startDate, endDate] = cells.map((c) => String(c || '').trim());
+    if (!name || !room || !looksLikeCalendarDate(startDate) || !looksLikeCalendarDate(endDate)) {
+        return null;
+    }
+    const { firstName, lastName } = splitFullName(name);
+    return {
+        firstName,
+        lastName,
+        roomNumber: room,
+        startDate,
+        endDate
+    };
+}
+
+/** Name | Room | Days | Start | End (St Kilda-style proration sheet) */
+function rowFromNameRoomDaysDates(cells) {
+    if (cells.length !== 5) return null;
+    const [name, room, third, startDate, endDate] = cells.map((c) => String(c || '').trim());
+    if (!name || !room || !looksLikeDayCount(third)) return null;
+    const { firstName, lastName } = splitFullName(name);
+    return {
+        firstName,
+        lastName,
+        roomNumber: room,
+        prorationDays: Number(third),
+        startDate,
+        endDate
+    };
 }
 
 function splitFullName(fullName) {
@@ -77,7 +128,8 @@ function mapHeaderColumns(headers) {
     headers.forEach((h, idx) => {
         const c = String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         if (!c) return;
-        if (/^firstname|^given|^name$/.test(c) && map.firstName == null) map.firstName = idx;
+        if (/^name$/.test(c) && map.fullName == null) map.fullName = idx;
+        else if (/^firstname|^given/.test(c) && map.firstName == null) map.firstName = idx;
         else if (/^lastname|^surname|^family/.test(c)) map.lastName = idx;
         else if (/^fullname|^studentname|^tenant|^customer|^client|^occupant|^resident|^student$/.test(c)) {
             if (map.fullName == null) map.fullName = idx;
@@ -85,6 +137,7 @@ function mapHeaderColumns(headers) {
         else if (/^roomnumber|^roomno|^roomname|^roomcode|^room|^unit/.test(c)) map.room = idx;
         else if (/^email|^mail/.test(c)) map.email = idx;
         else if (/^phone|^mobile|^cell/.test(c)) map.phone = idx;
+        else if (/^days|^proration|^prorated/.test(c)) map.prorationDays = idx;
         else if (/^start|^leasestart/.test(c)) map.startDate = idx;
         else if (/^end|^leaseend/.test(c)) map.endDate = idx;
     });
@@ -157,19 +210,39 @@ function rowFromHeaders(cells, headerMap) {
     let lastName = get('lastName');
     const fullName = get('fullName');
     if ((!firstName || !lastName) && fullName) {
-        const parts = fullName.split(/\s+/).filter(Boolean);
-        if (!firstName && parts.length) firstName = parts[0];
-        if (!lastName && parts.length > 1) lastName = parts.slice(1).join(' ');
+        const parts = splitFullName(fullName);
+        if (!firstName) firstName = parts.firstName;
+        if (!lastName) lastName = parts.lastName;
     }
+    const prorationRaw = get('prorationDays');
     return {
         firstName,
         lastName,
         email: get('email') || undefined,
         phone: get('phone') || undefined,
         roomNumber: get('room') || undefined,
+        prorationDays: prorationRaw ? Number(prorationRaw) : undefined,
         startDate: get('startDate') || undefined,
         endDate: get('endDate') || undefined
     };
+}
+
+function parseStudentRowCells(cells, headerMap) {
+    if (headerMap) {
+        return rowFromHeaders(cells, headerMap);
+    }
+    if (cells.length === 2) {
+        return rowFromTwoColumn(cells);
+    }
+    if (cells.length === 4) {
+        const datedRow = rowFromNameRoomDates(cells);
+        if (datedRow) return datedRow;
+    }
+    if (cells.length === 5) {
+        const prorationRow = rowFromNameRoomDaysDates(cells);
+        if (prorationRow) return prorationRow;
+    }
+    return rowFromPositional(cells);
 }
 
 /**
@@ -196,11 +269,7 @@ function parseStudentListText(text) {
         const cells = splitLine(lines[i]);
         if (!cells.some(Boolean)) continue;
 
-        const raw = headerMap
-            ? rowFromHeaders(cells, headerMap)
-            : (cells.length === 2
-                ? rowFromTwoColumn(cells)
-                : rowFromPositional(cells));
+        const raw = parseStudentRowCells(cells, headerMap);
 
         if (isValidStudentRow(raw)) {
             rows.push(raw);
@@ -258,11 +327,7 @@ async function parseStudentListFile(buffer, originalName = '', mimetype = '') {
             headerMap = null;
         }
 
-        const parsed = headerMap
-            ? rowFromHeaders(cells, headerMap)
-            : (cells.length === 2
-                ? rowFromTwoColumn(cells)
-                : rowFromPositional(cells));
+        const parsed = parseStudentRowCells(cells, headerMap);
 
         if (isValidStudentRow(parsed)) {
             rows.push(parsed);

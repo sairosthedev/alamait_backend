@@ -3893,6 +3893,175 @@ class TransactionController {
     }
 
     /**
+     * Compare external payment list vs system (or vs a second list) — dry run, no writes.
+     * POST /api/finance/transactions/reconcile-payments
+     */
+    static async reconcilePayments(req, res) {
+        try {
+            const systemOnly =
+                req.body?.systemOnly === true ||
+                req.body?.systemOnly === 'true' ||
+                req.query?.systemOnly === 'true';
+            if (systemOnly) {
+                return TransactionController.reconcilePaymentsSystemOnly(req, res);
+            }
+
+            const {
+                reconcilePayments,
+                parseRowsFromUploadFile,
+                normalizeRow
+            } = require('../../services/paymentReconciliationService');
+
+            const residence = req.body.residence;
+            if (!residence) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'residence is required'
+                });
+            }
+
+            const residenceId = residence._id || residence;
+            const sheetName = req.body.sheetName || req.body.sheet || null;
+            const month = req.body.month ?? null;
+            const year = req.body.year ?? null;
+            const format = req.body.format || 'auto';
+            const defaultDate = req.body.defaultDate ? new Date(req.body.defaultDate) : null;
+
+            let externalRows =
+                req.body.externalRows || req.body.listA || req.body.rows || null;
+            let compareRows = req.body.compareRows || req.body.listB || null;
+
+            if (req.file?.buffer) {
+                externalRows = await parseRowsFromUploadFile(req.file.buffer, {
+                    format,
+                    sheetName,
+                    defaultDate
+                });
+            }
+
+            if (req.files?.file?.[0]?.buffer) {
+                externalRows = await parseRowsFromUploadFile(req.files.file[0].buffer, {
+                    format,
+                    sheetName,
+                    defaultDate
+                });
+            }
+
+            if (req.files?.compareFile?.[0]?.buffer) {
+                compareRows = await parseRowsFromUploadFile(req.files.compareFile[0].buffer, {
+                    format: req.body.compareFormat || format,
+                    sheetName: req.body.compareSheet || sheetName,
+                    defaultDate
+                });
+            }
+
+            if (!externalRows?.length) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'Provide externalRows (JSON) or upload a file with Name + Amount columns'
+                });
+            }
+
+            const normalizedExternal = externalRows.map((r) =>
+                typeof r === 'object' ? normalizeRow(r) : normalizeRow({ name: '', amount: 0 })
+            );
+
+            const report = await reconcilePayments({
+                residenceId,
+                externalRows: normalizedExternal,
+                compareRows: compareRows?.length ? compareRows : null,
+                sheetName,
+                month,
+                year
+            });
+
+            res.status(200).json({
+                success: true,
+                message: `Reconciliation: ${report.summary.matched} matched, ${report.summary.amountMismatch} amount mismatches, ${report.summary.missingInSystem} missing in system, ${report.summary.extraInSystem} extra in system`,
+                data: report
+            });
+        } catch (error) {
+            console.error('Error reconciling payments:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to reconcile payments',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * List system payment journals for a residence + month/sheet (no comparison).
+     * GET  /api/finance/transactions/reconcile-payments/system?residence=&sheetName=August
+     * POST /api/finance/transactions/reconcile-payments/system
+     */
+    static async reconcilePaymentsSystemOnly(req, res) {
+        try {
+            const {
+                fetchSystemPayments,
+                roundAmount
+            } = require('../../services/paymentReconciliationService');
+
+            const residence =
+                req.query.residence || req.body?.residence;
+            if (!residence) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'residence is required'
+                });
+            }
+
+            const residenceId = residence._id || residence;
+            const sheetName =
+                req.query.sheetName ||
+                req.query.sheet ||
+                req.body?.sheetName ||
+                req.body?.sheet ||
+                null;
+            const month = req.query.month ?? req.body?.month ?? null;
+            const year = req.query.year ?? req.body?.year ?? null;
+
+            const { rows, period } = await fetchSystemPayments({
+                residenceId,
+                sheetName,
+                month,
+                year
+            });
+
+            const total = roundAmount(rows.reduce((s, r) => s + (r.amount || 0), 0));
+
+            res.status(200).json({
+                success: true,
+                message: rows.length
+                    ? `Found ${rows.length} system payment(s) totaling $${total.toFixed(2)}`
+                    : `Found 0 system payment(s) for ${sheetName || 'selected period'} — none uploaded in DB yet (Belvedere Excel payments may be stored under tab "Sheet1" with journal dates in that month)`,
+                data: {
+                    rows,
+                    summary: {
+                        count: rows.length,
+                        total
+                    },
+                    filters: {
+                        residenceId,
+                        sheetName: period.sheetName,
+                        month: period.month,
+                        year: period.year,
+                        filterMode: period.filterMode
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('Error listing system payments for reconciliation:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to list system payments',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * List worksheets in an uploaded Excel (for month-tab picker).
      * POST /api/finance/transactions/list-excel-sheets
      * multipart: file

@@ -329,6 +329,53 @@ class ResidencePaymentService {
         }
     }
     
+    /** Map UI / legacy rentProration values to Residence schema enums */
+    static normalizeRentProrationPolicy(policy) {
+        const POLICY_ALIASES = {
+            daily: 'daily_calculation',
+            daily_calculation: 'daily_calculation',
+            full_month: 'full_month',
+            full_month_only: 'full_month_only',
+            weekly: 'weekly_basis',
+            weekly_basis: 'weekly_basis',
+            custom: 'custom_period',
+            custom_period: 'custom_period'
+        };
+        const VALID = new Set([
+            'daily_calculation',
+            'full_month_only',
+            'weekly_basis',
+            'custom_period',
+            'full_month'
+        ]);
+        const normalized = POLICY_ALIASES[policy] || policy;
+        return VALID.has(normalized) ? normalized : 'daily_calculation';
+    }
+
+    static normalizeDailyRateMethod(method) {
+        const METHOD_ALIASES = {
+            fixed: 'fixed_daily_rate',
+            fixed_daily_rate: 'fixed_daily_rate',
+            calendar: 'monthly_rent_calendar_days',
+            calendar_days: 'monthly_rent_calendar_days',
+            monthly_rent_calendar_days: 'monthly_rent_calendar_days',
+            '30_days': 'monthly_rent_30_days',
+            monthly_rent_30_days: 'monthly_rent_30_days',
+            business_days: 'business_days_only',
+            business_days_only: 'business_days_only',
+            auto_calendar_days: 'auto_calendar_days'
+        };
+        const VALID = new Set([
+            'monthly_rent_calendar_days',
+            'monthly_rent_30_days',
+            'fixed_daily_rate',
+            'business_days_only',
+            'auto_calendar_days'
+        ]);
+        const normalized = METHOD_ALIASES[method] || method;
+        return VALID.has(normalized) ? normalized : 'monthly_rent_calendar_days';
+    }
+
     /**
      * Validate payment configuration
      */
@@ -368,8 +415,12 @@ class ResidencePaymentService {
             },
             rentProration: {
                 enabled: Boolean(config.rentProration?.enabled),
-                policy: config.rentProration?.policy || 'daily_calculation',
-                dailyRateMethod: config.rentProration?.dailyRateMethod || 'monthly_rent_calendar_days',
+                policy: ResidencePaymentService.normalizeRentProrationPolicy(
+                    config.rentProration?.policy || 'daily_calculation'
+                ),
+                dailyRateMethod: ResidencePaymentService.normalizeDailyRateMethod(
+                    config.rentProration?.dailyRateMethod || 'monthly_rent_calendar_days'
+                ),
                 fixedDailyRate: Math.max(0, Number(config.rentProration?.fixedDailyRate) || 0),
                 minimumDays: Math.max(0, Math.min(31, Number(config.rentProration?.minimumDays) || 0)),
                 customPeriodDays: Math.max(0, Math.min(62, Number(config.rentProration?.customPeriodDays) || 0)),

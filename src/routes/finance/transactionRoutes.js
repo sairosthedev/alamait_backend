@@ -138,6 +138,24 @@ router.post(
 );
 
 /**
+ * Reconcile external payment list vs system (dry run — no DB writes)
+ * POST /api/finance/transactions/reconcile-payments
+ * GET  /api/finance/transactions/reconcile-payments/system?residence=&sheetName=August
+ */
+const reconcileUpload = excelUpload.fields([
+    { name: 'file', maxCount: 1 },
+    { name: 'compareFile', maxCount: 1 }
+]);
+router.get('/reconcile-payments/system', TransactionController.reconcilePaymentsSystemOnly);
+router.post('/reconcile-payments/system', TransactionController.reconcilePaymentsSystemOnly);
+router.post('/reconcile-payments', (req, res, next) => {
+    if (req.is('multipart/form-data')) {
+        return reconcileUpload(req, res, next);
+    }
+    next();
+}, TransactionController.reconcilePayments);
+
+/**
  * Verify transaction creation for a specific source
  * GET /api/finance/transactions/verify-transaction/:sourceType/:sourceId
  */

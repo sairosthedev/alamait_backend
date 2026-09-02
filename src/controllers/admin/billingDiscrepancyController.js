@@ -70,7 +70,7 @@ class BillingDiscrepancyController {
 
             res.status(200).json({
                 success: true,
-                message: `Found ${result.summary.issueCount} issue(s): ${result.summary.rentAccrualIssueCount} rent accrual, ${result.summary.leaseIssueCount} lease`,
+                message: `Found ${result.summary.issueCount} issue(s): ${result.summary.rentAccrualIssueCount} rent accrual, ${result.summary.leaseIssueCount} lease, ${result.summary.duplicateAccrualCount || 0} duplicate accrual`,
                 data: result
             });
         } catch (error) {
@@ -127,20 +127,40 @@ class BillingDiscrepancyController {
      */
     static async reconcileRentAccruals(req, res) {
         try {
+            const body = req.body || {};
+            const nested = body.reconcileParams || body.params || {};
+
             const {
-                applicationId,
-                studentId,
                 actualLeaseEndDate,
-                month,
-                year,
                 actualAmount,
                 dryRun
-            } = req.body;
+            } = body;
+
+            const month = body.month ?? nested.month;
+            const year = body.year ?? nested.year;
+
+            const { applicationId, studentId } = await BillingDiscrepancyService.resolveReconcileIdentity({
+                ...body,
+                ...nested,
+                reconcileParams: nested,
+                residenceId: extractResidenceInput(req)
+            });
 
             if (!applicationId && !studentId) {
                 return res.status(400).json({
                     success: false,
-                    message: 'applicationId or studentId is required'
+                    message:
+                        'applicationId or studentId is required (or pass email / studentName + residenceId, or reconcileParams from compare result)',
+                    hint: {
+                        examples: [
+                            { applicationId: '...', month: 8, year: 2026 },
+                            { studentId: '...', month: 8, year: 2026 },
+                            { studentName: 'Patience Dube', residenceId: '67c13eb8425a2e078f61d00e', month: 2, year: 2026 },
+                            { reconcileParams: { applicationId: '...', month: 8, year: 2026 } }
+                        ],
+                        note:
+                            'Payment reconciliation (spreadsheet vs cash journals) uses POST /api/finance/transactions/reconcile-payments — not this endpoint.'
+                    }
                 });
             }
 

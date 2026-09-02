@@ -508,6 +508,242 @@ class BillingDiscrepancyService {
         }).sort({ date: -1 }).lean();
     }
 
+    static async findAllMonthlyAccrualTransactions(application, debtor, studentId, month, year) {
+        const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+        const applicationId = application._id.toString();
+        const debtorId = debtor?._id?.toString();
+        const sid = studentId?.toString();
+        const studentName = BillingDiscrepancyService.getStudentName(application);
+
+        const identityOr = [
+            { 'metadata.applicationId': applicationId },
+            { 'metadata.applicationId': application._id },
+            ...(sid ? [
+                { 'metadata.studentId': sid },
+                { 'metadata.userId': sid },
+                { sourceId: sid }
+            ] : []),
+            { 'metadata.studentId': applicationId },
+            { sourceId: application._id }
+        ];
+
+        if (debtorId) {
+            identityOr.push(
+                { 'metadata.debtorId': debtorId },
+                { sourceModel: 'Debtor', sourceId: debtorId },
+                { sourceModel: 'Debtor', sourceId: new mongoose.Types.ObjectId(debtorId) },
+                { 'entries.accountCode': `1100-${debtorId}` }
+            );
+        }
+        if (debtor?.accountCode) {
+            identityOr.push({ 'entries.accountCode': debtor.accountCode });
+        }
+
+        const nameTokens = BillingDiscrepancyService.nameTokens(studentName).filter(t => t.length > 2);
+        if (nameTokens.length >= 2) {
+            identityOr.push({
+                description: new RegExp(
+                    `${nameTokens[0]}.*${nameTokens[nameTokens.length - 1]}|${nameTokens[nameTokens.length - 1]}.*${nameTokens[0]}`,
+                    'i'
+                )
+            });
+        }
+
+        const monthOr = [
+            { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+            { 'metadata.accrualMonth': String(month), 'metadata.accrualYear': String(year) },
+            { 'metadata.month': monthKey },
+            { description: { $regex: new RegExp(`${monthKey}|\\b${month}\\b[/\\-]\\s*${year}\\b`, 'i') } }
+        ];
+
+        const monthStart = new Date(Date.UTC(year, month - 1, 1));
+        const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+
+        const baseQuery = {
+            source: 'rental_accrual',
+            status: { $nin: ['deleted', 'reversed'] }
+        };
+
+        let txs = await TransactionEntry.find({
+            ...baseQuery,
+            $and: [
+                {
+                    $or: [
+                        { 'metadata.type': 'monthly_rent_accrual' },
+                        { description: { $regex: /monthly.*(rent|accrual)/i } }
+                    ]
+                },
+                { $or: monthOr },
+                { $or: identityOr }
+            ]
+        })
+            .sort({ createdAt: 1 })
+            .lean();
+
+        if (!txs.length) {
+            txs = await TransactionEntry.find({
+                ...baseQuery,
+                date: { $gte: monthStart, $lte: monthEnd },
+                $or: identityOr
+            })
+                .sort({ createdAt: 1 })
+                .lean();
+        }
+
+        return txs;
+    }
+
+    static async findAllLeaseStartAccruals(application, debtor) {
+        const debtorId = debtor?._id?.toString();
+        return TransactionEntry.find({
+            source: 'rental_accrual',
+            'metadata.type': 'lease_start',
+            status: { $nin: ['deleted', 'reversed'] },
+            $or: [
+                { 'metadata.applicationId': application._id.toString() },
+                { 'metadata.applicationId': application._id },
+                { 'metadata.applicationCode': application.applicationCode },
+                ...(debtorId ? [{ 'metadata.debtorId': debtorId }] : [])
+            ]
+        })
+            .sort({ createdAt: 1 })
+            .lean();
+    }
+
+    static async reverseDuplicateAccrualTransactions({
+        duplicateTransactionIds = [],
+        keepTransactionId,
+        adminUser,
+        dryRun = false
+    }) {
+        const ids = (duplicateTransactionIds || []).filter(Boolean);
+        if (!ids.length) {
+            return { success: true, reversed: 0, keepTransactionId };
+        }
+
+        if (dryRun) {
+            return {
+                success: true,
+                dryRun: true,
+                wouldReverse: ids.length,
+                keepTransactionId
+            };
+        }
+
+        let reversed = 0;
+        const errors = [];
+        for (const id of ids) {
+            try {
+                const tx = await TransactionEntry.findById(id);
+                if (!tx || tx.status === 'reversed') continue;
+                tx.status = 'reversed';
+                tx.metadata = {
+                    ...(tx.metadata || {}),
+                    voidedDuplicate: true,
+                    voidedAt: new Date().toISOString(),
+                    keptTransactionId: keepTransactionId,
+                    reversedBy: adminUser?._id?.toString?.() || adminUser?.id || null
+                };
+                await tx.save();
+                reversed++;
+            } catch (err) {
+                errors.push({ id, error: err.message });
+            }
+        }
+
+        return {
+            success: errors.length === 0,
+            reversed,
+            keepTransactionId,
+            errors
+        };
+    }
+
+    /**
+     * Residence-wide duplicate accrual detection for a month (when residence is selected).
+     */
+    static async scanResidenceDuplicateAccruals({ residenceId, month, year, existingApplicationIds = new Set() }) {
+        if (!residenceId) return [];
+
+        const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+        const txns = await TransactionEntry.find({
+            residence: residenceId,
+            source: 'rental_accrual',
+            status: { $nin: ['deleted', 'reversed'] },
+            $or: [
+                { 'metadata.month': monthKey },
+                { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+                { 'metadata.accrualMonth': String(month), 'metadata.accrualYear': String(year) }
+            ]
+        })
+            .select('_id transactionId createdAt metadata entries description totalDebit')
+            .sort({ createdAt: 1 })
+            .lean();
+
+        const groups = new Map();
+        for (const tx of txns) {
+            const appId = tx.metadata?.applicationId?.toString?.() || tx.metadata?.applicationId || null;
+            const debtorId = tx.metadata?.debtorId?.toString?.() || tx.metadata?.debtorId || null;
+            const arEntry = (tx.entries || []).find(
+                (e) => typeof e?.accountCode === 'string' && e.accountCode.startsWith('1100-')
+            );
+            const arCode = arEntry?.accountCode || null;
+            const accrualType = tx.metadata?.type || 'monthly_rent_accrual';
+            const key = `${accrualType}::${appId || debtorId || arCode || tx._id}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(tx);
+        }
+
+        const issues = [];
+        for (const [, list] of groups) {
+            if (list.length < 2) continue;
+
+            const appId = list[0].metadata?.applicationId?.toString?.() || list[0].metadata?.applicationId;
+            if (appId && existingApplicationIds.has(String(appId))) continue;
+
+            const sorted = [...list].sort(
+                (a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)
+            );
+            const keep = sorted[0];
+            const extras = sorted.slice(1);
+            const studentName =
+                list[0].metadata?.studentName
+                || list[0].description?.replace(/^.*?:\s*/i, '').trim()
+                || 'Unknown';
+
+            issues.push({
+                issueType: 'duplicate_accrual',
+                category: 'rent_accrual',
+                fixedBy: 'admin_or_finance',
+                applicationId: appId || null,
+                studentId: list[0].metadata?.studentId?.toString?.() || list[0].metadata?.studentId || null,
+                studentName,
+                month,
+                year,
+                accrualType: list[0].metadata?.type || 'monthly_rent_accrual',
+                duplicateCount: list.length,
+                keepTransactionId: keep._id.toString(),
+                duplicateTransactionIds: extras.map((t) => t._id.toString()),
+                transactionIds: sorted.map((t) => t._id.toString()),
+                actualAmount: BillingDiscrepancyService.extractRentAmountFromTransaction(keep),
+                fixAction: 'reverse_duplicate_accrual',
+                suggestedAction: BillingDiscrepancyService.getSuggestedAction('duplicate_accrual', 'reverse_duplicate_accrual'),
+                availableActions: ['reverse_duplicate_accrual'],
+                reverseDuplicateParams: {
+                    type: 'reverse_duplicate_accrual',
+                    applicationId: appId || null,
+                    studentId: list[0].metadata?.studentId?.toString?.() || list[0].metadata?.studentId || null,
+                    month,
+                    year,
+                    keepTransactionId: keep._id.toString(),
+                    duplicateTransactionIds: extras.map((t) => t._id.toString())
+                }
+            });
+        }
+
+        return issues;
+    }
+
     static getExpectedMonthlyRent(application) {
         const roomNumber = application.allocatedRoom
             || application.allocatedRoomDetails?.roomNumber
@@ -580,7 +816,7 @@ class BillingDiscrepancyService {
 
     static getIssueCategory(issueType) {
         if (issueType === 'extra_accrual') return 'lease';
-        if (['missing_lease_start', 'missing_monthly_accrual', 'missing_debtor', 'amount_mismatch', 'debtor_out_of_sync'].includes(issueType)) {
+        if (['missing_lease_start', 'missing_monthly_accrual', 'missing_debtor', 'amount_mismatch', 'debtor_out_of_sync', 'duplicate_accrual'].includes(issueType)) {
             return 'rent_accrual';
         }
         return 'other';
@@ -588,7 +824,7 @@ class BillingDiscrepancyService {
 
     static getFixOwner(issueType) {
         if (issueType === 'extra_accrual') return 'admin';
-        if (['missing_lease_start', 'missing_monthly_accrual', 'missing_debtor', 'amount_mismatch', 'debtor_out_of_sync'].includes(issueType)) {
+        if (['missing_lease_start', 'missing_monthly_accrual', 'missing_debtor', 'amount_mismatch', 'debtor_out_of_sync', 'duplicate_accrual'].includes(issueType)) {
             return 'admin_or_finance';
         }
         return 'admin_or_finance';
@@ -600,6 +836,7 @@ class BillingDiscrepancyService {
             update_lease_end: 'Admin: update lease end date (student left early or not on actual list)',
             extend_lease_end: 'Admin: extend lease to month-end when it was cut short, then accrue rent',
             reconcile_accrual: 'Create missing rent accrual from lease/transaction backfill',
+            reverse_duplicate_accrual: 'Reverse extra duplicate accrual(s); keep the earliest entry',
             negotiate: 'Admin or finance: adjust ledger rent to match Excel actual (discount or increase)',
             review: 'Review manually — actual exceeds system accrual'
         };
@@ -609,6 +846,7 @@ class BillingDiscrepancyService {
             missing_debtor: 'Admin or finance: run rent accrual reconciliation (backfill + sync debtor)',
             missing_lease_start: 'Admin or finance: run rent accrual reconciliation to create lease_start entry',
             missing_monthly_accrual: 'Admin or finance: run rent accrual reconciliation to create monthly_rent_accrual',
+            duplicate_accrual: 'Reverse duplicate accrual entries (keep earliest, void extras)',
             extra_accrual: 'Admin: update lease end date, then run rent accrual reconciliation',
             amount_mismatch: 'Admin or finance: negotiate to match Excel actual amount',
             student_not_in_system: 'Admin: add student manually or via CSV import',
@@ -623,6 +861,7 @@ class BillingDiscrepancyService {
         if (fixAction === 'add_student') actions.push('add_student');
         if (fixAction === 'update_lease_end') actions.push('update_lease_end');
         if (fixAction === 'reconcile_accrual') actions.push('reconcile_accrual');
+        if (fixAction === 'reverse_duplicate_accrual') actions.push('reverse_duplicate_accrual');
         if (leaseCutShort) actions.push('extend_lease_end');
         if (fixAction === 'negotiate') actions.push('negotiate');
         if (fixAction === 'review') actions.push('review');
@@ -883,6 +1122,79 @@ class BillingDiscrepancyService {
                 continue;
             }
 
+            const studentId = application.student?._id?.toString() || application.student?.toString();
+            const isLeaseStartMonth =
+                scanMonth === new Date(application.startDate).getMonth() + 1
+                && scanYear === new Date(application.startDate).getFullYear();
+
+            let duplicateIssue = null;
+            if (isLeaseStartMonth) {
+                const leaseStarts = await BillingDiscrepancyService.findAllLeaseStartAccruals(application, debtor);
+                if (leaseStarts.length > 1) {
+                    const keep = leaseStarts[0];
+                    const extras = leaseStarts.slice(1);
+                    duplicateIssue = BillingDiscrepancyService.buildIssue(application, 'duplicate_accrual', {
+                        month: scanMonth,
+                        year: scanYear,
+                        accrualType: 'lease_start',
+                        duplicateCount: leaseStarts.length,
+                        keepTransactionId: keep._id.toString(),
+                        duplicateTransactionIds: extras.map((t) => t._id.toString()),
+                        transactionIds: leaseStarts.map((t) => t._id.toString()),
+                        actualAmount: BillingDiscrepancyService.extractRentAmountFromTransaction(keep),
+                        expectedAmount: expectedRent,
+                        fixAction: 'reverse_duplicate_accrual',
+                        availableActions: ['reverse_duplicate_accrual'],
+                        reverseDuplicateParams: {
+                            type: 'reverse_duplicate_accrual',
+                            applicationId: application._id.toString(),
+                            studentId,
+                            month: scanMonth,
+                            year: scanYear,
+                            keepTransactionId: keep._id.toString(),
+                            duplicateTransactionIds: extras.map((t) => t._id.toString())
+                        }
+                    });
+                }
+            } else {
+                const allMonthly = await BillingDiscrepancyService.findAllMonthlyAccrualTransactions(
+                    application, debtor, studentId, scanMonth, scanYear
+                );
+                if (allMonthly.length > 1) {
+                    const keep = allMonthly[0];
+                    const extras = allMonthly.slice(1);
+                    duplicateIssue = BillingDiscrepancyService.buildIssue(application, 'duplicate_accrual', {
+                        month: scanMonth,
+                        year: scanYear,
+                        accrualType: 'monthly_rent_accrual',
+                        duplicateCount: allMonthly.length,
+                        keepTransactionId: keep._id.toString(),
+                        duplicateTransactionIds: extras.map((t) => t._id.toString()),
+                        transactionIds: allMonthly.map((t) => t._id.toString()),
+                        actualAmount: BillingDiscrepancyService.extractRentAmountFromTransaction(keep),
+                        expectedAmount: expectedRent,
+                        fixAction: 'reverse_duplicate_accrual',
+                        availableActions: ['reverse_duplicate_accrual'],
+                        reverseDuplicateParams: {
+                            type: 'reverse_duplicate_accrual',
+                            applicationId: application._id.toString(),
+                            studentId,
+                            month: scanMonth,
+                            year: scanYear,
+                            keepTransactionId: keep._id.toString(),
+                            duplicateTransactionIds: extras.map((t) => t._id.toString())
+                        }
+                    });
+                }
+            }
+
+            if (duplicateIssue) {
+                issues.push(duplicateIssue);
+                totalExpected += expectedRent;
+                totalActual += duplicateIssue.actualAmount || 0;
+                continue;
+            }
+
             const accrual = await BillingDiscrepancyService.getAccrualForMonth(
                 application, debtor, scanMonth, scanYear
             );
@@ -936,7 +1248,23 @@ class BillingDiscrepancyService {
             suggestedAction: BillingDiscrepancyService.getSuggestedAction('extra_accrual')
         }));
 
-        const existingIds = new Set(issues.map(i => i.applicationId));
+        const existingIds = new Set(issues.map(i => i.applicationId).filter(Boolean));
+
+        if (residenceId) {
+            const residenceDupes = await BillingDiscrepancyService.scanResidenceDuplicateAccruals({
+                residenceId,
+                month: scanMonth,
+                year: scanYear,
+                existingApplicationIds: existingIds
+            });
+            for (const dup of residenceDupes) {
+                const key = dup.applicationId || dup.studentId || dup.keepTransactionId;
+                if (key && existingIds.has(String(key))) continue;
+                if (key) existingIds.add(String(key));
+                issues.push(dup);
+            }
+        }
+
         for (const el of earlyLeaveIssues) {
             const appId = el.applicationId || el.studentId;
             if (!existingIds.has(appId)) {
@@ -946,15 +1274,18 @@ class BillingDiscrepancyService {
 
         const rentAccrualIssues = issues.filter(i => i.category === 'rent_accrual');
         const leaseIssues = issues.filter(i => i.category === 'lease');
+        const duplicateAccrualIssues = issues.filter(i => i.issueType === 'duplicate_accrual');
 
         return {
             success: true,
             period: { month: scanMonth, year: scanYear },
+            residenceId: residenceId || null,
             summary: {
                 tenantsScanned: applications.length,
                 issueCount: issues.length,
                 rentAccrualIssueCount: rentAccrualIssues.length,
                 leaseIssueCount: leaseIssues.length,
+                duplicateAccrualCount: duplicateAccrualIssues.length,
                 healthyCount: healthy.length,
                 totalExpected: Math.round(totalExpected * 100) / 100,
                 totalActual: Math.round(totalActual * 100) / 100,
@@ -963,6 +1294,7 @@ class BillingDiscrepancyService {
             issues,
             rentAccrualIssues,
             leaseIssues,
+            duplicateAccrualIssues,
             healthy,
             workflow: {
                 admin: 'Lease dates + rent accrual reconciliation (missing lease_start / monthly_rent_accrual)',
@@ -1139,6 +1471,79 @@ class BillingDiscrepancyService {
         }
 
         return best;
+    }
+
+    /**
+     * Resolve applicationId / studentId from reconcile request body (supports nested reconcileParams, name, email).
+     */
+    static async resolveReconcileIdentity(input = {}) {
+        const params = input.reconcileParams || input.params || {};
+        let applicationId =
+            input.applicationId ||
+            params.applicationId ||
+            input.application?._id ||
+            input.application?.id ||
+            null;
+        let studentId =
+            input.studentId ||
+            params.studentId ||
+            input.student?._id ||
+            input.student?.id ||
+            null;
+
+        if (applicationId) {
+            applicationId = String(applicationId);
+        }
+        if (studentId) {
+            studentId = String(studentId);
+        }
+
+        if (applicationId || studentId) {
+            return { applicationId: applicationId || null, studentId: studentId || null };
+        }
+
+        const email = String(
+            input.email || params.email || input.studentEmail || params.studentEmail || ''
+        )
+            .trim()
+            .toLowerCase();
+        if (email) {
+            const User = require('../models/User');
+            const user = await User.findOne({ email }).select('_id').lean();
+            if (user) {
+                return { applicationId: null, studentId: String(user._id) };
+            }
+        }
+
+        const studentName = String(
+            input.studentName ||
+            input.name ||
+            params.studentName ||
+            input.external?.name ||
+            input.external?.customer ||
+            ''
+        ).trim();
+        const residenceId =
+            input.residenceId ||
+            input.residence ||
+            params.residenceId ||
+            null;
+
+        if (studentName && residenceId) {
+            const { resolveDebtorForCustomer } = require('./journalExcelUploadService');
+            const resolved = await resolveDebtorForCustomer(studentName, {
+                residenceId,
+                roomNumber: input.roomNumber || params.roomNumber || null
+            });
+            if (resolved.ok && resolved.studentId) {
+                return {
+                    applicationId: null,
+                    studentId: String(resolved.studentId)
+                };
+            }
+        }
+
+        return { applicationId: null, studentId: null };
     }
 
     static async reconcileRentAccruals({
@@ -1468,12 +1873,16 @@ class BillingDiscrepancyService {
         const fixableTypes = new Set([
             'missing_lease_start',
             'missing_monthly_accrual',
-            'missing_debtor'
+            'missing_debtor',
+            'duplicate_accrual'
         ]);
+
+        const duplicateIssues = (scan.rentAccrualIssues || scan.issues)
+            .filter(i => i.issueType === 'duplicate_accrual');
 
         // Only rent accrual issues — lease/extra_accrual requires admin lease update first
         const targets = (scan.rentAccrualIssues || scan.issues)
-            .filter(i => fixableTypes.has(i.issueType))
+            .filter(i => fixableTypes.has(i.issueType) && i.issueType !== 'duplicate_accrual')
             .map(i => ({
                 applicationId: i.applicationId,
                 studentId: i.studentId,
@@ -1496,8 +1905,10 @@ class BillingDiscrepancyService {
                 success: true,
                 dryRun: true,
                 scan: scan.summary,
-                wouldFixCount: uniqueTargets.length,
-                targets: uniqueTargets
+                wouldFixCount: uniqueTargets.length + duplicateIssues.length,
+                wouldReverseDuplicates: duplicateIssues.length,
+                targets: uniqueTargets,
+                duplicateTargets: duplicateIssues
             };
         }
 
@@ -1510,13 +1921,27 @@ class BillingDiscrepancyService {
             adminUser
         });
 
+        const duplicateResults = [];
+        let duplicatesReversed = 0;
+        for (const dup of duplicateIssues) {
+            const dupResult = await BillingDiscrepancyService.reverseDuplicateAccrualTransactions({
+                duplicateTransactionIds: dup.duplicateTransactionIds,
+                keepTransactionId: dup.keepTransactionId,
+                adminUser
+            });
+            duplicateResults.push({ studentName: dup.studentName, ...dupResult });
+            if (dupResult.success) duplicatesReversed += dupResult.reversed || 0;
+        }
+
         const rescan = await BillingDiscrepancyService.scanPeriod({ month, year, residenceId });
 
         return {
             success: bulkResult.success,
             before: scan.summary,
             after: rescan.summary,
-            bulkResult
+            bulkResult,
+            duplicateResults,
+            duplicatesReversed
         };
     }
 
@@ -3061,6 +3486,15 @@ class BillingDiscrepancyService {
                     actualAmount: action.actualAmount,
                     allowLeaseUpdate: false,
                     adminUser
+                });
+            }
+            case 'reverse_duplicate_accrual':
+            case 'reverse_duplicates': {
+                return BillingDiscrepancyService.reverseDuplicateAccrualTransactions({
+                    duplicateTransactionIds: action.duplicateTransactionIds,
+                    keepTransactionId: action.keepTransactionId,
+                    adminUser,
+                    dryRun: action.dryRun === true
                 });
             }
             case 'update_lease_end': {
