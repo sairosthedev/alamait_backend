@@ -3538,6 +3538,8 @@ class EnhancedPaymentAllocationService {
       const daysInMonth = lastDayOfMonth.getDate();
       // Calculate days from lease start to end of month
       const daysFromStart = lastDayOfMonth.getDate() - startDate.getDate() + 1;
+      const fallbackCutoffDay =
+          Number(residence?.paymentConfiguration?.rentProration?.prorateAfterDay) || 15;
       
       let proratedRent;
       
@@ -3556,17 +3558,18 @@ class EnhancedPaymentAllocationService {
       
       // Legacy logic (fallback or when no residence provided)
       if (proratedRent === undefined) {
-        // Business rule: If lease starts from 20th onwards, use $7 per day
-        if (dayOfMonth >= 20) {
-          proratedRent = daysFromStart * 7; // $7 per day
-          console.log(`📅 Lease starts on ${dayOfMonth}th (≥20th): Using $7/day rate`);
+        const cutoffDay =
+            Number(residence?.paymentConfiguration?.rentProration?.prorateAfterDay) || fallbackCutoffDay;
+        const fixedDaily =
+            Number(residence?.paymentConfiguration?.rentProration?.fixedDailyRate) || 7;
+
+        if (dayOfMonth >= cutoffDay) {
+          proratedRent = daysFromStart * fixedDaily;
+          console.log(`📅 Lease starts on ${dayOfMonth}th (≥${cutoffDay}): Using $${fixedDaily}/day`);
           console.log(`   Days from start: ${daysFromStart}, Amount: $${proratedRent}`);
         } else {
-          // Use normal prorated calculation
-          proratedRent = Math.round((monthlyRent / daysInMonth) * daysFromStart * 100) / 100;
-          console.log(`📅 Lease starts on ${dayOfMonth}th (<20th): Using prorated calculation`);
-          console.log(`   Monthly rent: $${monthlyRent}, Days in month: ${daysInMonth}, Days from start: ${daysFromStart}`);
-          console.log(`   Prorated rent: $${proratedRent} (${monthlyRent} × ${daysFromStart}/${daysInMonth})`);
+          proratedRent = monthlyRent;
+          console.log(`📅 Lease starts on ${dayOfMonth}th (<${cutoffDay}): Full month room price $${monthlyRent}`);
         }
       }
       
@@ -3583,7 +3586,11 @@ class EnhancedPaymentAllocationService {
         daysInMonth,
         daysFromStart,
         calculationDate: startDate,
-        calculationMethod: residence && residence.paymentConfiguration ? 'residence_specific' : (dayOfMonth >= 20 ? 'flat_rate_7_per_day' : 'prorated')
+        calculationMethod: residence && residence.paymentConfiguration
+            ? 'residence_specific'
+            : dayOfMonth >= fallbackCutoffDay
+              ? 'flat_rate_per_day'
+              : 'full_month'
       };
       
     } catch (error) {

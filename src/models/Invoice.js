@@ -283,40 +283,38 @@ invoiceSchema.index({ billingPeriod: 1 });
 invoiceSchema.index({ 'payments.paymentId': 1 });
 
 // Pre-save middleware to calculate totals
-invoiceSchema.pre('save', function(next) {
-  // Calculate subtotal from charges
-  this.subtotal = this.charges.reduce((sum, charge) => {
-    return sum + (charge.amount * charge.quantity);
-  }, 0);
-  
-  // Calculate tax amount
-  this.taxAmount = this.charges.reduce((sum, charge) => {
-    return sum + ((charge.amount * charge.quantity) * (charge.taxRate / 100));
-  }, 0);
-  
-  // Calculate total amount
-  this.totalAmount = this.subtotal + this.taxAmount - this.discountAmount;
-  
-  // Calculate balance due
-  this.balanceDue = this.totalAmount - this.amountPaid;
-  
-  // Update payment status
-  if (this.balanceDue <= 0) {
-    this.paymentStatus = 'paid';
-    this.status = 'paid';
-  } else if (this.amountPaid > 0) {
-    this.paymentStatus = 'partial';
-  } else {
-    this.paymentStatus = 'unpaid';
-  }
-  
-  // Check if overdue
-  if (this.balanceDue > 0 && new Date() > this.dueDate) {
-    this.status = 'overdue';
-    this.paymentStatus = 'overdue';
-  }
-  
-  next();
+invoiceSchema.pre('save', function() {
+    // Calculate subtotal from charges
+    this.subtotal = this.charges.reduce((sum, charge) => {
+        return sum + (charge.amount * charge.quantity);
+    }, 0);
+    
+    // Calculate tax amount
+    this.taxAmount = this.charges.reduce((sum, charge) => {
+        return sum + ((charge.amount * charge.quantity) * (charge.taxRate / 100));
+    }, 0);
+    
+    // Calculate total amount
+    this.totalAmount = this.subtotal + this.taxAmount - this.discountAmount;
+    
+    // Calculate balance due
+    this.balanceDue = this.totalAmount - this.amountPaid;
+    
+    // Update payment status
+    if (this.balanceDue <= 0) {
+        this.paymentStatus = 'paid';
+        this.status = 'paid';
+    } else if (this.amountPaid > 0) {
+        this.paymentStatus = 'partial';
+    } else {
+        this.paymentStatus = 'unpaid';
+    }
+    
+    // Check if overdue
+    if (this.balanceDue > 0 && new Date() > this.dueDate) {
+        this.status = 'overdue';
+        this.paymentStatus = 'overdue';
+    }
 });
 
 // Virtual for formatted invoice number

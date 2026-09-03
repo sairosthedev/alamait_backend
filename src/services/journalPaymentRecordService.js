@@ -14,7 +14,9 @@ function detectStudentPaymentFromEntries(entries = []) {
         debit: Number(e.debit) || 0,
         credit: Number(e.credit) || 0
     }));
-    const cashLine = lines.find((e) => /^1000/.test(e.code) && e.debit > 0);
+    const cashLine = lines.find(
+        (e) => /^(1000|1001|1010|1015|10003)/.test(e.code) && e.debit > 0
+    );
     const arLine = lines.find((e) => /^1100[-_]/.test(e.code) && e.credit > 0);
     if (!cashLine || !arLine) return null;
     return {
@@ -64,6 +66,30 @@ async function resolveStudentId({ studentId, debtorId, accountCode, customer }) 
     return null;
 }
 
+async function applyPaymentToSystemInvoice({ invoiceId, payment, processedByUserId }) {
+    if (!invoiceId || !payment?._id) return;
+
+    const Invoice = require('../models/Invoice');
+    const invoice = await Invoice.findById(invoiceId);
+    if (!invoice) return;
+
+    const alreadyApplied = (invoice.payments || []).some(
+        (p) => p.paymentId === payment.paymentId || p.reference === payment.paymentId
+    );
+    if (alreadyApplied) return;
+
+    invoice.addPayment({
+        paymentId: payment.paymentId,
+        amount: payment.totalAmount,
+        paymentDate: payment.date || new Date(),
+        paymentMethod: payment.method || 'Cash',
+        reference: payment.paymentId,
+        status: 'confirmed',
+        processedBy: processedByUserId
+    });
+    await invoice.save();
+}
+
 /**
  * @returns {{ payment: object, created: boolean }}
  */
@@ -80,7 +106,8 @@ async function createPaymentRecordForJournal({
     paymentMonth,
     roomNumber,
     adminFee = 0,
-    rental = 0
+    rental = 0,
+    systemInvoiceId = null
 }) {
     if (!transactionEntry?._id) {
         throw new Error('Transaction entry is required');
@@ -174,6 +201,7 @@ async function createPaymentRecordForJournal({
             journalUpload: true,
             transactionId: transactionEntry.transactionId,
             transactionEntryId: transactionEntry._id.toString(),
+            systemInvoiceId: systemInvoiceId || transactionEntry.metadata?.systemInvoiceId || null,
             smartFIFOAllocationCalled: true,
             smartFIFOAllocationCalledAt: new Date(),
             skipSmartFIFOAllocation: true
@@ -182,6 +210,25 @@ async function createPaymentRecordForJournal({
 
     await linkTransactionToPayment(transactionEntry, payment);
     await payment.save();
+
+    const invoiceId =
+        systemInvoiceId ||
+        transactionEntry.metadata?.systemInvoiceId ||
+        null;
+    if (invoiceId) {
+        try {
+            await applyPaymentToSystemInvoice({
+                invoiceId,
+                payment,
+                processedByUserId: createdByUserId
+            });
+        } catch (invoiceErr) {
+            console.warn(
+                `Payment ${payment.paymentId} saved but invoice update failed:`,
+                invoiceErr.message
+            );
+        }
+    }
 
     return { payment, created: true };
 }
@@ -209,8 +256,72 @@ async function linkTransactionToPayment(transactionEntry, payment) {
     );
 }
 
+/**
+ * When a journal already exists from a prior upload, try to create the missing Payment record.
+ * @returns {{ status: 'linked'|'already_complete'|'not_applicable'|'failed', payment?: object, created?: boolean, error?: string }}
+ */
+async function tryBackfillPaymentForExistingJournal({
+    existingTransactionId,
+    existingId,
+    extraMeta = {},
+    residenceId,
+    createdByUserId
+}) {
+    if (!existingTransactionId && !existingId) {
+        return { status: 'not_applicable' };
+    }
+
+    const existingPayment = await Payment.findOne({
+        $or: [
+            { paymentId: `PAY-JRN-${existingTransactionId}` },
+            { 'metadata.transactionId': existingTransactionId }
+        ]
+    }).lean();
+    if (existingPayment) {
+        return { status: 'already_complete', payment: existingPayment, created: false };
+    }
+
+    const isPaymentJournal =
+        extraMeta.invoiceRowType === 'payment' &&
+        (extraMeta.studentId || extraMeta.debtorId || extraMeta.customer);
+    if (!isPaymentJournal || !createdByUserId) {
+        return { status: 'not_applicable' };
+    }
+
+    try {
+        const transactionEntry = existingId
+            ? await TransactionEntry.findById(existingId)
+            : await TransactionEntry.findOne({ transactionId: existingTransactionId });
+        if (!transactionEntry) {
+            return { status: 'failed', error: 'Existing journal not found' };
+        }
+
+        const meta = { ...(transactionEntry.metadata || {}), ...extraMeta };
+        const { payment, created } = await createPaymentRecordForJournal({
+            transactionEntry,
+            residenceId: transactionEntry.residence || residenceId,
+            createdByUserId,
+            studentId: meta.studentId,
+            debtorId: meta.debtorId,
+            customer: meta.customer,
+            accountCode: meta.accountCode,
+            paymentType: meta.paymentType || 'rent',
+            method: meta.method || 'Cash',
+            paymentMonth: meta.paymentMonth,
+            roomNumber: meta.roomNumber,
+            adminFee: Number(meta.adminFee) || 0,
+            rental: Number(meta.rental) || 0,
+            systemInvoiceId: meta.systemInvoiceId || null
+        });
+        return { status: 'linked', payment, created };
+    } catch (error) {
+        return { status: 'failed', error: error.message };
+    }
+}
+
 module.exports = {
     detectStudentPaymentFromEntries,
     createPaymentRecordForJournal,
-    linkTransactionToPayment
+    linkTransactionToPayment,
+    tryBackfillPaymentForExistingJournal
 };

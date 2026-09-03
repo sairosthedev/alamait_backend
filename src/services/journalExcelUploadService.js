@@ -1044,6 +1044,191 @@ function isMonthSheetName(name) {
     return false;
 }
 
+function billingPeriodFromPaymentContext(paymentDate, sheetName, defaultDate) {
+    const d = paymentDate ? new Date(paymentDate) : defaultDate ? new Date(defaultDate) : new Date();
+    if (!Number.isNaN(d.getTime())) {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    if (sheetName && isMonthSheetName(sheetName)) {
+        const normalized = normalizeSheetName(sheetName);
+        let monthIdx = MONTH_ABBR.indexOf(normalized);
+        if (monthIdx < 0) monthIdx = MONTH_NAMES.indexOf(normalized);
+        if (monthIdx < 0) {
+            const m = normalized.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(\d{2,4})$/);
+            if (m) monthIdx = MONTH_ABBR.indexOf(m[1]);
+        }
+        if (monthIdx >= 0) {
+            const year = defaultDate ? new Date(defaultDate).getFullYear() : new Date().getFullYear();
+            return `${year}-${String(monthIdx + 1).padStart(2, '0')}`;
+        }
+    }
+    return null;
+}
+
+function scoreInvoiceForPayment(invoice, { billingPeriod, paymentAmount }) {
+    if (!invoice || invoice.status === 'cancelled') return -1;
+
+    let score = 0;
+    const period = String(invoice.billingPeriod || '').trim();
+    if (billingPeriod && period === billingPeriod) score += 50;
+    else if (billingPeriod && period.includes(billingPeriod)) score += 35;
+
+    const amt = Math.round(Number(paymentAmount) * 100) / 100;
+    const balance = Math.round(Number(invoice.balanceDue ?? invoice.totalAmount) * 100) / 100;
+    const total = Math.round(Number(invoice.totalAmount) * 100) / 100;
+    if (amt > 0 && Math.abs(balance - amt) <= 0.02) score += 45;
+    else if (amt > 0 && Math.abs(total - amt) <= 0.02) score += 30;
+
+    if (['unpaid', 'partial', 'overdue'].includes(invoice.paymentStatus)) score += 10;
+
+    return score;
+}
+
+/**
+ * When Excel has no invoice #, resolve from Invoice collection for a matched tenant.
+ */
+async function resolveInvoiceForPaymentRow({
+    studentId,
+    residenceId,
+    paymentDate,
+    paymentAmount,
+    sheetName = null,
+    defaultDate = null,
+    cache = null
+}) {
+    const mongoose = require('mongoose');
+    const Invoice = require('../models/Invoice');
+
+    if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
+        return { ok: false, error: 'studentId required for invoice lookup' };
+    }
+
+    const billingPeriod = billingPeriodFromPaymentContext(paymentDate, sheetName, defaultDate);
+    const cacheKey = `${studentId}|${residenceId || ''}|${billingPeriod || ''}|${paymentAmount || ''}`;
+    if (cache && cache.has(cacheKey)) return cache.get(cacheKey);
+
+    const finish = (result) => {
+        if (cache) cache.set(cacheKey, result);
+        return result;
+    };
+
+    const query = {
+        student: studentId,
+        status: { $ne: 'cancelled' }
+    };
+    if (residenceId && mongoose.Types.ObjectId.isValid(residenceId)) {
+        query.residence = residenceId;
+    }
+
+    let candidates = await Invoice.find(query)
+        .select('_id invoiceNumber billingPeriod totalAmount balanceDue paymentStatus status billingStartDate')
+        .sort({ billingStartDate: -1, createdAt: -1 })
+        .limit(40)
+        .lean();
+
+    if (!candidates.length && query.residence) {
+        delete query.residence;
+        candidates = await Invoice.find(query)
+            .select('_id invoiceNumber billingPeriod totalAmount balanceDue paymentStatus status billingStartDate residence')
+            .sort({ billingStartDate: -1, createdAt: -1 })
+            .limit(40)
+            .lean();
+    }
+
+    if (!candidates.length) {
+        return finish({
+            ok: false,
+            error: billingPeriod
+                ? `No invoice found for billing period ${billingPeriod}`
+                : 'No invoice found for student'
+        });
+    }
+
+    if (billingPeriod) {
+        const periodMatches = candidates.filter((inv) => String(inv.billingPeriod || '').includes(billingPeriod));
+        if (periodMatches.length === 1) {
+            return finish({
+                ok: true,
+                invoice: periodMatches[0],
+                matchReason: `billing period ${billingPeriod}`
+            });
+        }
+    }
+
+    const scored = candidates
+        .map((invoice) => ({
+            invoice,
+            score: scoreInvoiceForPayment(invoice, { billingPeriod, paymentAmount })
+        }))
+        .filter((row) => row.score >= 40)
+        .sort((a, b) => b.score - a.score);
+
+    if (scored.length >= 1) {
+        const best = scored[0];
+        const second = scored[1];
+        if (!second || best.score - second.score >= 5) {
+            return finish({
+                ok: true,
+                invoice: best.invoice,
+                matchReason: `score ${best.score}${billingPeriod ? ` (${billingPeriod})` : ''}`
+            });
+        }
+    }
+
+    const amt = Math.round(Number(paymentAmount) * 100) / 100;
+    if (amt > 0) {
+        const amountMatches = candidates.filter((inv) => {
+            const balance = Math.round(Number(inv.balanceDue ?? inv.totalAmount) * 100) / 100;
+            const total = Math.round(Number(inv.totalAmount) * 100) / 100;
+            return Math.abs(balance - amt) <= 0.02 || Math.abs(total - amt) <= 0.02;
+        });
+        if (amountMatches.length === 1) {
+            return finish({
+                ok: true,
+                invoice: amountMatches[0],
+                matchReason: `payment amount $${amt}`
+            });
+        }
+    }
+
+    return finish({
+        ok: false,
+        error: billingPeriod
+            ? `No matching invoice for ${billingPeriod} (found ${candidates.length} other invoice(s))`
+            : `No invoice matched payment amount (found ${candidates.length} invoice(s))`
+    });
+}
+
+/** Apply resolved system invoice to parsed Excel row (reference, journalKey, flags). */
+function applySystemInvoiceToRow(row, invoice) {
+    if (!invoice?.invoiceNumber) return row;
+
+    const invoiceNumber = String(invoice.invoiceNumber).trim();
+    const sheetPrefix = row.sheetName ? String(row.sheetName).trim() : '';
+    const typePrefix = row.type === 'charge' ? 'CHG' : 'PAY';
+    const baseKey = invoiceNumber;
+    const labelParts = [
+        row.customer,
+        row.roomNumber && `Room ${row.roomNumber}`,
+        `Inv ${invoiceNumber}`,
+        sheetPrefix && `(${sheetPrefix})`
+    ].filter(Boolean);
+    const label = labelParts.join(' — ');
+    const descPrefix = row.type === 'charge' ? 'Invoice charge' : 'Payment received';
+
+    return {
+        ...row,
+        invoiceNumber,
+        missingInvoiceNumber: false,
+        invoiceResolvedFromSystem: true,
+        systemInvoiceId: invoice._id?.toString?.() || invoice._id,
+        reference: invoiceNumber,
+        journalKey: `${typePrefix}-${sheetPrefix ? `${sheetPrefix}-` : ''}${baseKey}`,
+        description: `${descPrefix} — ${label}`
+    };
+}
+
 /** One payment per tenant + amount per month tab (or per calendar month). */
 function buildExcelPaymentDedupKey({ customer, amount, date, sheetName }) {
     const name = String(customer || '')
@@ -1268,6 +1453,8 @@ module.exports = {
     buildEntriesFromInvoiceRow,
     buildExcelPaymentDedupKey,
     resolveDebtorForCustomer,
+    resolveInvoiceForPaymentRow,
+    applySystemInvoiceToRow,
     lookupRoomForDebtor,
     scorePersonNameMatch,
     transactionSourceForInvoiceRow,

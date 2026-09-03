@@ -1,7 +1,41 @@
 const Account = require('../../models/Account');
 const TransactionEntry = require('../../models/TransactionEntry');
 
+const TRANSACTION_TYPE_ALIASES = {
+    student_rent_payment: 'rental_payment',
+    payment: 'rental_payment',
+    invoice_payment: 'rental_payment',
+    rent_payment: 'rental_payment',
+    negotiated_payment_adjustment: 'negotiated_payment'
+};
+
+const VALID_TRANSACTION_TYPES = [
+    'rental_income',
+    'rental_payment',
+    'negotiated_payment',
+    'other_income',
+    'expense',
+    'refund',
+    'custom'
+];
+
 class TransactionAccountsController {
+
+    static resolveTransactionType(req) {
+        const raw =
+            req.params?.transactionType ||
+            req.body?.transactionType ||
+            req.body?.type ||
+            req.query?.transactionType ||
+            req.query?.type;
+
+        if (raw == null || raw === '') return null;
+
+        const normalized = String(raw).trim().toLowerCase();
+        if (!normalized || normalized === 'undefined' || normalized === 'null') return null;
+
+        return TRANSACTION_TYPE_ALIASES[normalized] || normalized;
+    }
     
     /**
      * Get all accounts for transaction creation
@@ -55,8 +89,17 @@ class TransactionAccountsController {
      */
     static async getTransactionTypeMapping(req, res) {
         try {
-            const { transactionType } = req.params;
+            const transactionType = TransactionAccountsController.resolveTransactionType(req);
             const { studentName, studentId, paymentMethod, category, residenceId } = req.body;
+
+            if (!transactionType) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'transactionType is required (path param, body.transactionType, or body.type). ' +
+                        `Valid types: ${VALID_TRANSACTION_TYPES.join(', ')}`
+                });
+            }
             
             console.log(`🔍 Getting mapping for transaction type: ${transactionType}`);
             console.log(`   Context:`, { studentName, studentId, paymentMethod, category, residenceId });
@@ -69,7 +112,15 @@ class TransactionAccountsController {
                     break;
                     
                 case 'rental_payment':
-                    mapping = await TransactionAccountsController.getRentalPaymentMapping(paymentMethod);
+                    mapping = await TransactionAccountsController.getRentalPaymentMapping(paymentMethod, studentId, studentName);
+                    break;
+
+                case 'negotiated_payment':
+                    mapping = await TransactionAccountsController.getNegotiatedPaymentMapping(
+                        studentId,
+                        studentName,
+                        residenceId
+                    );
                     break;
                     
                 case 'other_income':
@@ -94,7 +145,7 @@ class TransactionAccountsController {
                 default:
                     return res.status(400).json({
                         success: false,
-                        message: `Unknown transaction type: ${transactionType}`
+                        message: `Unknown transaction type: ${transactionType}. Valid types: ${VALID_TRANSACTION_TYPES.join(', ')}`
                     });
             }
             
@@ -212,16 +263,25 @@ class TransactionAccountsController {
     /**
      * Get rental payment mapping (Debit: Bank/Cash, Credit: A/R)
      */
-    static async getRentalPaymentMapping(paymentMethod) {
+    static async getRentalPaymentMapping(paymentMethod, studentId, studentName) {
         try {
             // Get payment method account
             const paymentAccount = await this.getPaymentMethodAccount(paymentMethod);
             
-            // Get general A/R account
-            const arAccount = await Account.findOne({
-                code: '1100',
-                type: 'Asset'
-            });
+            // Prefer student-specific A/R when student context is provided
+            let arAccount = null;
+            if (studentId && studentName) {
+                arAccount = await Account.findOne({
+                    code: `1100-${studentId}`,
+                    type: 'Asset'
+                });
+            }
+            if (!arAccount) {
+                arAccount = await Account.findOne({
+                    code: '1100',
+                    type: 'Asset'
+                });
+            }
             
             if (!paymentAccount || !arAccount) {
                 throw new Error('Required accounts not found for rental payment mapping');
@@ -242,6 +302,57 @@ class TransactionAccountsController {
             
         } catch (error) {
             console.error('Error getting rental payment mapping:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Negotiated discount adjustment (Debit: Other Income, Credit: student A/R)
+     */
+    static async getNegotiatedPaymentMapping(studentId, studentName, residenceId) {
+        try {
+            const arMapping = await TransactionAccountsController.getRentalIncomeMapping(
+                studentId,
+                studentName,
+                residenceId
+            );
+
+            let discountIncomeAccount = await Account.findOne({
+                $or: [
+                    { code: '4002', type: 'Income' },
+                    { name: /negotiated discount/i, type: 'Income' },
+                    { name: /other income/i, type: 'Income' }
+                ]
+            });
+
+            if (!discountIncomeAccount) {
+                discountIncomeAccount = await Account.findOne({ type: 'Income' });
+            }
+
+            if (!arMapping?.credit || !discountIncomeAccount) {
+                throw new Error('Required accounts not found for negotiated payment mapping');
+            }
+
+            return {
+                debit: {
+                    code: discountIncomeAccount.code,
+                    name: discountIncomeAccount.name,
+                    type: discountIncomeAccount.type
+                },
+                credit: {
+                    code: arMapping.debit.code,
+                    name: arMapping.debit.name,
+                    type: arMapping.debit.type
+                },
+                additionalCredits: [
+                    {
+                        code: discountIncomeAccount.code,
+                        name: discountIncomeAccount.name
+                    }
+                ]
+            };
+        } catch (error) {
+            console.error('Error getting negotiated payment mapping:', error);
             throw error;
         }
     }

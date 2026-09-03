@@ -15,8 +15,9 @@ router.get('/', TransactionAccountsController.getAccounts);
 /**
  * Get account mappings for specific transaction types
  * POST /api/finance/transaction-accounts/mappings/:transactionType
+ * POST /api/finance/transaction-accounts/mappings  (type in body)
  */
-router.post('/mappings/:transactionType', TransactionAccountsController.getTransactionTypeMapping);
+router.post('/mappings/:transactionType?', TransactionAccountsController.getTransactionTypeMapping);
 
 /**
  * Get student-specific accounts receivable account

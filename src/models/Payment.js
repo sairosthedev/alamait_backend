@@ -154,11 +154,10 @@ paymentSchema.virtual('calculatedAmount').get(function() {
 });
 
 // Pre-save middleware to automatically set amount
-paymentSchema.pre('save', function(next) {
+paymentSchema.pre('save', function() {
     if (this.isModified('rentAmount') || this.isModified('adminFee') || this.isModified('deposit') || this.isModified('levies')) {
         this.amount = (this.rentAmount || 0) + (this.adminFee || 0) + (this.deposit || 0) + (this.levies || 0);
     }
-    next();
 });
 
 // Add indexes for common queries
@@ -196,7 +195,7 @@ paymentSchema.index({ student: 1, paymentMonth: 1 });
 paymentSchema.plugin(mongoosePaginate);
 
 // 🆕 CRITICAL FIX: Pre-save middleware to ensure user and student fields always match
-paymentSchema.pre('save', async function(next) {
+paymentSchema.pre('save', async function() {
     try {
         // If user field is not set, try to set it from student field
         if (!this.user && this.student) {
@@ -246,12 +245,9 @@ paymentSchema.pre('save', async function(next) {
             // Force them to match - prefer user field
             this.student = this.user;
         }
-        
-        next();
     } catch (error) {
         console.error(`❌ Error in Payment pre-save hook: ${error.message}`);
         // Don't block save, but log the error
-        next();
     }
 });
 

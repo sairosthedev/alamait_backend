@@ -169,7 +169,10 @@ class RentalAccrualService {
 
     /**
      * Calculate prorated rent based on residence paymentConfiguration.rentProration
-     * Falls back to existing logic if config missing/disabled
+     *
+     * Typical St Kilda rule (Daily + Fixed $7 + prorateAfterDay 15):
+     *   - Move-in BEFORE day 15 → full room price
+     *   - Move-in ON/AFTER day 15 → fixed daily rate × days left in month
      */
     static calculateProratedRent(residence, room, leaseStartDate) {
         const cfg = residence?.paymentConfiguration?.rentProration || {};
@@ -183,7 +186,6 @@ class RentalAccrualService {
         const daysRemaining = daysInMonth - startDay + 1;
 
         if (!enabled) {
-            // When rent proration is disabled, charge full month regardless of start date
             return room.price;
         }
 
@@ -192,7 +194,17 @@ class RentalAccrualService {
         const minimumDays = Number.isFinite(cfg.minimumDays) ? Math.max(0, Math.min(31, cfg.minimumDays)) : 0;
         const prorateAfterDay = Number.isFinite(cfg.prorateAfterDay) ? Math.max(0, Math.min(31, cfg.prorateAfterDay)) : 0;
 
-        // Determine daily rate
+        // Full-month billing mode — always charge room price unless threshold triggers daily proration
+        if ((policy === 'full_month' || policy === 'full_month_only') && prorateAfterDay === 0) {
+            return room.price;
+        }
+
+        // Before cutoff day → full room price (e.g. move-in on 1–14 = full month)
+        if (prorateAfterDay > 0 && startDay < prorateAfterDay) {
+            return room.price;
+        }
+
+        // On/after cutoff (or no cutoff) → daily / prorata charge for remaining days
         let dailyRate;
         switch (dailyMethod) {
             case 'monthly_rent_30_days':
@@ -201,49 +213,35 @@ class RentalAccrualService {
             case 'fixed_daily_rate':
                 dailyRate = Number(cfg.fixedDailyRate) || (room.price / daysInMonth);
                 break;
-            case 'business_days_only':
-                // Approximate by excluding weekends from remaining days
-                {
-                    let businessDays = 0;
-                    for (let d = startDay; d <= daysInMonth; d++) {
-                        const wd = new Date(Date.UTC(year, monthIndex, d)).getUTCDay();
-                        if (wd !== 0 && wd !== 6) businessDays++;
-                    }
-                    // Derive rate so that businessDays * rate ~= monthly price
-                    dailyRate = room.price / businessDays;
+            case 'business_days_only': {
+                let businessDays = 0;
+                for (let d = startDay; d <= daysInMonth; d++) {
+                    const wd = new Date(Date.UTC(year, monthIndex, d)).getUTCDay();
+                    if (wd !== 0 && wd !== 6) businessDays++;
                 }
+                dailyRate = businessDays > 0 ? room.price / businessDays : room.price / daysInMonth;
                 break;
+            }
             case 'auto_calendar_days':
-                // Alias to calendar days
-                dailyRate = room.price / daysInMonth;
-                break;
             case 'monthly_rent_calendar_days':
             default:
                 dailyRate = room.price / daysInMonth;
         }
 
-        // Compute charged days per policy
         let chargedDays = daysRemaining;
         switch (policy) {
             case 'full_month':
             case 'full_month_only':
-                // If a cutoff is provided, charge full month only when starting on/before cutoff, else prorate
-                if (prorateAfterDay > 0 && startDay > prorateAfterDay) {
-                    chargedDays = daysRemaining;
-                    break;
-                }
-                return room.price;
+                // Threshold already handled above; on/after cutoff use daily rate × days left
+                break;
             case 'weekly_basis':
-                // Charge by full weeks remaining (ceil to next full week)
                 chargedDays = Math.ceil(daysRemaining / 7) * 7;
                 break;
             case 'custom_period':
-                // Respect customPeriodDays if provided; otherwise default to remaining days
                 chargedDays = Number(cfg.customPeriodDays) || daysRemaining;
                 break;
             case 'daily_calculation':
             default:
-                // Already using chargedDays = daysRemaining
                 break;
         }
 
@@ -251,7 +249,7 @@ class RentalAccrualService {
             chargedDays = Math.max(chargedDays, minimumDays);
         }
 
-        return dailyRate * chargedDays;
+        return Math.round(dailyRate * chargedDays * 100) / 100;
     }
     /**
      * Calculate fees based on residence payment configuration

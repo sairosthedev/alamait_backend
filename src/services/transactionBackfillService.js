@@ -36,18 +36,19 @@ function calculateProratedRent(startDate, monthlyRent, residence) {
     }
 
     let proratedAmount;
-    
-    // Business rule: If lease starts from 20th onwards, use $7 per day
-    if (dayOfMonth >= 20) {
-        proratedAmount = daysFromStart * 7; // $7 per day
-        console.log(`📅 Lease starts on ${dayOfMonth}th (≥20th): Using $7/day rate`);
+
+    const cutoffDay =
+        Number(residence?.paymentConfiguration?.rentProration?.prorateAfterDay) || 15;
+    const fixedDaily =
+        Number(residence?.paymentConfiguration?.rentProration?.fixedDailyRate) || 7;
+
+    if (dayOfMonth >= cutoffDay) {
+        proratedAmount = daysFromStart * fixedDaily;
+        console.log(`📅 Lease starts on ${dayOfMonth}th (≥${cutoffDay}): Using $${fixedDaily}/day`);
         console.log(`   Days from start: ${daysFromStart}, Amount: $${proratedAmount}`);
     } else {
-        // Use normal prorated calculation
-        proratedAmount = (monthlyRent / daysInMonth) * daysFromStart;
-        console.log(`📅 Lease starts on ${dayOfMonth}th (<20th): Using prorated calculation`);
-        console.log(`   Monthly rent: $${monthlyRent}, Days in month: ${daysInMonth}, Days from start: ${daysFromStart}`);
-        console.log(`   Prorated amount: $${monthlyRent} × ${daysFromStart}/${daysInMonth} = $${proratedAmount}`);
+        proratedAmount = monthlyRent;
+        console.log(`📅 Lease starts on ${dayOfMonth}th (<${cutoffDay}): Full month room price $${monthlyRent}`);
     }
     
     return Math.round(proratedAmount * 100) / 100; // Round to 2 decimal places

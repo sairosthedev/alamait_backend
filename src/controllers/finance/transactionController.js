@@ -4128,9 +4128,11 @@ class TransactionController {
                 isMonthSheetName,
                 normalizeSheetName,
                 resolveDebtorForCustomer,
+                resolveInvoiceForPaymentRow,
+                applySystemInvoiceToRow,
                 transactionSourceForInvoiceRow
             } = require('../../services/journalExcelUploadService');
-            const { createPaymentRecordForJournal } = require('../../services/journalPaymentRecordService');
+            const { createPaymentRecordForJournal, tryBackfillPaymentForExistingJournal } = require('../../services/journalPaymentRecordService');
 
             if (!req.file || !req.file.buffer) {
                 return res.status(400).json({
@@ -4218,18 +4220,22 @@ class TransactionController {
                 warnings: [],
                 missingInvoiceNumbers: [],
                 unmatchedStudents: [],
+                alreadyPosted: [],
                 summary: {
                     totalSheets: resolved.sheets.length,
                     totalJournals: 0,
                     totalSuccessful: 0,
                     totalFailed: 0,
                     totalDuplicates: 0,
+                    totalAlreadyPosted: 0,
                     totalMissingInvoiceNumber: 0,
+                    totalInvoiceResolvedFromSystem: 0,
                     totalLinkedToDebtor: 0,
                     totalUnmatchedStudents: 0,
                     totalDebits: 0,
                     totalCredits: 0,
-                    totalPaymentRecords: 0
+                    totalPaymentRecords: 0,
+                    totalPaymentRecordsLinked: 0
                 }
             };
 
@@ -4238,6 +4244,7 @@ class TransactionController {
             // Pass allowDuplicates=true to bypass idempotency (not recommended)
             const allowDuplicates = String(req.body.allowDuplicates || '').toLowerCase() === 'true';
             const debtorCache = new Map();
+            const invoiceCache = new Map();
             const seenJournalKeys = new Set();
             const seenPaymentDedupKeys = new Set();
 
@@ -4420,10 +4427,87 @@ class TransactionController {
                         extraMeta
                     });
                     if (existing) {
+                        const backfill = await tryBackfillPaymentForExistingJournal({
+                            existingTransactionId: existing.transactionId,
+                            existingId: existing._id,
+                            extraMeta,
+                            residenceId,
+                            createdByUserId
+                        });
+
+                        if (backfill.status === 'linked') {
+                            results.warnings.push(
+                                `${extraMeta.sheetName || 'sheet'} ${normalizedKey}: journal already posted as ${existing.transactionId} — linked missing Payment ${backfill.payment.paymentId}`
+                            );
+                            results.successful.push({
+                                journalKey: normalizedKey,
+                                transactionId: existing.transactionId,
+                                _id: existing._id,
+                                description,
+                                totalDebit,
+                                totalCredit,
+                                entryCount: entries.length,
+                                type: extraMeta.invoiceRowType || 'classic',
+                                sheetName: extraMeta.sheetName || null,
+                                debtorId: extraMeta.debtorId || null,
+                                studentId: extraMeta.studentId || null,
+                                accountCode: extraMeta.accountCode || null,
+                                missingInvoiceNumber: Boolean(extraMeta.missingInvoiceNumber),
+                                linkedToDebtor: Boolean(extraMeta.debtorId),
+                                paymentRecord: {
+                                    paymentId: backfill.payment.paymentId,
+                                    created: backfill.created
+                                },
+                                warning: 'Journal already existed; payment record linked on re-upload',
+                                recoveredFromDuplicate: true
+                            });
+                            if (backfill.created) results.summary.totalPaymentRecords++;
+                            results.summary.totalPaymentRecordsLinked++;
+                            results.summary.totalSuccessful++;
+                            results.summary.totalDebits += totalDebit;
+                            results.summary.totalCredits += totalCredit;
+                            if (extraMeta.debtorId) results.summary.totalLinkedToDebtor++;
+                            return;
+                        }
+
+                        if (backfill.status === 'already_complete') {
+                            const posted = {
+                                journalKey: normalizedKey,
+                                transactionId: existing.transactionId,
+                                _id: existing._id,
+                                description,
+                                totalDebit,
+                                totalCredit,
+                                sheetName: extraMeta.sheetName || null,
+                                customer: extraMeta.customer || null,
+                                paymentRecord: {
+                                    paymentId: backfill.payment?.paymentId || `PAY-JRN-${existing.transactionId}`,
+                                    created: false,
+                                    alreadyExisted: true
+                                },
+                                message: 'Already posted (journal and payment exist)'
+                            };
+                            results.alreadyPosted.push(posted);
+                            results.successful.push({
+                                ...posted,
+                                alreadyPosted: true,
+                                linkedToDebtor: Boolean(extraMeta.debtorId)
+                            });
+                            results.summary.totalAlreadyPosted++;
+                            results.summary.totalPaymentRecordsLinked++;
+                            results.summary.totalSuccessful++;
+                            results.summary.totalDebits += totalDebit;
+                            results.summary.totalCredits += totalCredit;
+                            if (extraMeta.debtorId) results.summary.totalLinkedToDebtor++;
+                            return;
+                        }
+
                         const err = new Error(
                             `Duplicate blocked: already posted as ${existing.transactionId}` +
                                 (existing.reference ? ` (ref ${existing.reference})` : '') +
-                                `. Skip or reverse the existing journal before re-uploading.`
+                                (backfill.status === 'failed'
+                                    ? ` — payment backfill failed: ${backfill.error}`
+                                    : `. Skip or reverse the existing journal before re-uploading.`)
                         );
                         err.code = 'DUPLICATE_JOURNAL';
                         err.existingTransactionId = existing.transactionId;
@@ -4492,15 +4576,21 @@ class TransactionController {
                             paymentMonth: extraMeta.paymentMonth,
                             roomNumber: extraMeta.roomNumber,
                             adminFee: Number(extraMeta.adminFee) || 0,
-                            rental: Number(extraMeta.rental) || 0
+                            rental: Number(extraMeta.rental) || 0,
+                            systemInvoiceId: extraMeta.systemInvoiceId || null
                         });
                         paymentRecord = { paymentId: payment.paymentId, created };
                         if (created) results.summary.totalPaymentRecords++;
+                        results.summary.totalPaymentRecordsLinked++;
                     } catch (payErr) {
                         results.warnings.push(
                             `${extraMeta.sheetName || 'sheet'} ${normalizedKey}: journal saved but payment record failed — ${payErr.message}`
                         );
                     }
+                } else if (isLinkedPayment && !createdByUserId) {
+                    results.warnings.push(
+                        `${extraMeta.sheetName || 'sheet'} ${normalizedKey}: journal saved but no Payment record — could not resolve upload user (createdBy). Log in again or check auth token.`
+                    );
                 }
 
                 const warning = extraMeta.missingInvoiceNumber
@@ -4767,42 +4857,75 @@ class TransactionController {
                                 );
                             }
 
+                            let workingRow = { ...row, sheetName: row.sheetName || sheet.name };
+                            if (
+                                workingRow.missingInvoiceNumber &&
+                                resolvedDebtor.ok &&
+                                resolvedDebtor.studentId
+                            ) {
+                                const invoiceResult = await resolveInvoiceForPaymentRow({
+                                    studentId: resolvedDebtor.studentId,
+                                    residenceId,
+                                    paymentDate: workingRow.date || parsed.reportingDate || defaultDate,
+                                    paymentAmount:
+                                        workingRow.paymentTotal ||
+                                        workingRow.rental + workingRow.adminFee ||
+                                        0,
+                                    sheetName: sheet.name,
+                                    defaultDate,
+                                    cache: invoiceCache
+                                });
+                                if (invoiceResult.ok) {
+                                    workingRow = applySystemInvoiceToRow(workingRow, invoiceResult.invoice);
+                                    results.summary.totalInvoiceResolvedFromSystem++;
+                                    results.warnings.push(
+                                        `${sheet.name} row ${workingRow.rowNumber} (${workingRow.customer}): using system invoice ${invoiceResult.invoice.invoiceNumber} (${invoiceResult.matchReason})`
+                                    );
+                                } else if (workingRow.type === 'payment') {
+                                    results.warnings.push(
+                                        `${sheet.name} row ${workingRow.rowNumber} (${workingRow.customer}): ${invoiceResult.error} — still using generated reference`
+                                    );
+                                }
+                            }
+
                             const accountsForRow = {
                                 ...accountsGl,
                                 studentAr: resolvedDebtor.ok ? resolvedDebtor.studentAr : null
                             };
-                            const entries = buildEntriesFromInvoiceRow(row, accountsForRow);
+                            const entries = buildEntriesFromInvoiceRow(workingRow, accountsForRow);
                             const sourceOverride = transactionSourceForInvoiceRow(
-                                row,
+                                workingRow,
                                 Boolean(resolvedDebtor.ok)
                             );
 
                             // Prefer rent vs admin paymentType for metadata
                             let paymentType = 'rent';
-                            if (row.type === 'payment') {
-                                if ((row.adminFee || 0) > 0 && (row.rental || 0) <= 0) paymentType = 'admin';
-                                else if ((row.adminFee || 0) > 0 && (row.rental || 0) > 0) paymentType = 'rent';
-                            } else if (row.type === 'charge') {
+                            if (workingRow.type === 'payment') {
+                                if ((workingRow.adminFee || 0) > 0 && (workingRow.rental || 0) <= 0) paymentType = 'admin';
+                                else if ((workingRow.adminFee || 0) > 0 && (workingRow.rental || 0) > 0) paymentType = 'rent';
+                            } else if (workingRow.type === 'charge') {
                                 paymentType =
-                                    (row.adminFee || 0) > 0 && (row.rental || 0) <= 0 ? 'admin' : 'rent';
+                                    (workingRow.adminFee || 0) > 0 && (workingRow.rental || 0) <= 0 ? 'admin' : 'rent';
                             }
 
                             await saveJournal({
-                                journalKey: row.journalKey,
-                                description: row.description,
-                                reference: row.reference,
-                                date: row.date || parsed.reportingDate || defaultDate,
+                                journalKey: workingRow.journalKey,
+                                description: workingRow.description,
+                                reference: workingRow.reference,
+                                date: workingRow.date || parsed.reportingDate || defaultDate,
                                 entries,
                                 format: parsed.format || 'invoice_payment',
                                 sourceOverride,
                                 extraMeta: {
-                                    invoiceRowType: row.type,
-                                    customer: row.customer,
-                                    roomNumber: row.roomNumber || resolvedDebtor.roomNumber || null,
-                                    invoiceNumber: row.invoiceNumber,
-                                    missingInvoiceNumber: Boolean(row.missingInvoiceNumber),
+                                    invoiceRowType: workingRow.type,
+                                    customer: workingRow.customer,
+                                    roomNumber: workingRow.roomNumber || resolvedDebtor.roomNumber || null,
+                                    invoiceNumber: workingRow.invoiceNumber,
+                                    missingInvoiceNumber: Boolean(workingRow.missingInvoiceNumber),
+                                    invoiceResolvedFromSystem: Boolean(workingRow.invoiceResolvedFromSystem),
+                                    systemInvoiceId: workingRow.systemInvoiceId || null,
                                     sheetName: sheet.name,
-                                    excelRows: [row.rowNumber],
+                                    excelRows: [workingRow.rowNumber],
                                     debtorId: resolvedDebtor.ok ? resolvedDebtor.debtorId : null,
                                     studentId: resolvedDebtor.ok ? resolvedDebtor.studentId : null,
                                     accountCode: resolvedDebtor.ok ? resolvedDebtor.accountCode : null,
@@ -4814,7 +4937,7 @@ class TransactionController {
                                 results.summary.totalLinkedToDebtor++;
                             }
                             sheetResult.successful++;
-                            if (row.missingInvoiceNumber) sheetResult.missingInvoiceNumber++;
+                            if (workingRow.missingInvoiceNumber) sheetResult.missingInvoiceNumber++;
                         } catch (err) {
                             const kind = recordJournalFailure(
                                 {
@@ -4838,20 +4961,45 @@ class TransactionController {
             const hadWork =
                 results.summary.totalSuccessful > 0 ||
                 (results.summary.totalDuplicates > 0 && results.summary.totalFailed === 0);
-            const status = hadWork ? 200 : 400;
+            const onlyUnmatchedFailures =
+                results.summary.totalFailed > 0 &&
+                results.summary.totalFailed === results.summary.totalUnmatchedStudents;
+            const status = hadWork || onlyUnmatchedFailures ? 200 : 400;
             if (results.summary.totalSuccessful > 0) clearTxnListCache();
+
+            const createdCount =
+                results.summary.totalSuccessful - (results.summary.totalAlreadyPosted || 0);
+            const messageParts = [
+                `Excel journals processed across ${results.sheetsProcessed.length} tab(s):`,
+                `${createdCount} created`,
+                results.summary.totalAlreadyPosted
+                    ? `${results.summary.totalAlreadyPosted} already posted`
+                    : null,
+                `${results.summary.totalLinkedToDebtor} linked to student debtors`,
+                results.summary.totalFailed ? `${results.summary.totalFailed} failed` : null,
+                results.summary.totalDuplicates
+                    ? `${results.summary.totalDuplicates} duplicates blocked`
+                    : null,
+                results.summary.totalMissingInvoiceNumber
+                    ? `${results.summary.totalMissingInvoiceNumber} missing invoice number`
+                    : null,
+                results.summary.totalInvoiceResolvedFromSystem
+                    ? `${results.summary.totalInvoiceResolvedFromSystem} invoice numbers resolved from system`
+                    : null,
+                results.summary.totalPaymentRecordsLinked
+                    ? `${results.summary.totalPaymentRecordsLinked} payment records linked`
+                    : null,
+                results.summary.totalPaymentRecords
+                    ? `${results.summary.totalPaymentRecords} new payment records created`
+                    : null,
+                results.summary.totalUnmatchedStudents
+                    ? `${results.summary.totalUnmatchedStudents} unmatched students (not in system — create students first)`
+                    : null
+            ].filter(Boolean);
+
             res.status(status).json({
-                success: hadWork,
-                message: `Excel journals processed across ${results.sheetsProcessed.length} tab(s): ${results.summary.totalSuccessful} created (${results.summary.totalLinkedToDebtor} linked to student debtors), ${results.summary.totalFailed} failed` +
-                    (results.summary.totalDuplicates
-                        ? `, ${results.summary.totalDuplicates} duplicates blocked`
-                        : '') +
-                    (results.summary.totalMissingInvoiceNumber
-                        ? `, ${results.summary.totalMissingInvoiceNumber} missing invoice number`
-                        : '') +
-                    (results.summary.totalUnmatchedStudents
-                        ? `, ${results.summary.totalUnmatchedStudents} unmatched students`
-                        : ''),
+                success: hadWork || (onlyUnmatchedFailures && results.summary.totalAlreadyPosted > 0),
+                message: messageParts.join(', '),
                 data: results
             });
         } catch (error) {

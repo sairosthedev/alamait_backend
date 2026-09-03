@@ -312,13 +312,24 @@ app.get('/', (req, res) => {
     });
 });
 
-// Health check route
+// Health check route — 503 until MongoDB is connected (Render cold-start friendly)
 app.get('/health', (req, res) => {
-    res.status(200).json({ 
-        status: 'ok',
+    const dbReady = mongoose.connection.readyState === 1;
+    res.status(dbReady ? 200 : 503).json({
+        status: dbReady ? 'ok' : 'starting',
+        database: dbReady ? 'connected' : 'connecting',
         timestamp: new Date(),
         uptime: process.uptime(),
         environment: process.env.NODE_ENV
+    });
+});
+
+// Block API calls until database is ready (avoid 502/hung requests during boot)
+app.use('/api', (req, res, next) => {
+    if (mongoose.connection.readyState === 1) return next();
+    res.status(503).json({
+        error: 'Service is starting up',
+        message: 'Database connection in progress. Please retry in a few seconds.'
     });
 });
 

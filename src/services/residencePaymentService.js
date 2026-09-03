@@ -334,6 +334,8 @@ class ResidencePaymentService {
         const POLICY_ALIASES = {
             daily: 'daily_calculation',
             daily_calculation: 'daily_calculation',
+            prorata: 'daily_calculation',
+            prorate: 'daily_calculation',
             full_month: 'full_month',
             full_month_only: 'full_month_only',
             weekly: 'weekly_basis',
