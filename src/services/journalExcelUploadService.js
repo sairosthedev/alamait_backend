@@ -1257,6 +1257,7 @@ function applySystemInvoiceToRow(row, invoice) {
  */
 async function prefetchExistingPaymentJournals(residenceId) {
     const mongoose = require('mongoose');
+    const TransactionEntry = require('../models/TransactionEntry');
     if (!residenceId || !mongoose.Types.ObjectId.isValid(residenceId)) {
         return { byJournalKey: new Map(), byDedupKey: new Map(), entries: [] };
     }
