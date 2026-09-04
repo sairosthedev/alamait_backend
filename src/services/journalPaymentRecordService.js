@@ -107,7 +107,8 @@ async function createPaymentRecordForJournal({
     roomNumber,
     adminFee = 0,
     rental = 0,
-    systemInvoiceId = null
+    systemInvoiceId = null,
+    excelUploadBatchId = null
 }) {
     if (!transactionEntry?._id) {
         throw new Error('Transaction entry is required');
@@ -202,6 +203,7 @@ async function createPaymentRecordForJournal({
             transactionId: transactionEntry.transactionId,
             transactionEntryId: transactionEntry._id.toString(),
             systemInvoiceId: systemInvoiceId || transactionEntry.metadata?.systemInvoiceId || null,
+            excelUploadBatchId: excelUploadBatchId || transactionEntry.metadata?.excelUploadBatchId || null,
             smartFIFOAllocationCalled: true,
             smartFIFOAllocationCalledAt: new Date(),
             skipSmartFIFOAllocation: true

@@ -4225,6 +4225,8 @@ class TransactionController {
 
             const results = {
                 uploadBatchId: excelUploadBatchId,
+                uploadTrace: [],
+                /** @deprecated use uploadTrace — kept for backward compatibility */
                 uploadTransactions: [],
                 format: null,
                 mode,
@@ -4268,30 +4270,115 @@ class TransactionController {
             const seenPaymentDedupKeys = new Set();
             const debtorsToSyncAfterUpload = new Set();
 
-            const recordUploadTransaction = ({
-                transactionId,
-                _id,
+            const recordUploadTrace = ({
+                status,
+                outcome,
                 customer,
-                totalDebit,
+                amount,
                 date,
                 sheetName,
-                row,
+                excelRow,
+                rows,
                 journalKey,
-                created = false,
-                alreadyPosted = false
+                transactionId,
+                _id,
+                transactionStatus,
+                paymentId,
+                paymentStatus,
+                paymentCreated = false,
+                paymentError = null,
+                error = null,
+                warning = null,
+                existingTransactionId = null,
+                existingId = null
             }) => {
-                results.uploadTransactions.push({
-                    transactionId,
-                    _id,
+                const traceRow = {
+                    status,
+                    outcome:
+                        outcome ||
+                        {
+                            created: 'Transaction and payment record created',
+                            already_posted: 'Transaction and payment already existed',
+                            payment_linked: 'Transaction existed; payment record linked on re-upload',
+                            partial: 'Transaction created; payment record failed',
+                            failed: 'Failed',
+                            duplicate: 'Duplicate blocked'
+                        }[status] ||
+                        status,
                     customer: customer || null,
-                    amount: totalDebit,
+                    amount: amount ?? null,
                     date: date || null,
                     sheetName: sheetName || null,
-                    excelRow: row || null,
+                    excelRow: excelRow ?? rows?.[0] ?? null,
                     journalKey: journalKey || null,
-                    created,
-                    alreadyPosted
+                    transaction: {
+                        transactionId: transactionId || existingTransactionId || null,
+                        _id: _id || existingId || null,
+                        status: transactionStatus || 'none'
+                    },
+                    payment:
+                        paymentId || paymentStatus || paymentError
+                            ? {
+                                  paymentId: paymentId || null,
+                                  status: paymentStatus || 'none',
+                                  created: Boolean(paymentCreated),
+                                  error: paymentError || null
+                              }
+                            : null,
+                    error: error || null,
+                    warning: warning || null
+                };
+                results.uploadTrace.push(traceRow);
+                results.uploadTransactions.push({
+                    transactionId: traceRow.transaction.transactionId,
+                    _id: traceRow.transaction._id,
+                    customer: traceRow.customer,
+                    amount: traceRow.amount,
+                    date: traceRow.date,
+                    sheetName: traceRow.sheetName,
+                    excelRow: traceRow.excelRow,
+                    journalKey: traceRow.journalKey,
+                    status: traceRow.status,
+                    transactionStatus: traceRow.transaction.status,
+                    payment: traceRow.payment,
+                    created: traceRow.transaction.status === 'created',
+                    alreadyPosted: traceRow.transaction.status === 'already_posted',
+                    error: traceRow.error
                 });
+            };
+
+            const buildUploadTraceSummary = (trace) => {
+                const summary = {
+                    totalRows: trace.length,
+                    transactions: { created: 0, alreadyPosted: 0, failed: 0, skipped: 0 },
+                    payments: { created: 0, alreadyExisted: 0, linked: 0, failed: 0, skipped: 0 },
+                    byStatus: {
+                        created: 0,
+                        already_posted: 0,
+                        payment_linked: 0,
+                        partial: 0,
+                        failed: 0,
+                        duplicate: 0
+                    }
+                };
+                for (const row of trace) {
+                    if (summary.byStatus[row.status] != null) {
+                        summary.byStatus[row.status]++;
+                    }
+                    const ts = row.transaction?.status;
+                    if (ts === 'created') summary.transactions.created++;
+                    else if (ts === 'already_posted') summary.transactions.alreadyPosted++;
+                    else if (ts === 'failed') summary.transactions.failed++;
+                    else summary.transactions.skipped++;
+
+                    const ps = row.payment?.status;
+                    if (!ps || ps === 'none') summary.payments.skipped++;
+                    else if (ps === 'created') summary.payments.created++;
+                    else if (ps === 'already_existed') summary.payments.alreadyExisted++;
+                    else if (ps === 'linked') summary.payments.linked++;
+                    else if (ps === 'failed') summary.payments.failed++;
+                }
+                return summary;
             };
 
             // Warm caches once — avoids 38× findOne + full debtor scan mid-upload (Render timeout)
@@ -4540,17 +4627,21 @@ class TransactionController {
                             results.summary.totalDebits += totalDebit;
                             results.summary.totalCredits += totalCredit;
                             if (extraMeta.debtorId) results.summary.totalLinkedToDebtor++;
-                            recordUploadTransaction({
-                                transactionId: existing.transactionId,
-                                _id: existing._id,
+                            recordUploadTrace({
+                                status: 'payment_linked',
                                 customer: extraMeta.customer,
-                                totalDebit,
+                                amount: totalDebit,
                                 date: date || defaultDate,
                                 sheetName: extraMeta.sheetName,
-                                row: (extraMeta.excelRows || [])[0],
+                                excelRow: (extraMeta.excelRows || [])[0],
                                 journalKey: normalizedKey,
-                                created: false,
-                                alreadyPosted: true
+                                transactionId: existing.transactionId,
+                                _id: existing._id,
+                                transactionStatus: 'already_posted',
+                                paymentId: backfill.payment.paymentId,
+                                paymentStatus: backfill.created ? 'created' : 'linked',
+                                paymentCreated: Boolean(backfill.created),
+                                warning: 'Journal already existed; payment record linked on re-upload'
                             });
                             return;
                         }
@@ -4584,17 +4675,21 @@ class TransactionController {
                             results.summary.totalDebits += totalDebit;
                             results.summary.totalCredits += totalCredit;
                             if (extraMeta.debtorId) results.summary.totalLinkedToDebtor++;
-                            recordUploadTransaction({
-                                transactionId: existing.transactionId,
-                                _id: existing._id,
+                            recordUploadTrace({
+                                status: 'already_posted',
                                 customer: extraMeta.customer,
-                                totalDebit,
+                                amount: totalDebit,
                                 date: date || defaultDate,
                                 sheetName: extraMeta.sheetName,
-                                row: (extraMeta.excelRows || [])[0],
+                                excelRow: (extraMeta.excelRows || [])[0],
                                 journalKey: normalizedKey,
-                                created: false,
-                                alreadyPosted: true
+                                transactionId: existing.transactionId,
+                                _id: existing._id,
+                                transactionStatus: 'already_posted',
+                                paymentId:
+                                    backfill.payment?.paymentId || `PAY-JRN-${existing.transactionId}`,
+                                paymentStatus: 'already_existed',
+                                paymentCreated: false
                             });
                             return;
                         }
@@ -4679,6 +4774,7 @@ class TransactionController {
                 }
 
                 let paymentRecord = null;
+                let paymentTraceError = null;
                 const isLinkedPayment =
                     transactionSource === 'payment' &&
                     (extraMeta.studentId || extraMeta.customer || extraMeta.debtorId);
@@ -4698,17 +4794,21 @@ class TransactionController {
                             roomNumber: extraMeta.roomNumber,
                             adminFee: Number(extraMeta.adminFee) || 0,
                             rental: Number(extraMeta.rental) || 0,
-                            systemInvoiceId: extraMeta.systemInvoiceId || null
+                            systemInvoiceId: extraMeta.systemInvoiceId || null,
+                            excelUploadBatchId
                         });
                         paymentRecord = { paymentId: payment.paymentId, created };
                         if (created) results.summary.totalPaymentRecords++;
                         results.summary.totalPaymentRecordsLinked++;
                     } catch (payErr) {
+                        paymentTraceError = payErr.message;
                         results.warnings.push(
                             `${extraMeta.sheetName || 'sheet'} ${normalizedKey}: journal saved but payment record failed — ${payErr.message}`
                         );
                     }
                 } else if (isLinkedPayment && !createdByUserId) {
+                    paymentTraceError =
+                        'No Payment record — could not resolve upload user (createdBy). Log in again or check auth token.';
                     results.warnings.push(
                         `${extraMeta.sheetName || 'sheet'} ${normalizedKey}: journal saved but no Payment record — could not resolve upload user (createdBy). Log in again or check auth token.`
                     );
@@ -4752,17 +4852,32 @@ class TransactionController {
                 results.summary.totalSuccessful++;
                 results.summary.totalDebits += totalDebit;
                 results.summary.totalCredits += totalCredit;
-                recordUploadTransaction({
-                    transactionId: transactionEntry.transactionId,
-                    _id: transactionEntry._id,
+
+                const hasPaymentAttempt = isLinkedPayment;
+                recordUploadTrace({
+                    status: paymentTraceError ? 'partial' : 'created',
                     customer: extraMeta.customer,
-                    totalDebit,
+                    amount: totalDebit,
                     date: date || defaultDate,
                     sheetName: extraMeta.sheetName,
-                    row: (extraMeta.excelRows || [])[0],
+                    excelRow: (extraMeta.excelRows || [])[0],
                     journalKey: normalizedKey,
-                    created: true,
-                    alreadyPosted: false
+                    transactionId: transactionEntry.transactionId,
+                    _id: transactionEntry._id,
+                    transactionStatus: 'created',
+                    paymentId: paymentRecord?.paymentId || null,
+                    paymentStatus: paymentTraceError
+                        ? 'failed'
+                        : paymentRecord
+                          ? paymentRecord.created
+                              ? 'created'
+                              : 'already_existed'
+                          : hasPaymentAttempt
+                            ? 'skipped'
+                            : null,
+                    paymentCreated: Boolean(paymentRecord?.created),
+                    paymentError: paymentTraceError,
+                    warning: warning || (paymentTraceError ? 'Journal saved; payment record failed' : null)
                 });
             };
 
@@ -4778,6 +4893,19 @@ class TransactionController {
                     results.warnings.push(
                         `${payload.sheetName || 'sheet'} ${payload.journalKey}: ${err.message}`
                     );
+                    recordUploadTrace({
+                        status: 'duplicate',
+                        customer: payload.customer,
+                        amount: payload.amount ?? null,
+                        date: payload.date ?? null,
+                        sheetName: payload.sheetName,
+                        rows: payload.rows,
+                        journalKey: payload.journalKey,
+                        transactionStatus: 'failed',
+                        existingTransactionId: err.existingTransactionId || null,
+                        existingId: err.existingId || null,
+                        error: err.message
+                    });
                     return 'duplicate';
                 }
                 results.failed.push({
@@ -4785,6 +4913,18 @@ class TransactionController {
                     error: err.message
                 });
                 results.summary.totalFailed++;
+                recordUploadTrace({
+                    status: 'failed',
+                    customer: payload.customer,
+                    amount: payload.amount ?? null,
+                    date: payload.date ?? null,
+                    sheetName: payload.sheetName,
+                    rows: payload.rows,
+                    journalKey: payload.journalKey,
+                    transactionStatus: 'failed',
+                    paymentStatus: 'skipped',
+                    error: err.message
+                });
                 return 'failed';
             };
 
@@ -5079,6 +5219,12 @@ class TransactionController {
                                     sheetName: sheet.name,
                                     rows: [row.rowNumber],
                                     customer: row.customer,
+                                    amount:
+                                        row.paymentTotal ||
+                                        row.totalAmount ||
+                                        (Number(row.rental || 0) + Number(row.adminFee || 0)) ||
+                                        null,
+                                    date: row.date || parsed.reportingDate || defaultDate,
                                     missingInvoiceNumber: Boolean(row.missingInvoiceNumber)
                                 },
                                 err
@@ -5153,6 +5299,7 @@ class TransactionController {
                 message: messageParts.join(', '),
                 data: {
                     ...results,
+                    uploadTraceSummary: buildUploadTraceSummary(results.uploadTrace),
                     fetchTransactionsUrl: `/api/finance/transactions?excelUploadBatchId=${excelUploadBatchId}&limit=100${
                         residenceId ? `&residence=${residenceId}` : ''
                     }`
