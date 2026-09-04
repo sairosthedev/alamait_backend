@@ -352,6 +352,7 @@ function parseClassicJournalSheet(sheet, headerInfo, defaultDate) {
 function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'payments', reportingDate = null, sheetName = null }) {
     const headers = headerInfo.headers;
     const col = {
+        date: matchCol(headers, ['date', 'transaction_date', 'txn_date', 'payment_date']),
         invoiceDate: matchCol(headers, ['invoice_date', 'invoice_d', 'inv_date']),
         invoiceNumber: matchCol(headers, [
             'invoice_number', 'invoice_n', 'invoice_no', 'invoice_num', 'inv_no', 'invoice'
@@ -393,11 +394,22 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
         const adminFee = toNumber(get(row, 'adminFee'));
         const totalAmount = toNumber(get(row, 'totalAmount'));
         const payments = paymentCols.map((c) => toNumber(cellRaw(row.getCell(c))));
-        const paymentTotal = payments.reduce((s, n) => s + n, 0);
+        let paymentTotal = payments.reduce((s, n) => s + n, 0);
         const invoiceNumber = String(get(row, 'invoiceNumber') ?? '').trim();
         const roomNumber = String(get(row, 'roomNumber') ?? '').trim();
-        const invoiceDate = toDate(get(row, 'invoiceDate'));
+        const rowDate = toDate(get(row, 'date'));
+        const invoiceDate = toDate(get(row, 'invoiceDate')) || rowDate;
         const dateDue = toDate(get(row, 'dateDue'));
+        // Simple Date | Customer | Amount sheets: amount may only map to totalAmount, not payment cols
+        if (
+            paymentTotal <= 0 &&
+            totalAmount > 0 &&
+            rental === 0 &&
+            adminFee === 0 &&
+            (mode === 'payments' || mode === 'both')
+        ) {
+            paymentTotal = totalAmount;
+        }
 
         if (!customer && rental === 0 && adminFee === 0 && paymentTotal === 0 && totalAmount === 0) {
             return; // blank
@@ -448,7 +460,7 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
                 journalKey: `PAY-${sheetPrefix ? `${sheetPrefix}-` : ''}${baseKey}`,
                 description: `Payment received — ${label}`,
                 reference: invoiceNumber || `MISSING-INV-${sheetPrefix || 'SHEET'}-R${rowNumber}`,
-                date: invoiceDate || reportingDate || defaultDate,
+                date: rowDate || invoiceDate || reportingDate || defaultDate,
                 rowNumber,
                 sheetName: sheetPrefix || null,
                 customer,
@@ -588,41 +600,11 @@ function buildEntriesFromInvoiceRow(row, accounts) {
     const pay = row.paymentTotal || 0;
     if (pay <= 0) throw new Error('Payment amount is zero');
 
-    if (studentAr) {
-        entries.push({
-            accountCode: cash.code,
-            accountName: cash.name,
-            accountType: cash.type,
-            debit: pay,
-            credit: 0,
-            description: `Cash received — ${studentLabel}`
-        });
-        entries.push({
-            accountCode: studentAr.code,
-            accountName: studentAr.name,
-            accountType: studentAr.type || 'Asset',
-            debit: 0,
-            credit: pay,
-            description: `Payment on account — ${studentLabel}`
-        });
-        return entries;
-    }
-
-    // Legacy unlinked path (no debtor): split to income accounts
-    let remaining = pay;
-    let toRent = 0;
-    let toAdmin = 0;
-    if (row.rental > 0) {
-        toRent = Math.min(remaining, row.rental);
-        remaining -= toRent;
-    }
-    if (row.adminFee > 0 && remaining > 0) {
-        toAdmin = Math.min(remaining, row.adminFee);
-        remaining -= toAdmin;
-    }
-    if (toRent === 0 && toAdmin === 0 && remaining === pay) {
-        toRent = pay;
-        remaining = 0;
+    if (!studentAr) {
+        throw new Error(
+            `Payment for "${studentLabel}" must link to a student/debtor (DR Cash / CR 1100-*). ` +
+                `Fix the CUSTOMER name or create the debtor first — do not post tenant payments to income (4001).`
+        );
     }
 
     entries.push({
@@ -633,36 +615,14 @@ function buildEntriesFromInvoiceRow(row, accounts) {
         credit: 0,
         description: `Cash received — ${studentLabel}`
     });
-    if (toRent > 0) {
-        entries.push({
-            accountCode: rentIncome.code,
-            accountName: rentIncome.name,
-            accountType: rentIncome.type,
-            debit: 0,
-            credit: toRent,
-            description: `Rent payment — ${studentLabel}`
-        });
-    }
-    if (toAdmin > 0) {
-        entries.push({
-            accountCode: adminIncome.code,
-            accountName: adminIncome.name,
-            accountType: adminIncome.type,
-            debit: 0,
-            credit: toAdmin,
-            description: `Admin fee payment — ${studentLabel}`
-        });
-    }
-    if (remaining > 0.009) {
-        entries.push({
-            accountCode: ar.code,
-            accountName: ar.name,
-            accountType: ar.type,
-            debit: 0,
-            credit: remaining,
-            description: `Unallocated payment — ${studentLabel}`
-        });
-    }
+    entries.push({
+        accountCode: studentAr.code,
+        accountName: studentAr.name,
+        accountType: studentAr.type || 'Asset',
+        debit: 0,
+        credit: pay,
+        description: `Payment on account — ${studentLabel}`
+    });
     return entries;
 }
 
@@ -867,6 +827,68 @@ async function resolveDebtorForCustomer(customerName, { roomNumber = null, resid
             if (hits.length === 1) {
                 debtor = hits[0];
                 matchMethod = 'first_last';
+                matchedName = debtor.contactInfo?.name || name;
+            }
+        }
+    }
+
+    // Single-name customers (e.g. "Fay", "Kelly") — unique match at residence when possible
+    if (!debtor) {
+        const parts = personNameTokens(name);
+        if (parts.length === 1) {
+            const token = parts[0];
+            const tokenRe = new RegExp(`^${escapeRegex(token)}(\\s|$)`, 'i');
+            let candidates = await Debtor.find({ 'contactInfo.name': tokenRe })
+                .sort({ updatedAt: -1 })
+                .limit(30)
+                .lean();
+
+            if (residenceId && mongoose.Types.ObjectId.isValid(residenceId) && candidates.length > 1) {
+                const studentIds = await Application.find({
+                    residence: residenceId,
+                    status: { $in: ['approved', 'active', 'Approved'] },
+                    student: { $in: candidates.map((d) => d.user).filter(Boolean) }
+                })
+                    .distinct('student')
+                    .lean();
+                const idSet = new Set(studentIds.map(String));
+                const scoped = candidates.filter((d) => d.user && idSet.has(String(d.user)));
+                if (scoped.length === 1) {
+                    candidates = scoped;
+                } else if (scoped.length > 1) {
+                    candidates = scoped;
+                }
+            }
+
+            if (candidates.length === 1) {
+                debtor = candidates[0];
+                matchMethod = 'single_name';
+                matchedName = debtor.contactInfo?.name || name;
+            }
+        }
+    }
+
+    // Common spreadsheet typos vs registered names (first + last with one edit)
+    if (!debtor) {
+        const parts = personNameTokens(name);
+        if (parts.length >= 2) {
+            const firstName = parts[0];
+            const lastName = parts[parts.length - 1];
+            const candidates = await Debtor.find({
+                'contactInfo.name': new RegExp(escapeRegex(lastName.slice(0, 4)), 'i')
+            })
+                .sort({ updatedAt: -1 })
+                .limit(50)
+                .lean();
+            const hits = candidates.filter((d) => {
+                const tokens = personNameTokens(d.contactInfo?.name || '');
+                if (tokens.length < 2) return false;
+                if (tokens[0] !== firstName.toLowerCase()) return false;
+                return scorePersonNameMatch(name, d.contactInfo?.name || '') >= 0.88;
+            });
+            if (hits.length === 1) {
+                debtor = hits[0];
+                matchMethod = 'typo_first_last';
                 matchedName = debtor.contactInfo?.name || name;
             }
         }
@@ -1230,6 +1252,56 @@ function applySystemInvoiceToRow(row, invoice) {
 }
 
 /** One payment per tenant + amount per month tab (or per calendar month). */
+/**
+ * One query up-front for upload idempotency (avoids N findOne calls per row).
+ */
+async function prefetchExistingPaymentJournals(residenceId) {
+    const mongoose = require('mongoose');
+    if (!residenceId || !mongoose.Types.ObjectId.isValid(residenceId)) {
+        return { byJournalKey: new Map(), byDedupKey: new Map(), entries: [] };
+    }
+
+    const entries = await TransactionEntry.find({
+        status: { $ne: 'reversed' },
+        residence: residenceId,
+        'metadata.invoiceRowType': 'payment'
+    })
+        .select(
+            '_id transactionId totalDebit date reference metadata.excelJournalKey metadata.customer metadata.sheetName metadata.invoiceRowType'
+        )
+        .lean();
+
+    const byJournalKey = new Map();
+    const byDedupKey = new Map();
+    for (const entry of entries) {
+        const journalKey = String(entry.metadata?.excelJournalKey || '').trim();
+        if (journalKey) byJournalKey.set(journalKey, entry);
+
+        const dedupKey = buildExcelPaymentDedupKey({
+            customer: entry.metadata?.customer,
+            amount: entry.totalDebit,
+            date: entry.date,
+            sheetName: entry.metadata?.sheetName
+        });
+        if (dedupKey) byDedupKey.set(dedupKey, entry);
+    }
+
+    return { byJournalKey, byDedupKey, entries };
+}
+
+function registerPaymentInPrefetch(prefetch, { journalKey, customer, amount, date, sheetName, savedEntry }) {
+    if (!prefetch || !savedEntry) return;
+    const normalizedKey = String(journalKey || '').trim();
+    if (normalizedKey) prefetch.byJournalKey.set(normalizedKey, savedEntry);
+    const dedupKey = buildExcelPaymentDedupKey({
+        customer,
+        amount,
+        date,
+        sheetName
+    });
+    if (dedupKey) prefetch.byDedupKey.set(dedupKey, savedEntry);
+}
+
 function buildExcelPaymentDedupKey({ customer, amount, date, sheetName }) {
     const name = String(customer || '')
         .trim()
@@ -1452,6 +1524,9 @@ module.exports = {
     detectAndParseSheet,
     buildEntriesFromInvoiceRow,
     buildExcelPaymentDedupKey,
+    prefetchExistingPaymentJournals,
+    registerPaymentInPrefetch,
+    getDebtorNameIndex,
     resolveDebtorForCustomer,
     resolveInvoiceForPaymentRow,
     applySystemInvoiceToRow,

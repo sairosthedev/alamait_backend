@@ -288,6 +288,11 @@ paymentSchema.methods.validateMapping = async function() {
 // BUT: We must be careful not to create duplicates if smartFIFOAllocation already created a transaction
 paymentSchema.post('save', async function(doc) {
     try {
+        // Journal Excel upload creates TransactionEntry first — never run fallback / wait loops
+        if (doc.metadata?.journalUpload || doc.metadata?.skipSmartFIFOAllocation) {
+            return;
+        }
+
         // 🆕 CRITICAL FIX: Check if smartFIFOAllocation will be used BEFORE doing anything
         // This prevents duplicate transactions that would overstate cash received
         const Payment = require('./Payment');

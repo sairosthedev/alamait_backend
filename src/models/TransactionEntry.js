@@ -148,6 +148,11 @@ transactionEntrySchema.post('save', async function(doc) {
     if (arEntries.length === 0 && apEntries.length === 0) {
       return; // Not an AR or AP transaction
     }
+
+    // Bulk Excel upload syncs debtors once after all rows — skip per-row recalc (Render timeout)
+    if (doc.metadata?.deferDebtorSync || doc.metadata?.excelBulkUpload) {
+      return;
+    }
     
     console.log(`🔄 Auto-updating totals for transaction: ${doc.transactionId}`);
     

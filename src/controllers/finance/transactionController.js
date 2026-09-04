@@ -4125,6 +4125,9 @@ class TransactionController {
                 detectAndParseSheet,
                 buildEntriesFromInvoiceRow,
                 buildExcelPaymentDedupKey,
+                prefetchExistingPaymentJournals,
+                registerPaymentInPrefetch,
+                getDebtorNameIndex,
                 isMonthSheetName,
                 normalizeSheetName,
                 resolveDebtorForCustomer,
@@ -4235,7 +4238,8 @@ class TransactionController {
                     totalDebits: 0,
                     totalCredits: 0,
                     totalPaymentRecords: 0,
-                    totalPaymentRecordsLinked: 0
+                    totalPaymentRecordsLinked: 0,
+                    totalDebtorsSynced: 0
                 }
             };
 
@@ -4243,10 +4247,19 @@ class TransactionController {
             const requireStudentLink = String(req.body.requireStudentLink ?? 'true').toLowerCase() !== 'false';
             // Pass allowDuplicates=true to bypass idempotency (not recommended)
             const allowDuplicates = String(req.body.allowDuplicates || '').toLowerCase() === 'true';
+            const resolveSystemInvoices =
+                String(req.body.resolveSystemInvoices || '').toLowerCase() === 'true';
             const debtorCache = new Map();
             const invoiceCache = new Map();
             const seenJournalKeys = new Set();
             const seenPaymentDedupKeys = new Set();
+            const debtorsToSyncAfterUpload = new Set();
+
+            // Warm caches once — avoids 38× findOne + full debtor scan mid-upload (Render timeout)
+            await getDebtorNameIndex(debtorCache);
+            const paymentPrefetch = allowDuplicates
+                ? { byJournalKey: new Map(), byDedupKey: new Map(), entries: [] }
+                : await prefetchExistingPaymentJournals(residenceId);
 
             const findExistingExcelDuplicate = async ({
                 journalKey,
@@ -4255,6 +4268,27 @@ class TransactionController {
                 date,
                 extraMeta = {}
             }) => {
+                const normalizedKey = String(journalKey || '').trim();
+                if (normalizedKey && paymentPrefetch.byJournalKey.has(normalizedKey)) {
+                    return paymentPrefetch.byJournalKey.get(normalizedKey);
+                }
+
+                if (
+                    extraMeta.invoiceRowType === 'payment' &&
+                    extraMeta.customer &&
+                    Number(totalDebit) > 0
+                ) {
+                    const dedupKey = buildExcelPaymentDedupKey({
+                        customer: extraMeta.customer,
+                        amount: totalDebit,
+                        date: date || defaultDate,
+                        sheetName: extraMeta.sheetName
+                    });
+                    if (dedupKey && paymentPrefetch.byDedupKey.has(dedupKey)) {
+                        return paymentPrefetch.byDedupKey.get(dedupKey);
+                    }
+                }
+
                 const orConditions = [{ 'metadata.excelJournalKey': journalKey }];
 
                 // Same invoice payment/charge (real invoice #) + amount + type + residence
@@ -4551,11 +4585,34 @@ class TransactionController {
                         excelFileName: req.file.originalname,
                         excelFormat: format,
                         excelMode: mode,
+                        deferDebtorSync: true,
+                        excelBulkUpload: true,
                         ...extraMeta
                     }
                 });
 
                 await transactionEntry.save();
+
+                if (extraMeta.invoiceRowType === 'payment') {
+                    registerPaymentInPrefetch(paymentPrefetch, {
+                        journalKey: normalizedKey,
+                        customer: extraMeta.customer,
+                        amount: totalDebit,
+                        date: date || defaultDate,
+                        sheetName: extraMeta.sheetName,
+                        savedEntry: {
+                            _id: transactionEntry._id,
+                            transactionId: transactionEntry.transactionId,
+                            totalDebit,
+                            date: transactionEntry.date,
+                            reference: transactionEntry.reference,
+                            metadata: transactionEntry.metadata
+                        }
+                    });
+                }
+                if (extraMeta.debtorId) {
+                    debtorsToSyncAfterUpload.add(String(extraMeta.debtorId));
+                }
 
                 let paymentRecord = null;
                 const isLinkedPayment =
@@ -4845,7 +4902,7 @@ class TransactionController {
                                     roomNumber: row.roomNumber,
                                     error: resolvedDebtor.error
                                 });
-                                if (requireStudentLink) {
+                                if (requireStudentLink || row.type === 'payment') {
                                     throw new Error(resolvedDebtor.error);
                                 }
                                 results.warnings.push(
@@ -4859,6 +4916,7 @@ class TransactionController {
 
                             let workingRow = { ...row, sheetName: row.sheetName || sheet.name };
                             if (
+                                resolveSystemInvoices &&
                                 workingRow.missingInvoiceNumber &&
                                 resolvedDebtor.ok &&
                                 resolvedDebtor.studentId
@@ -4956,6 +5014,23 @@ class TransactionController {
                 }
 
                 results.sheetsProcessed.push(sheetResult);
+            }
+
+            // One sync pass for all debtors touched by this upload (not 38× per-row recalc)
+            if (debtorsToSyncAfterUpload.size > 0) {
+                const { syncDebtorTotalsWithAR } = require('../../services/debtorService');
+                let synced = 0;
+                for (const debtorId of debtorsToSyncAfterUpload) {
+                    try {
+                        await syncDebtorTotalsWithAR(debtorId);
+                        synced++;
+                    } catch (syncErr) {
+                        results.warnings.push(
+                            `Debtor balance sync failed for ${debtorId}: ${syncErr.message}`
+                        );
+                    }
+                }
+                results.summary.totalDebtorsSynced = synced;
             }
 
             const hadWork =
