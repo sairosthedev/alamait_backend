@@ -158,6 +158,16 @@ class TransactionController {
                 query.residence = residence;
             }
 
+            if (req.query.excelUploadBatchId) {
+                query['metadata.excelUploadBatchId'] = String(req.query.excelUploadBatchId).trim();
+            }
+            if (req.query.excelFileName) {
+                query['metadata.excelFileName'] = String(req.query.excelFileName).trim();
+            }
+            if (req.query.excelSheet) {
+                query['metadata.sheetName'] = String(req.query.excelSheet).trim();
+            }
+
             const search = (req.query.search || req.query.q || req.query.transactionId || '').trim();
             if (search) {
                 const searchOr = [
@@ -4211,8 +4221,11 @@ class TransactionController {
                     ? normalizeSheetName(monthSheetsInBatch[0].name)
                     : null;
             const createdByUserId = await TransactionController.resolveUploadUserId(req);
+            const excelUploadBatchId = `UPLOAD-${Date.now()}${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
 
             const results = {
+                uploadBatchId: excelUploadBatchId,
+                uploadTransactions: [],
                 format: null,
                 mode,
                 sheetsProcessed: [],
@@ -4254,6 +4267,32 @@ class TransactionController {
             const seenJournalKeys = new Set();
             const seenPaymentDedupKeys = new Set();
             const debtorsToSyncAfterUpload = new Set();
+
+            const recordUploadTransaction = ({
+                transactionId,
+                _id,
+                customer,
+                totalDebit,
+                date,
+                sheetName,
+                row,
+                journalKey,
+                created = false,
+                alreadyPosted = false
+            }) => {
+                results.uploadTransactions.push({
+                    transactionId,
+                    _id,
+                    customer: customer || null,
+                    amount: totalDebit,
+                    date: date || null,
+                    sheetName: sheetName || null,
+                    excelRow: row || null,
+                    journalKey: journalKey || null,
+                    created,
+                    alreadyPosted
+                });
+            };
 
             // Warm caches once — avoids 38× findOne + full debtor scan mid-upload (Render timeout)
             await getDebtorNameIndex(debtorCache);
@@ -4501,6 +4540,18 @@ class TransactionController {
                             results.summary.totalDebits += totalDebit;
                             results.summary.totalCredits += totalCredit;
                             if (extraMeta.debtorId) results.summary.totalLinkedToDebtor++;
+                            recordUploadTransaction({
+                                transactionId: existing.transactionId,
+                                _id: existing._id,
+                                customer: extraMeta.customer,
+                                totalDebit,
+                                date: date || defaultDate,
+                                sheetName: extraMeta.sheetName,
+                                row: (extraMeta.excelRows || [])[0],
+                                journalKey: normalizedKey,
+                                created: false,
+                                alreadyPosted: true
+                            });
                             return;
                         }
 
@@ -4533,6 +4584,18 @@ class TransactionController {
                             results.summary.totalDebits += totalDebit;
                             results.summary.totalCredits += totalCredit;
                             if (extraMeta.debtorId) results.summary.totalLinkedToDebtor++;
+                            recordUploadTransaction({
+                                transactionId: existing.transactionId,
+                                _id: existing._id,
+                                customer: extraMeta.customer,
+                                totalDebit,
+                                date: date || defaultDate,
+                                sheetName: extraMeta.sheetName,
+                                row: (extraMeta.excelRows || [])[0],
+                                journalKey: normalizedKey,
+                                created: false,
+                                alreadyPosted: true
+                            });
                             return;
                         }
 
@@ -4585,6 +4648,7 @@ class TransactionController {
                         excelFileName: req.file.originalname,
                         excelFormat: format,
                         excelMode: mode,
+                        excelUploadBatchId,
                         deferDebtorSync: true,
                         excelBulkUpload: true,
                         ...extraMeta
@@ -4688,6 +4752,18 @@ class TransactionController {
                 results.summary.totalSuccessful++;
                 results.summary.totalDebits += totalDebit;
                 results.summary.totalCredits += totalCredit;
+                recordUploadTransaction({
+                    transactionId: transactionEntry.transactionId,
+                    _id: transactionEntry._id,
+                    customer: extraMeta.customer,
+                    totalDebit,
+                    date: date || defaultDate,
+                    sheetName: extraMeta.sheetName,
+                    row: (extraMeta.excelRows || [])[0],
+                    journalKey: normalizedKey,
+                    created: true,
+                    alreadyPosted: false
+                });
             };
 
             const recordJournalFailure = (payload, err) => {
@@ -5075,7 +5151,12 @@ class TransactionController {
             res.status(status).json({
                 success: hadWork || (onlyUnmatchedFailures && results.summary.totalAlreadyPosted > 0),
                 message: messageParts.join(', '),
-                data: results
+                data: {
+                    ...results,
+                    fetchTransactionsUrl: `/api/finance/transactions?excelUploadBatchId=${excelUploadBatchId}&limit=100${
+                        residenceId ? `&residence=${residenceId}` : ''
+                    }`
+                }
             });
         } catch (error) {
             console.error('Error uploading Excel journals:', error);

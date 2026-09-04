@@ -199,20 +199,24 @@ class CashFlowController {
                     }
                 }
                 
-                // For cash accounts (1000s), be more specific about what we're looking for
+                // For cash accounts (1000s), include tenant payments and cash receipts
                 if (accountCode.startsWith('100')) {
-                    // If it's the main cash account (1000), look for admin fees specifically
                     if (accountCode === '1000') {
-                        return description.includes('admin') || description.includes('advance_admin');
+                        if (entry.source === 'payment') return true;
+                        if (description.includes('payment received')) return true;
+                        if (description.includes('cash received')) return true;
+                        if (description.includes('admin') || description.includes('advance_admin')) return true;
+                        return false;
                     }
-                    // For other cash accounts, include all cash-related transactions
                     return true;
                 }
                 
-                // For income accounts (4000s), match based on account name keywords
+                // For income accounts (4000s), accruals only — not tenant payments (those hit Cash/AR)
                 if (accountCode.startsWith('400')) {
+                    if (entry.source === 'payment') return false;
+                    if (description.includes('payment received')) return false;
                     if (accountName.includes('rental')) {
-                        return description.includes('rent') || description.includes('rental') || description.includes('accommodation');
+                        return description.includes('rent') || description.includes('rental') || description.includes('accommodation') || description.includes('accrual');
                     }
                     if (accountName.includes('admin')) {
                         return description.includes('admin') || description.includes('advance_admin');
