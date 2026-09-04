@@ -4135,6 +4135,8 @@ class TransactionController {
                 detectAndParseSheet,
                 buildEntriesFromInvoiceRow,
                 buildExcelPaymentDedupKey,
+                buildExcelRowDedupKey,
+                excelUploadRowMatches,
                 prefetchExistingPaymentJournals,
                 registerPaymentInPrefetch,
                 getDebtorNameIndex,
@@ -4384,8 +4386,27 @@ class TransactionController {
             // Warm caches once — avoids 38× findOne + full debtor scan mid-upload (Render timeout)
             await getDebtorNameIndex(debtorCache);
             const paymentPrefetch = allowDuplicates
-                ? { byJournalKey: new Map(), byDedupKey: new Map(), entries: [] }
+                ? {
+                      byJournalKey: new Map(),
+                      byDedupKey: new Map(),
+                      byReference: new Map(),
+                      byRowDedupKey: new Map(),
+                      entries: []
+                  }
                 : await prefetchExistingPaymentJournals(residenceId);
+            /** Journals saved this request — payment records created in one batch after all rows (Render timeout) */
+            const pendingPaymentRecords = [];
+
+            const rowMatchContext = (extraMeta, totalDebit, date, reference) => ({
+                customer: extraMeta.customer,
+                amount: totalDebit,
+                date: date || defaultDate,
+                sheetName: extraMeta.sheetName,
+                reference
+            });
+
+            const acceptExisting = (existing, ctx) =>
+                existing && excelUploadRowMatches(existing, ctx);
 
             const findExistingExcelDuplicate = async ({
                 journalKey,
@@ -4394,9 +4415,23 @@ class TransactionController {
                 date,
                 extraMeta = {}
             }) => {
+                const ctx = rowMatchContext(extraMeta, totalDebit, date, reference);
+                const rowDedupKey = buildExcelRowDedupKey({
+                    reference,
+                    customer: extraMeta.customer,
+                    amount: totalDebit,
+                    date: date || defaultDate,
+                    sheetName: extraMeta.sheetName
+                });
+                if (rowDedupKey && paymentPrefetch.byRowDedupKey?.has(rowDedupKey)) {
+                    const hit = paymentPrefetch.byRowDedupKey.get(rowDedupKey);
+                    if (acceptExisting(hit, ctx)) return hit;
+                }
+
                 const normalizedKey = String(journalKey || '').trim();
                 if (normalizedKey && paymentPrefetch.byJournalKey.has(normalizedKey)) {
-                    return paymentPrefetch.byJournalKey.get(normalizedKey);
+                    const hit = paymentPrefetch.byJournalKey.get(normalizedKey);
+                    if (acceptExisting(hit, ctx)) return hit;
                 }
 
                 if (
@@ -4411,14 +4446,32 @@ class TransactionController {
                         sheetName: extraMeta.sheetName
                     });
                     if (dedupKey && paymentPrefetch.byDedupKey.has(dedupKey)) {
-                        return paymentPrefetch.byDedupKey.get(dedupKey);
+                        const hit = paymentPrefetch.byDedupKey.get(dedupKey);
+                        if (acceptExisting(hit, ctx)) return hit;
                     }
                 }
 
                 const orConditions = [{ 'metadata.excelJournalKey': journalKey }];
 
-                // Same invoice payment/charge (real invoice #) + amount + type + residence
                 const ref = reference && String(reference).trim();
+                if (
+                    ref &&
+                    extraMeta.customer &&
+                    Number(totalDebit) > 0
+                ) {
+                    orConditions.push({
+                        status: { $ne: 'reversed' },
+                        residence: residenceId,
+                        reference: ref,
+                        totalDebit: Math.round(Number(totalDebit) * 100) / 100,
+                        'metadata.customer': new RegExp(
+                            `^${String(extraMeta.customer).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+                            'i'
+                        )
+                    });
+                }
+
+                // Same invoice payment/charge (real invoice #) + amount + type + residence
                 const isGeneratedRef = !ref || /MISSING-INV/i.test(ref) || /^EXCEL-/i.test(ref);
 
                 // Cross-format payment dedup: same tenant + amount + month/residence
@@ -4492,12 +4545,13 @@ class TransactionController {
                     orConditions.push(fingerprint);
                 }
 
-                return TransactionEntry.findOne({
+                const found = await TransactionEntry.findOne({
                     status: { $ne: 'reversed' },
                     $or: orConditions
                 })
-                    .select('transactionId reference date totalDebit metadata.excelJournalKey metadata.invoiceRowType')
+                    .select('transactionId reference date totalDebit metadata.excelJournalKey metadata.invoiceRowType metadata.customer metadata.sheetName')
                     .lean();
+                return acceptExisting(found, ctx) ? found : null;
             };
 
             const saveJournal = async ({
@@ -4779,33 +4833,26 @@ class TransactionController {
                     transactionSource === 'payment' &&
                     (extraMeta.studentId || extraMeta.customer || extraMeta.debtorId);
                 if (isLinkedPayment && createdByUserId) {
-                    try {
-                        const { payment, created } = await createPaymentRecordForJournal({
-                            transactionEntry,
-                            residenceId,
-                            createdByUserId,
-                            studentId: extraMeta.studentId,
-                            debtorId: extraMeta.debtorId,
-                            customer: extraMeta.customer,
-                            accountCode: extraMeta.accountCode,
-                            paymentType: extraMeta.paymentType || 'rent',
-                            method: extraMeta.method || 'Cash',
-                            paymentMonth: extraMeta.paymentMonth,
-                            roomNumber: extraMeta.roomNumber,
-                            adminFee: Number(extraMeta.adminFee) || 0,
-                            rental: Number(extraMeta.rental) || 0,
-                            systemInvoiceId: extraMeta.systemInvoiceId || null,
-                            excelUploadBatchId
-                        });
-                        paymentRecord = { paymentId: payment.paymentId, created };
-                        if (created) results.summary.totalPaymentRecords++;
-                        results.summary.totalPaymentRecordsLinked++;
-                    } catch (payErr) {
-                        paymentTraceError = payErr.message;
-                        results.warnings.push(
-                            `${extraMeta.sheetName || 'sheet'} ${normalizedKey}: journal saved but payment record failed — ${payErr.message}`
-                        );
-                    }
+                    pendingPaymentRecords.push({
+                        transactionEntry,
+                        residenceId,
+                        createdByUserId,
+                        studentId: extraMeta.studentId,
+                        debtorId: extraMeta.debtorId,
+                        customer: extraMeta.customer,
+                        accountCode: extraMeta.accountCode,
+                        paymentType: extraMeta.paymentType || 'rent',
+                        method: extraMeta.method || 'Cash',
+                        paymentMonth: extraMeta.paymentMonth,
+                        roomNumber: extraMeta.roomNumber,
+                        adminFee: Number(extraMeta.adminFee) || 0,
+                        rental: Number(extraMeta.rental) || 0,
+                        systemInvoiceId: extraMeta.systemInvoiceId || null,
+                        excelUploadBatchId,
+                        normalizedKey,
+                        sheetName: extraMeta.sheetName,
+                        excelRow: (extraMeta.excelRows || [])[0]
+                    });
                 } else if (isLinkedPayment && !createdByUserId) {
                     paymentTraceError =
                         'No Payment record — could not resolve upload user (createdBy). Log in again or check auth token.';
@@ -4854,6 +4901,7 @@ class TransactionController {
                 results.summary.totalCredits += totalCredit;
 
                 const hasPaymentAttempt = isLinkedPayment;
+                const paymentDeferred = hasPaymentAttempt && createdByUserId && !paymentTraceError;
                 recordUploadTrace({
                     status: paymentTraceError ? 'partial' : 'created',
                     customer: extraMeta.customer,
@@ -4868,16 +4916,24 @@ class TransactionController {
                     paymentId: paymentRecord?.paymentId || null,
                     paymentStatus: paymentTraceError
                         ? 'failed'
-                        : paymentRecord
-                          ? paymentRecord.created
-                              ? 'created'
-                              : 'already_existed'
-                          : hasPaymentAttempt
-                            ? 'skipped'
-                            : null,
+                        : paymentDeferred
+                          ? 'pending'
+                          : paymentRecord
+                            ? paymentRecord.created
+                                ? 'created'
+                                : 'already_existed'
+                            : hasPaymentAttempt
+                              ? 'skipped'
+                              : null,
                     paymentCreated: Boolean(paymentRecord?.created),
                     paymentError: paymentTraceError,
-                    warning: warning || (paymentTraceError ? 'Journal saved; payment record failed' : null)
+                    warning:
+                        warning ||
+                        (paymentTraceError
+                            ? 'Journal saved; payment record failed'
+                            : paymentDeferred
+                              ? 'Journal saved; payment record queued for batch create'
+                              : null)
                 });
             };
 
@@ -5207,9 +5263,6 @@ class TransactionController {
                                     linkedToStudentAccount: Boolean(resolvedDebtor.ok)
                                 }
                             });
-                            if (resolvedDebtor.ok) {
-                                results.summary.totalLinkedToDebtor++;
-                            }
                             sheetResult.successful++;
                             if (workingRow.missingInvoiceNumber) sheetResult.missingInvoiceNumber++;
                         } catch (err) {
@@ -5236,6 +5289,69 @@ class TransactionController {
                 }
 
                 results.sheetsProcessed.push(sheetResult);
+            }
+
+            // Batch-create payment records after all journals (avoids 38× payment DB round-trips mid-request)
+            for (const pending of pendingPaymentRecords) {
+                try {
+                    const { payment, created } = await createPaymentRecordForJournal({
+                        transactionEntry: pending.transactionEntry,
+                        residenceId: pending.residenceId,
+                        createdByUserId: pending.createdByUserId,
+                        studentId: pending.studentId,
+                        debtorId: pending.debtorId,
+                        customer: pending.customer,
+                        accountCode: pending.accountCode,
+                        paymentType: pending.paymentType,
+                        method: pending.method,
+                        paymentMonth: pending.paymentMonth,
+                        roomNumber: pending.roomNumber,
+                        adminFee: pending.adminFee,
+                        rental: pending.rental,
+                        systemInvoiceId: pending.systemInvoiceId,
+                        excelUploadBatchId: pending.excelUploadBatchId
+                    });
+                    if (created) results.summary.totalPaymentRecords++;
+                    results.summary.totalPaymentRecordsLinked++;
+
+                    const traceRow = results.uploadTrace.find(
+                        (r) => r.transaction?.transactionId === pending.transactionEntry.transactionId
+                    );
+                    if (traceRow) {
+                        traceRow.payment = {
+                            paymentId: payment.paymentId,
+                            status: created ? 'created' : 'already_existed',
+                            created: Boolean(created),
+                            error: null
+                        };
+                        if (traceRow.status === 'created' && !traceRow.warning?.includes('failed')) {
+                            traceRow.warning = null;
+                        }
+                    }
+                    const successRow = results.successful.find(
+                        (r) => r.transactionId === pending.transactionEntry.transactionId
+                    );
+                    if (successRow) {
+                        successRow.paymentRecord = { paymentId: payment.paymentId, created };
+                    }
+                } catch (payErr) {
+                    results.warnings.push(
+                        `${pending.sheetName || 'sheet'} ${pending.normalizedKey}: journal saved but payment record failed — ${payErr.message}`
+                    );
+                    const traceRow = results.uploadTrace.find(
+                        (r) => r.transaction?.transactionId === pending.transactionEntry.transactionId
+                    );
+                    if (traceRow) {
+                        traceRow.status = 'partial';
+                        traceRow.payment = {
+                            paymentId: null,
+                            status: 'failed',
+                            created: false,
+                            error: payErr.message
+                        };
+                        traceRow.warning = 'Journal saved; payment record failed';
+                    }
+                }
             }
 
             // One sync pass for all debtors touched by this upload (not 38× per-row recalc)
@@ -5266,14 +5382,36 @@ class TransactionController {
 
             const createdCount =
                 results.summary.totalSuccessful - (results.summary.totalAlreadyPosted || 0);
+            const paymentsCreatedThisUpload = results.summary.totalPaymentRecords || 0;
+            const traceSummary = buildUploadTraceSummary(results.uploadTrace);
+            const existingTransactionIds = results.uploadTrace
+                .filter((r) => r.transaction?.transactionId)
+                .map((r) => r.transaction.transactionId);
+            const thisUpload = {
+                transactionsCreated: createdCount,
+                transactionsAlreadyExisted: results.summary.totalAlreadyPosted || 0,
+                transactionsFailed: results.summary.totalFailed || 0,
+                paymentsCreated: paymentsCreatedThisUpload,
+                paymentsAlreadyExisted: traceSummary.payments.alreadyExisted + traceSummary.payments.linked,
+                paymentsFailed: traceSummary.payments.failed
+            };
+
             const messageParts = [
                 `Excel journals processed across ${results.sheetsProcessed.length} tab(s):`,
-                `${createdCount} created`,
-                results.summary.totalAlreadyPosted
-                    ? `${results.summary.totalAlreadyPosted} already posted`
+                createdCount
+                    ? `${createdCount} new transaction journal(s) created`
+                    : results.summary.totalAlreadyPosted
+                      ? `0 new journals (all ${results.summary.totalAlreadyPosted} already exist from a previous upload — see uploadTrace for transactionId)`
+                      : null,
+                results.summary.totalAlreadyPosted && createdCount
+                    ? `${results.summary.totalAlreadyPosted} already posted (skipped duplicate)`
                     : null,
-                `${results.summary.totalLinkedToDebtor} linked to student debtors`,
-                results.summary.totalFailed ? `${results.summary.totalFailed} failed` : null,
+                paymentsCreatedThisUpload
+                    ? `${paymentsCreatedThisUpload} new payment record(s) created`
+                    : traceSummary.payments.alreadyExisted + traceSummary.payments.linked > 0
+                      ? `0 new payment records (${traceSummary.payments.alreadyExisted + traceSummary.payments.linked} already linked to existing journals)`
+                      : null,
+                results.summary.totalFailed ? `${results.summary.totalFailed} failed (no journal or payment created)` : null,
                 results.summary.totalDuplicates
                     ? `${results.summary.totalDuplicates} duplicates blocked`
                     : null,
@@ -5283,14 +5421,8 @@ class TransactionController {
                 results.summary.totalInvoiceResolvedFromSystem
                     ? `${results.summary.totalInvoiceResolvedFromSystem} invoice numbers resolved from system`
                     : null,
-                results.summary.totalPaymentRecordsLinked
-                    ? `${results.summary.totalPaymentRecordsLinked} payment records linked`
-                    : null,
-                results.summary.totalPaymentRecords
-                    ? `${results.summary.totalPaymentRecords} new payment records created`
-                    : null,
                 results.summary.totalUnmatchedStudents
-                    ? `${results.summary.totalUnmatchedStudents} unmatched students (not in system — create students first)`
+                    ? `${results.summary.totalUnmatchedStudents} unmatched students (create student/debtor first, then re-upload those rows only)`
                     : null
             ].filter(Boolean);
 
@@ -5299,10 +5431,23 @@ class TransactionController {
                 message: messageParts.join(', '),
                 data: {
                     ...results,
-                    uploadTraceSummary: buildUploadTraceSummary(results.uploadTrace),
-                    fetchTransactionsUrl: `/api/finance/transactions?excelUploadBatchId=${excelUploadBatchId}&limit=100${
-                        residenceId ? `&residence=${residenceId}` : ''
-                    }`
+                    thisUpload,
+                    existingTransactionIds,
+                    uploadTraceSummary: traceSummary,
+                    fetchTransactionsUrl:
+                        createdCount > 0
+                            ? `/api/finance/transactions?excelUploadBatchId=${excelUploadBatchId}&limit=100${
+                                  residenceId ? `&residence=${residenceId}` : ''
+                              }`
+                            : existingTransactionIds.length
+                              ? `/api/finance/transactions?limit=100${
+                                    residenceId ? `residence=${residenceId}&` : ''
+                                }search=${existingTransactionIds[0]}`
+                              : null,
+                    note:
+                        createdCount === 0 && results.summary.totalAlreadyPosted > 0
+                            ? 'No new journals were created because these payments were already uploaded. Each uploadTrace row with status already_posted has an existing transactionId and paymentId — search those IDs in Transactions/Payments.'
+                            : null
                 }
             });
         } catch (error) {

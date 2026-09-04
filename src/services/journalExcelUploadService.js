@@ -1259,7 +1259,13 @@ async function prefetchExistingPaymentJournals(residenceId) {
     const mongoose = require('mongoose');
     const TransactionEntry = require('../models/TransactionEntry');
     if (!residenceId || !mongoose.Types.ObjectId.isValid(residenceId)) {
-        return { byJournalKey: new Map(), byDedupKey: new Map(), entries: [] };
+        return {
+            byJournalKey: new Map(),
+            byDedupKey: new Map(),
+            byReference: new Map(),
+            byRowDedupKey: new Map(),
+            entries: []
+        };
     }
 
     const entries = await TransactionEntry.find({
@@ -1274,9 +1280,23 @@ async function prefetchExistingPaymentJournals(residenceId) {
 
     const byJournalKey = new Map();
     const byDedupKey = new Map();
+    const byReference = new Map();
+    const byRowDedupKey = new Map();
     for (const entry of entries) {
         const journalKey = String(entry.metadata?.excelJournalKey || '').trim();
         if (journalKey) byJournalKey.set(journalKey, entry);
+
+        const ref = String(entry.reference || '').trim().toUpperCase();
+        if (ref) byReference.set(ref, entry);
+
+        const rowKey = buildExcelRowDedupKey({
+            reference: entry.reference,
+            customer: entry.metadata?.customer,
+            amount: entry.totalDebit,
+            date: entry.date,
+            sheetName: entry.metadata?.sheetName
+        });
+        if (rowKey) byRowDedupKey.set(rowKey, entry);
 
         const dedupKey = buildExcelPaymentDedupKey({
             customer: entry.metadata?.customer,
@@ -1287,13 +1307,15 @@ async function prefetchExistingPaymentJournals(residenceId) {
         if (dedupKey) byDedupKey.set(dedupKey, entry);
     }
 
-    return { byJournalKey, byDedupKey, entries };
+    return { byJournalKey, byDedupKey, byReference, byRowDedupKey, entries };
 }
 
 function registerPaymentInPrefetch(prefetch, { journalKey, customer, amount, date, sheetName, savedEntry }) {
     if (!prefetch || !savedEntry) return;
     const normalizedKey = String(journalKey || '').trim();
     if (normalizedKey) prefetch.byJournalKey.set(normalizedKey, savedEntry);
+    const ref = String(savedEntry.reference || '').trim().toUpperCase();
+    if (ref && prefetch.byReference) prefetch.byReference.set(ref, savedEntry);
     const dedupKey = buildExcelPaymentDedupKey({
         customer,
         amount,
@@ -1301,15 +1323,18 @@ function registerPaymentInPrefetch(prefetch, { journalKey, customer, amount, dat
         sheetName
     });
     if (dedupKey) prefetch.byDedupKey.set(dedupKey, savedEntry);
+    const rowKey = buildExcelRowDedupKey({
+        reference: savedEntry.reference,
+        customer,
+        amount,
+        date,
+        sheetName
+    });
+    if (rowKey && prefetch.byRowDedupKey) prefetch.byRowDedupKey.set(rowKey, savedEntry);
 }
 
 function buildExcelPaymentDedupKey({ customer, amount, date, sheetName }) {
-    const name = String(customer || '')
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+    const name = normalizeCustomerForDedup(customer);
     if (!name || !amount) return null;
     const amt = (Math.round(Number(amount) * 100) / 100).toFixed(2);
     if (sheetName && isMonthSheetName(sheetName)) {
@@ -1320,6 +1345,60 @@ function buildExcelPaymentDedupKey({ customer, amount, date, sheetName }) {
         return `${name}|${amt}|${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     }
     return `${name}|${amt}|sheet:${normalizeSheetName(sheetName || 'unknown')}`;
+}
+
+function normalizeCustomerForDedup(customer) {
+    return String(customer || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Stable dedup for Sheet1 rows — reference alone collides across June test vs August uploads.
+ */
+function buildExcelRowDedupKey({ reference, customer, amount, date, sheetName }) {
+    const ref = String(reference || '').trim().toUpperCase();
+    const name = normalizeCustomerForDedup(customer);
+    if (!name || !amount) return null;
+    const amt = (Math.round(Number(amount) * 100) / 100).toFixed(2);
+    const paymentKey = buildExcelPaymentDedupKey({ customer, amount, date, sheetName });
+    if (ref) return `${ref}|${name}|${amt}|${paymentKey || 'nodate'}`;
+    return paymentKey;
+}
+
+function excelUploadRowMatches(
+    existing,
+    { customer, amount, date, sheetName, reference = null, allowFuzzyCustomer = false }
+) {
+    if (!existing) return false;
+    const exName = normalizeCustomerForDedup(existing.metadata?.customer);
+    const newName = normalizeCustomerForDedup(customer);
+    if (exName && newName && exName !== newName) {
+        if (!allowFuzzyCustomer) return false;
+    }
+    const exAmt = Math.round(Number(existing.totalDebit) * 100) / 100;
+    const newAmt = Math.round(Number(amount) * 100) / 100;
+    if (exAmt !== newAmt) return false;
+
+    if (reference) {
+        const exRef = String(existing.reference || '').trim().toUpperCase();
+        const newRef = String(reference).trim().toUpperCase();
+        if (exRef && newRef && exRef !== newRef) return false;
+    }
+
+    const exKey = buildExcelPaymentDedupKey({
+        customer: existing.metadata?.customer,
+        amount: existing.totalDebit,
+        date: existing.date,
+        sheetName: existing.metadata?.sheetName
+    });
+    const newKey = buildExcelPaymentDedupKey({ customer, amount, date, sheetName });
+    if (exKey && newKey && exKey !== newKey) return false;
+
+    return true;
 }
 
 /**
@@ -1525,6 +1604,9 @@ module.exports = {
     detectAndParseSheet,
     buildEntriesFromInvoiceRow,
     buildExcelPaymentDedupKey,
+    buildExcelRowDedupKey,
+    excelUploadRowMatches,
+    normalizeCustomerForDedup,
     prefetchExistingPaymentJournals,
     registerPaymentInPrefetch,
     getDebtorNameIndex,
