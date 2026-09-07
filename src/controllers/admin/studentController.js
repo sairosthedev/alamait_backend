@@ -938,11 +938,16 @@ exports.deleteStudent = async (req, res) => {
         const safeErrors = deletionSummary.errors || [];
         
         res.json({
-            message: safeErrors.length > 0 
-                ? 'Student deletion completed with some errors' 
-                : 'Student and all related data deleted successfully',
+            message: deletionSummary.preserveFinancialRecords
+                ? 'Student deleted — payment records and journals preserved for audit'
+                : safeErrors.length > 0
+                  ? 'Student deletion completed with some errors'
+                  : 'Student and all related data deleted successfully',
             summary: {
                 studentInfo: deletionSummary.studentInfo || { id: studentId, email: 'Unknown', name: 'Unknown' },
+                preserveFinancialRecords: Boolean(deletionSummary.preserveFinancialRecords),
+                preservedFinancialRecords: deletionSummary.preservedFinancialRecords || null,
+                preservedPaymentCount: deletionSummary.preservedPaymentCount || 0,
                 collectionsAffected: Object.keys(safeDeletedCollections).length,
                 totalRecordsDeleted: Object.values(safeDeletedCollections)
                     .reduce((sum, item) => sum + (item.count || 0), 0),

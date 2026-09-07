@@ -87,6 +87,14 @@ class StudentDeletionService {
 
                 console.log(`📝 Found student: ${student.email} (${student.firstName} ${student.lastName})`);
 
+                const actualStudentId = student._id;
+                const existingPayments = await Payment.find({
+                    $or: [{ student: actualStudentId }, { user: actualStudentId }]
+                })
+                    .select('_id paymentId totalAmount status date metadata')
+                    .session(session);
+                const preserveFinancialRecords = existingPayments.length > 0;
+
                 // Update deletion summary with student info
                 deletionSummary.studentInfo = {
                     id: student._id,
@@ -94,30 +102,67 @@ class StudentDeletionService {
                     name: `${student.firstName} ${student.lastName}`,
                     applicationCode: student.applicationCode
                 };
+                deletionSummary.preserveFinancialRecords = preserveFinancialRecords;
+                deletionSummary.preservedPaymentCount = existingPayments.length;
+
+                if (preserveFinancialRecords) {
+                    console.log(
+                        `💰 Student has ${existingPayments.length} payment(s) — preserving payments, journals, and debtor/AR records`
+                    );
+                }
 
                 // Archive student data before deletion
                 await this.archiveStudentData(student, session, deletionSummary);
 
+                const financialDeletionSteps = preserveFinancialRecords
+                    ? [{ special: 'preserveFinancialRecordsForDeletedStudent', description: 'Preserve payments and financial journals (unlink student only)' }]
+                    : [
+                          {
+                              special: 'deleteTransactionEntriesByMetadata',
+                              description: 'Transaction entries (by metadata.studentId only - safest)'
+                          },
+                          {
+                              collection: 'TransactionEntry',
+                              field: 'reference',
+                              description: 'Transaction entries (by reference - exact match only)'
+                          },
+                          {
+                              special: 'deleteAccrualTransactions',
+                              description: 'Accrual transaction entries (by explicit student ID only)'
+                          },
+                          {
+                              special: 'deleteNegotiationTransactions',
+                              description: 'Negotiation transaction entries (by explicit student ID only)'
+                          },
+                          {
+                              collection: 'Transaction',
+                              field: 'reference',
+                              description: 'Transactions (by reference - exact match only)'
+                          },
+                          {
+                              special: 'deletePaymentRelatedTransactions',
+                              description: 'Payment-related transaction entries'
+                          },
+                          { collection: 'Payment', field: 'student', description: 'Payments (student field)' },
+                          { collection: 'Payment', field: 'user', description: 'Payments (user field)' },
+                          { collection: 'Receipt', field: 'student', description: 'Receipts' },
+                          { collection: 'Debtor', field: 'user', description: 'Debtor accounts' },
+                          { special: 'deleteStudentSpecificAccounts', description: 'Student-specific AR accounts' },
+                          { collection: 'Invoice', field: 'student', description: 'Invoices' }
+                      ];
+
                 // Delete from all collections in the correct order (dependencies first)
                 const deletionPlan = [
-                    // Step 1: Delete transaction-related data (ONLY by explicit ID references - no fuzzy matching)
-                    { special: 'deleteTransactionEntriesByMetadata', description: 'Transaction entries (by metadata.studentId only - safest)' },
-                    { collection: 'TransactionEntry', field: 'reference', description: 'Transaction entries (by reference - exact match only)' },
-                    { special: 'deleteAccrualTransactions', description: 'Accrual transaction entries (by explicit student ID only)' },
-                    { special: 'deleteNegotiationTransactions', description: 'Negotiation transaction entries (by explicit student ID only)' },
-                    { collection: 'Transaction', field: 'reference', description: 'Transactions (by reference - exact match only)' },
-                    
-                    // Step 2: Delete financial records (delete payment-related transactions BEFORE payments)
-                    { special: 'deletePaymentRelatedTransactions', description: 'Payment-related transaction entries' },
-                    { collection: 'Payment', field: 'student', description: 'Payments (student field)' },
-                    { collection: 'Payment', field: 'user', description: 'Payments (user field)' },
-                    { collection: 'Receipt', field: 'student', description: 'Receipts' },
-                    { collection: 'Debtor', field: 'user', description: 'Debtor accounts' },
-                    { special: 'deleteStudentSpecificAccounts', description: 'Student-specific AR accounts' },
-                    { collection: 'StudentAccount', field: 'student', description: 'Student accounts' },
-                    { collection: 'TenantAccount', field: 'tenant', description: 'Tenant accounts' },
-                    { collection: 'Invoice', field: 'student', description: 'Invoices' },
-                    
+                    ...financialDeletionSteps,
+
+                    // Step 2: Financial records when not preserved above (invoices only if wiping financials)
+                    ...(preserveFinancialRecords
+                        ? []
+                        : [{ collection: 'StudentAccount', field: 'student', description: 'Student accounts' }]),
+                    ...(preserveFinancialRecords
+                        ? []
+                        : [{ collection: 'TenantAccount', field: 'tenant', description: 'Tenant accounts' }]),
+
                     // Step 3: Delete operational records
                     { collection: 'Booking', field: 'student', description: 'Bookings' },
                     { collection: 'Lease', field: 'studentId', description: 'Leases' },
@@ -149,7 +194,6 @@ class StudentDeletionService {
                 ];
 
                 // Use the actual student User ID for deletions
-                const actualStudentId = student._id;
                 console.log(`🎯 Using actual student User ID for deletions: ${actualStudentId}`);
 
                 // Execute deletion plan
@@ -354,8 +398,120 @@ class StudentDeletionService {
             case 'deleteTransactionEntriesByMetadata':
                 await this.deleteTransactionEntriesByMetadata(student, session, deletionSummary, adminUser);
                 break;
+            case 'preserveFinancialRecordsForDeletedStudent':
+                await this.preserveFinancialRecordsForDeletedStudent(
+                    student,
+                    session,
+                    deletionSummary,
+                    adminUser
+                );
+                break;
             default:
                 console.log(`⚠️ Unknown special deletion type: ${type}`);
+        }
+    }
+
+    /**
+     * Keep payment records, journals, receipts, debtor and AR accounts when a student
+     * who paid in advance is removed — only the student profile is deleted.
+     */
+    static async preserveFinancialRecordsForDeletedStudent(
+        student,
+        session,
+        deletionSummary,
+        adminUser
+    ) {
+        try {
+            const studentId = student._id;
+            const studentIdStr = studentId.toString();
+            const formerStudent = {
+                formerStudentId: studentIdStr,
+                formerStudentName: `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+                formerStudentEmail: student.email || null,
+                deletedAt: new Date(),
+                deletedBy: adminUser?._id?.toString() || null
+            };
+
+            console.log(
+                `💰 Preserving financial records for deleted student ${formerStudent.formerStudentEmail || studentIdStr}`
+            );
+
+            const payments = await Payment.find({
+                $or: [{ student: studentId }, { user: studentId }]
+            })
+                .select('_id paymentId')
+                .session(session);
+            const paymentIds = payments.map((p) => p._id);
+            const paymentIdStrings = payments.map((p) => p.paymentId).filter(Boolean);
+
+            const paymentResult = await Payment.updateMany(
+                { _id: { $in: paymentIds } },
+                {
+                    $set: {
+                        'metadata.studentDeleted': true,
+                        'metadata.formerStudent': formerStudent,
+                        'metadata.preservedOnStudentDeletion': true
+                    }
+                },
+                { session }
+            );
+
+            const receiptCount = await Receipt.countDocuments({ student: studentId }).session(session);
+
+            const txnOr = [
+                { 'metadata.studentId': studentIdStr },
+                { sourceId: studentId },
+                ...(paymentIds.length
+                    ? [{ source: 'payment', sourceModel: 'Payment', sourceId: { $in: paymentIds } }]
+                    : []),
+                ...(paymentIdStrings.length ? [{ 'metadata.paymentId': { $in: paymentIdStrings } }] : [])
+            ];
+            const txnIdsFromPayments = paymentIdStrings
+                .filter((id) => id.startsWith('PAY-JRN-'))
+                .map((id) => id.replace('PAY-JRN-', ''));
+            if (txnIdsFromPayments.length) {
+                txnOr.push({ transactionId: { $in: txnIdsFromPayments } });
+            }
+
+            const txnResult = await TransactionEntry.updateMany(
+                { $or: txnOr },
+                {
+                    $set: {
+                        'metadata.studentDeleted': true,
+                        'metadata.formerStudent': formerStudent,
+                        'metadata.preservedOnStudentDeletion': true
+                    }
+                },
+                { session }
+            );
+
+            const debtorResult = await Debtor.updateMany(
+                { user: studentId },
+                {
+                    $set: {
+                        'metadata.studentDeleted': true,
+                        'metadata.formerStudent': formerStudent,
+                        'metadata.preservedOnStudentDeletion': true
+                    }
+                },
+                { session }
+            );
+
+            deletionSummary.preservedFinancialRecords = {
+                payments: paymentResult.modifiedCount || payments.length,
+                receipts: receiptCount,
+                debtors: debtorResult.modifiedCount,
+                transactionEntriesTagged: txnResult.modifiedCount,
+                message:
+                    'Payments, receipts, debtor balance, AR account, and payment journals were kept for audit. Only the student profile was removed.'
+            };
+
+            console.log(
+                `✅ Preserved ${payments.length} payment(s), tagged ${txnResult.modifiedCount} journal(s)`
+            );
+        } catch (error) {
+            console.error('❌ Error preserving financial records:', error);
+            throw error;
         }
     }
 
@@ -1153,7 +1309,19 @@ class StudentDeletionService {
             });
 
             if (recentPayments.length > 0) {
-                validationResults.warnings.push(`Student has ${recentPayments.length} payment(s) in the last 30 days`);
+                validationResults.warnings.push(
+                    `${recentPayments.length} payment(s) on file — payments and journals will be preserved; only the student profile is removed`
+                );
+            }
+
+            const allPayments = await Payment.find({
+                $or: [{ student: actualUserId }, { user: actualUserId }]
+            }).select('_id');
+
+            if (allPayments.length > 0 && recentPayments.length === 0) {
+                validationResults.warnings.push(
+                    `${allPayments.length} historical payment(s) will be preserved for audit (student profile only will be deleted)`
+                );
             }
 
             // Check for outstanding balance
