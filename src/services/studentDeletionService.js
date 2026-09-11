@@ -67,6 +67,7 @@ class StudentDeletionService {
 
                 const ctx = await this.resolveDeletionContext(studentId, studentLookup);
                 const student = ctx.profile;
+                const actualStudentId = this.getPrimaryDeletionId(ctx, student, studentId);
 
                 if (ctx.hasUser) {
                     const userRecord = await User.findById(ctx.userId).session(session);
@@ -82,7 +83,6 @@ class StudentDeletionService {
 
                 console.log(`📝 Found student: ${student.email || 'no email'} (${student.firstName} ${student.lastName})`);
 
-                const actualStudentId = ctx.userId || ctx.applicationId || student._id;
                 deletionSummary.relatedIds = ctx.relatedIds;
                 deletionSummary.hasUser = ctx.hasUser;
                 deletionSummary.applicationId = ctx.applicationId;
@@ -94,10 +94,10 @@ class StudentDeletionService {
 
                 // Update deletion summary with student info
                 deletionSummary.studentInfo = {
-                    id: student._id,
-                    email: student.email,
-                    name: `${student.firstName} ${student.lastName}`,
-                    applicationCode: student.applicationCode
+                    id: actualStudentId,
+                    email: student.email || null,
+                    name: `${student.firstName || ''} ${student.lastName || ''}`.trim() || student.email || 'Unknown',
+                    applicationCode: student.applicationCode || null
                 };
                 deletionSummary.preserveFinancialRecords = preserveFinancialRecords;
                 deletionSummary.preservedPaymentCount = existingPayments.length;
@@ -109,7 +109,7 @@ class StudentDeletionService {
                 }
 
                 // Archive student data before deletion
-                await this.archiveStudentData(student, session, deletionSummary);
+                await this.archiveStudentData(student, session, deletionSummary, ctx);
 
                 const financialDeletionSteps = preserveFinancialRecords
                     ? [{ special: 'preserveFinancialRecordsForDeletedStudent', description: 'Preserve payments and financial journals (unlink student only)' }]
@@ -246,33 +246,54 @@ class StudentDeletionService {
     /**
      * Archive student data to ExpiredStudent collection
      */
-    static async archiveStudentData(student, session, deletionSummary) {
+    static async archiveStudentData(student, session, deletionSummary, ctx = null) {
         try {
             console.log('📦 Archiving student data...');
-            
-            // Get related data for archiving
-            const application = await Application.findOne({ student: student._id }).sort({ createdAt: -1 }).session(session);
-            const bookings = await Booking.find({ student: student._id }).lean().session(session);
-            const paymentHistory = bookings.flatMap(booking => booking.payments || []);
-            const leases = await Lease.find({ studentId: student._id }).lean().session(session);
-            const payments = await Payment.find({ 
-                $or: [{ student: student._id }, { user: student._id }] 
-            }).lean().session(session);
-            const debtor = await Debtor.findOne({ user: student._id }).lean().session(session);
-            
-            // IMPORTANT: Archive transaction entries before deletion
-            // Get all transaction entries that will be deleted
-            const studentId = student._id.toString();
-            const studentIdObj = student._id;
-            
+
+            const relatedIds = ctx?.relatedIds?.length
+                ? ctx.relatedIds
+                : [student._id].filter(Boolean);
+            const relatedIdStrs = [...new Set(relatedIds.map((id) => String(id)))];
+
+            const applicationQuery = ctx?.applicationId
+                ? { _id: ctx.applicationId }
+                : {
+                      $or: [
+                          { student: { $in: relatedIds } },
+                          { _id: { $in: relatedIds } }
+                      ]
+                  };
+
+            const application = await Application.findOne(applicationQuery)
+                .sort({ createdAt: -1 })
+                .session(session);
+            const bookings = await Booking.find({ student: { $in: relatedIds } }).lean().session(session);
+            const paymentHistory = bookings.flatMap((booking) => booking.payments || []);
+            const leases = await Lease.find({ studentId: { $in: relatedIds } }).lean().session(session);
+            const payments = await Payment.find(this.buildPaymentQuery(relatedIds)).lean().session(session);
+
+            const debtorOr = [];
+            if (ctx?.userId) debtorOr.push({ user: ctx.userId });
+            if (ctx?.applicationId) debtorOr.push({ application: ctx.applicationId });
+            for (const id of relatedIds) debtorOr.push({ user: id }, { _id: id });
+            const debtor = debtorOr.length
+                ? await Debtor.findOne({ $or: debtorOr }).lean().session(session)
+                : null;
+
+            const txnOr = [];
+            for (const idStr of relatedIdStrs) {
+                txnOr.push({ 'metadata.studentId': idStr });
+                if (mongoose.Types.ObjectId.isValid(idStr)) {
+                    const oid = new mongoose.Types.ObjectId(idStr);
+                    txnOr.push({ reference: idStr }, { reference: oid }, { sourceId: oid });
+                }
+            }
+
             const transactionEntries = await TransactionEntry.find({
-                $or: [
-                    { 'metadata.studentId': studentId },
-                    { reference: studentId },
-                    { reference: studentIdObj },
-                    { sourceId: studentIdObj }
-                ]
-            }).lean().session(session);
+                $or: txnOr.length ? txnOr : [{ _id: null }]
+            })
+                .lean()
+                .session(session);
             
             console.log(`📦 Archiving ${transactionEntries.length} transaction entries...`);
 
@@ -1139,7 +1160,7 @@ class StudentDeletionService {
                 action: 'comprehensive_delete',
                 collection: 'User',
                 recordId: student._id,
-                before: student.toObject(),
+                before: student.toObject ? student.toObject() : student,
                 after: null,
                 metadata: {
                     deletionType: 'comprehensive',
@@ -1177,11 +1198,98 @@ class StudentDeletionService {
         return or.length ? { $or: or } : { _id: null };
     }
 
+    static isPopulatedStudentDoc(doc) {
+        return (
+            doc &&
+            typeof doc === 'object' &&
+            doc.constructor?.name !== 'ObjectId' &&
+            (doc.firstName || doc.lastName || doc.email || doc._id)
+        );
+    }
+
+    static toProfileObject(doc, fallbackId) {
+        if (this.isPopulatedStudentDoc(doc)) {
+            const plain = doc.toObject ? doc.toObject() : { ...doc };
+            return {
+                _id: plain._id || fallbackId,
+                firstName: plain.firstName || '',
+                lastName: plain.lastName || '',
+                email: plain.email || null,
+                applicationCode: plain.applicationCode || null,
+                currentRoom: plain.currentRoom || null,
+                residence: plain.residence || null
+            };
+        }
+        if (fallbackId && mongoose.Types.ObjectId.isValid(String(fallbackId))) {
+            return {
+                _id: fallbackId,
+                firstName: '',
+                lastName: '',
+                email: null,
+                applicationCode: null
+            };
+        }
+        return null;
+    }
+
+    static async enrichDeletionProfile(profile, ctx, inputId) {
+        let next = this.toProfileObject(profile, inputId) || this.toProfileObject({ _id: inputId }, inputId);
+        if (!next) {
+            throw new Error('Student profile could not be resolved');
+        }
+
+        if (ctx.applicationId) {
+            const app = await Application.findById(ctx.applicationId)
+                .select('firstName lastName email applicationCode allocatedRoom residence student')
+                .lean();
+            if (app) {
+                next.firstName = next.firstName || app.firstName || '';
+                next.lastName = next.lastName || app.lastName || '';
+                next.email = next.email || app.email || null;
+                next.applicationCode = next.applicationCode || app.applicationCode || null;
+                next.currentRoom = next.currentRoom || app.allocatedRoom || null;
+                next.residence = next.residence || app.residence || null;
+                if (!next._id) next._id = app._id;
+            }
+        }
+
+        if ((!next.firstName && !next.lastName) || !next.email) {
+            const debtorOr = [];
+            if (ctx.applicationId) debtorOr.push({ application: ctx.applicationId });
+            if (ctx.userId) debtorOr.push({ user: ctx.userId });
+            if (mongoose.Types.ObjectId.isValid(String(inputId))) {
+                debtorOr.push({ _id: inputId }, { user: inputId });
+            }
+            const debtor = debtorOr.length
+                ? await Debtor.findOne({ $or: debtorOr }).select('contactInfo roomNumber residence').lean()
+                : null;
+            if (debtor?.contactInfo) {
+                const name = String(debtor.contactInfo.name || '').trim();
+                const parts = name.split(/\s+/).filter(Boolean);
+                next.firstName = next.firstName || parts[0] || '';
+                next.lastName = next.lastName || parts.slice(1).join(' ') || '';
+                next.email = next.email || debtor.contactInfo.email || null;
+                next.currentRoom = next.currentRoom || debtor.roomNumber || null;
+                next.residence = next.residence || debtor.residence || null;
+            }
+        }
+
+        if (!next.firstName && !next.lastName && next.email) {
+            next.firstName = next.email.split('@')[0];
+        }
+
+        return next;
+    }
+
+    static getPrimaryDeletionId(ctx, student, inputId) {
+        return ctx?.userId || ctx?.applicationId || student?._id || inputId;
+    }
+
     /**
      * Resolve user, application, and all related IDs for deletion/financial lookups.
      */
     static async resolveDeletionContext(inputId, studentLookup) {
-        const profile = { ...studentLookup.student };
+        const profile = this.toProfileObject(studentLookup.student, inputId) || {};
         let userId = null;
         let applicationId = null;
         const source = studentLookup.source || '';
@@ -1236,7 +1344,25 @@ class StudentDeletionService {
 
         const hasUser = userId ? Boolean(await User.exists({ _id: userId })) : false;
 
-        return { profile, userId: hasUser ? userId : null, applicationId, relatedIds, hasUser, source };
+        const ctx = {
+            profile,
+            userId: hasUser ? userId : null,
+            applicationId,
+            relatedIds,
+            hasUser,
+            source
+        };
+
+        ctx.profile = await this.enrichDeletionProfile(profile, ctx, inputId);
+        if (ctx.applicationId && !ctx.relatedIds.some((id) => String(id) === String(ctx.applicationId))) {
+            ctx.relatedIds.push(
+                mongoose.Types.ObjectId.isValid(String(ctx.applicationId))
+                    ? new mongoose.Types.ObjectId(String(ctx.applicationId))
+                    : ctx.applicationId
+            );
+        }
+
+        return ctx;
     }
 
     static async deleteStudentApplications(ctx, session, deletionSummary, adminUser) {
@@ -1382,16 +1508,78 @@ class StudentDeletionService {
                 }
             }
 
+            // Application linked by dangling student ref (user deleted but application remains)
+            if (mongoose.Types.ObjectId.isValid(studentId)) {
+                const appByStudentRef = await Application.findOne({ student: studentId }).select(
+                    'firstName lastName email student applicationCode'
+                );
+                if (appByStudentRef) {
+                    return {
+                        student: {
+                            _id: appByStudentRef._id,
+                            firstName: appByStudentRef.firstName,
+                            lastName: appByStudentRef.lastName,
+                            email: appByStudentRef.email,
+                            applicationCode: appByStudentRef.applicationCode
+                        },
+                        source: 'Application (by student ref)'
+                    };
+                }
+            }
+
             // If still not found, try to find by looking up payments for this student ID
-            const payment = await Payment.findOne({ student: studentId }).populate('student', 'firstName lastName email');
-            if (payment && payment.student) {
+            const payment = await Payment.findOne({ student: studentId }).populate(
+                'student',
+                'firstName lastName email'
+            );
+            if (payment && this.isPopulatedStudentDoc(payment.student)) {
                 return { student: payment.student, source: 'Payment' };
             }
 
             // If not found in payments, try to find by looking up leases for this student ID
-            const lease = await Lease.findOne({ studentId }).populate('studentId', 'firstName lastName email');
-            if (lease && lease.studentId) {
+            const lease = await Lease.findOne({ studentId }).populate(
+                'studentId',
+                'firstName lastName email'
+            );
+            if (lease && this.isPopulatedStudentDoc(lease.studentId)) {
                 return { student: lease.studentId, source: 'Lease' };
+            }
+
+            // Debtor linked to dangling user id
+            if (mongoose.Types.ObjectId.isValid(studentId)) {
+                const debtorByUser = await Debtor.findOne({ user: studentId })
+                    .select('user application contactInfo')
+                    .lean();
+                if (debtorByUser) {
+                    if (debtorByUser.application) {
+                        const app = await Application.findById(debtorByUser.application).select(
+                            'firstName lastName email applicationCode'
+                        );
+                        if (app) {
+                            return {
+                                student: {
+                                    _id: app._id,
+                                    firstName: app.firstName,
+                                    lastName: app.lastName,
+                                    email: app.email,
+                                    applicationCode: app.applicationCode
+                                },
+                                source: 'Application (from Debtor user ref)'
+                            };
+                        }
+                    }
+                    const name = debtorByUser.contactInfo?.name || 'Student';
+                    const [firstName, ...rest] = name.split(' ');
+                    return {
+                        student: {
+                            _id: debtorByUser._id,
+                            firstName: firstName || 'Unknown',
+                            lastName: rest.join(' ') || 'Student',
+                            email: debtorByUser.contactInfo?.email || null
+                        },
+                        source: 'Debtor (by user ref)'
+                    };
+                }
             }
 
             return null;
