@@ -43,26 +43,60 @@ class EnhancedPaymentAllocationService {
   }
 
   /**
-   * Order months for component allocation: true arrears (before paymentMonth) first,
-   * then the paymentMonth itself. Months after paymentMonth are excluded from FIFO
-   * (remainder becomes advance for the intended payment month).
+   * Resolve YYYY-MM for an accrual from metadata (preferred) or transaction date.
    */
-  static orderMonthsForComponentAllocation(outstandingBalances, paymentMonthKey, componentType = 'rent') {
+  static resolveAccrualMonthKey(accrualOrMetadata) {
+    const meta = accrualOrMetadata?.metadata || accrualOrMetadata || {};
+    if (meta.month) return meta.month;
+    if (meta.accrualYear != null && meta.accrualMonth != null) {
+      return `${meta.accrualYear}-${String(meta.accrualMonth).padStart(2, '0')}`;
+    }
+    if (meta.leaseStartDate) {
+      const d = new Date(meta.leaseStartDate);
+      if (!Number.isNaN(d.getTime())) {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      }
+    }
+    const date = accrualOrMetadata?.date ? new Date(accrualOrMetadata.date) : null;
+    if (date && !Number.isNaN(date.getTime())) {
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    }
+    return null;
+  }
+
+  /**
+   * True when an outstanding month row is backed by a real accrual for that monthKey.
+   */
+  static monthHasVerifiedRentAccrual(month) {
+    if (!month?.transactionId || month.isVirtualMonth) return false;
+    const accrualMonth = this.resolveAccrualMonthKey({ metadata: month.metadata, date: month.date });
+    return accrualMonth === month.monthKey;
+  }
+
+  /**
+   * Order months for component allocation when paymentMonth is set on the payment.
+   * Rent with an explicit paymentMonth: settle ONLY that month (remainder → advance).
+   * Otherwise: payment month first, then earlier months that have verified accruals.
+   * Months after paymentMonth are never auto-settled.
+   */
+  static orderMonthsForComponentAllocation(outstandingBalances, paymentMonthKey, componentType = 'rent', options = {}) {
     const sorted = [...(outstandingBalances || [])].sort(
       (a, b) => new Date(a.date) - new Date(b.date)
     );
     if (!paymentMonthKey) return sorted;
 
-    const before = sorted.filter((m) => m.monthKey < paymentMonthKey);
-    const target = sorted.find((m) => m.monthKey === paymentMonthKey);
+    const isRent = componentType === 'rent';
+    const verified = (m) => !isRent || this.monthHasVerifiedRentAccrual(m);
 
-    // Levies on a payment tagged to a month settle that month first, then any earlier arrears
-    if (componentType === 'levies') {
-      return target ? [target, ...before] : before;
+    if (options.strictPaymentMonth && isRent) {
+      const target = sorted.find((m) => m.monthKey === paymentMonthKey && verified(m));
+      return target ? [target] : [];
     }
 
-    // Rent: true arrears first, then the payment month (never future months)
-    return target ? [...before, target] : before;
+    const before = sorted.filter((m) => m.monthKey < paymentMonthKey && verified(m));
+    const target = sorted.find((m) => m.monthKey === paymentMonthKey && verified(m));
+
+    return target ? [target, ...before] : before.filter(verified);
   }
 
   /**
@@ -1087,10 +1121,15 @@ class EnhancedPaymentAllocationService {
         if (paymentType === 'rent') {
           console.log(`🏠 Processing rent payment: $${remainingAmount}`);
           
-          const rentMonths = this.orderMonthsForComponentAllocation(outstandingBalances, paymentMonthKey);
-          console.log(`📅 Rent allocation order: ${rentMonths.map((m) => m.monthKey).join(' → ') || 'none'} (payment month: ${paymentMonthKey})`);
+          const rentMonths = this.orderMonthsForComponentAllocation(
+            outstandingBalances,
+            paymentMonthKey,
+            'rent',
+            { strictPaymentMonth: !!paymentData.paymentMonth }
+          );
+          console.log(`📅 Rent allocation order: ${rentMonths.map((m) => m.monthKey).join(' → ') || 'none'} (payment month: ${paymentMonthKey}${paymentData.paymentMonth ? ', strict' : ''})`);
 
-          // Arrears before paymentMonth, then paymentMonth; never auto-apply to future months
+          // Payment month first, then earlier arrears; never auto-apply to future months
           for (const month of rentMonths) {
             if (remainingAmount <= 0) break;
             
@@ -1103,6 +1142,11 @@ class EnhancedPaymentAllocationService {
             // Skip virtual months (they don't have actual AR transactions to allocate to)
             if (month.isVirtualMonth || !month.transactionId) {
               console.log(`ℹ️ Skipping virtual month ${month.monthKey} (no actual AR transaction), moving to next month`);
+              continue;
+            }
+
+            if (!this.monthHasVerifiedRentAccrual(month)) {
+              console.log(`ℹ️ Skipping ${month.monthKey} — no verified rent accrual for that month`);
               continue;
             }
             
@@ -1876,14 +1920,11 @@ class EnhancedPaymentAllocationService {
       
       // Process accruals to build debt structure (only rental_accrual: lease_start + monthly_rent_accrual)
       accruals.forEach(accrual => {
-        // Prefer metadata.month (YYYY-MM), then accrualYear/accrualMonth, then date
-        const monthKey = accrual.metadata?.month ||
-          (accrual.metadata?.accrualYear != null && accrual.metadata?.accrualMonth != null
-            ? `${accrual.metadata.accrualYear}-${String(accrual.metadata.accrualMonth).padStart(2, '0')}`
-            : (() => {
-                const d = new Date(accrual.date);
-                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-              })());
+        const monthKey = this.resolveAccrualMonthKey(accrual);
+        if (!monthKey) {
+          console.log(`⚠️ Skipping accrual ${accrual._id} — could not resolve month key`);
+          return;
+        }
         const [yearStr, monStr] = monthKey.split('-');
         const accrualDate = new Date(`${monthKey}-01T00:00:00.000Z`);
         
@@ -2974,52 +3015,57 @@ class EnhancedPaymentAllocationService {
           source: 'rental_accrual',
           status: { $ne: 'reversed' }
         });
-        hasAccrual = !!existingAR;
-        if (hasAccrual) {
-          console.log(`✅ Using linked accrual ${arTransactionId} for ${monthSettled}`);
+        if (existingAR) {
+          const accrualMonth = this.resolveAccrualMonthKey(existingAR);
+          hasAccrual = !monthSettled || accrualMonth === monthSettled;
+          if (hasAccrual) {
+            console.log(`✅ Using linked accrual ${arTransactionId} for ${monthSettled}`);
+          } else {
+            console.log(
+              `⚠️ Linked accrual ${arTransactionId} is for ${accrualMonth}, not ${monthSettled} — treating as advance payment`
+            );
+            arTransactionId = null;
+          }
         }
-      }
-      if (!hasAccrual && arTransactionId) {
-        const existingAR = await TransactionEntry.findOne({
-          _id: arTransactionId,
-          date: { $lte: paymentDate },
-          status: 'posted'
-        });
-        hasAccrual = !!existingAR;
-      } else if (!hasAccrual && monthSettled) {
-        // Check if any accrual exists for this month that was created ON OR BEFORE the payment date
-        // This ensures we check if accrual existed at the time of payment, not now
+      } else if (monthSettled) {
+        // Check if a rent accrual exists for this exact month on or before payment date
         const [year, month] = monthSettled.split('-').map(Number);
         const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
         const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
         
-        // If payment date is before the month starts, it's definitely an advance payment
         if (paymentDate < monthStart) {
           console.log(`⚠️ Payment date ${paymentDate.toISOString()} is before month start ${monthStart.toISOString()} - treating as advance payment`);
           hasAccrual = false;
         } else {
-          // Check if accrual exists for this month that was created on or before payment date
-          // The accrual date must be within the month AND <= payment date
           const accrualExists = await TransactionEntry.findOne({
             source: 'rental_accrual',
             'metadata.studentId': userId,
-            date: { 
+            date: {
               $gte: monthStart,
-              $lte: paymentDate < monthEnd ? paymentDate : monthEnd // Use earlier of paymentDate or monthEnd
+              $lte: paymentDate < monthEnd ? paymentDate : monthEnd
             },
             status: 'posted',
             $or: [
-              { 'metadata.type': 'monthly_rent_accrual', 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
-              { 'metadata.type': 'lease_start' }
+              {
+                'metadata.type': 'monthly_rent_accrual',
+                'metadata.accrualMonth': month,
+                'metadata.accrualYear': year
+              },
+              { 'metadata.type': 'lease_start', 'metadata.month': monthSettled },
+              {
+                'metadata.type': 'lease_start',
+                'metadata.accrualMonth': month,
+                'metadata.accrualYear': year
+              }
             ]
-          }).sort({ date: -1 }); // Get most recent accrual if multiple exist
+          }).sort({ date: -1 });
           
           hasAccrual = !!accrualExists;
           if (accrualExists) {
             arTransactionId = accrualExists._id;
-            console.log(`✅ Found accrual created on ${accrualExists.date.toISOString()} (payment date: ${paymentDate.toISOString()})`);
+            console.log(`✅ Found accrual for ${monthSettled} on ${accrualExists.date.toISOString()}`);
           } else {
-            console.log(`⚠️ No accrual found for ${monthSettled} that existed on or before payment date ${paymentDate.toISOString()}`);
+            console.log(`⚠️ No rent accrual for ${monthSettled} on or before payment date ${paymentDate.toISOString()}`);
           }
         }
       }
