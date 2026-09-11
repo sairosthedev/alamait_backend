@@ -498,6 +498,39 @@ async function getLinkedStudentIdentifiers(studentId) {
 }
 
 /**
+ * When debtor.user stores an Application _id, map it to the real User _id.
+ */
+async function buildResolvedDebtorUserMap(debtors) {
+    const Application = require('../models/Application');
+    const User = require('../models/User');
+    const map = new Map();
+    const rawUserIds = [...new Set((debtors || []).map((d) => String(d.user)).filter(Boolean))];
+    if (!rawUserIds.length) return map;
+
+    const existingUsers = new Set(
+        (await User.find({ _id: { $in: rawUserIds } }).select('_id').lean()).map((u) =>
+            String(u._id)
+        )
+    );
+
+    for (const id of rawUserIds) {
+        if (existingUsers.has(id)) map.set(id, id);
+    }
+
+    const needsAppLookup = rawUserIds.filter((id) => !existingUsers.has(id));
+    if (needsAppLookup.length) {
+        const apps = await Application.find({ _id: { $in: needsAppLookup } })
+            .select('student')
+            .lean();
+        for (const app of apps) {
+            if (app.student) map.set(String(app._id), String(app.student));
+        }
+    }
+
+    return map;
+}
+
+/**
  * List students for finance/admin pickers (Add Payment, etc.).
  * Includes active Users, archived ExpiredStudent records, and Debtor accounts
  * (so anyone visible in Debtors can be selected for payment).
@@ -702,6 +735,9 @@ async function listStudentsIncludingExpired({
         });
     }
 
+    // Resolve debtor.user when it wrongly stores an Application _id instead of User _id
+    const debtorUserMap = await buildResolvedDebtorUserMap(debtors);
+
     // Merge debtors — fills gaps where tenant exists in AR but not User/ExpiredStudent
     for (const d of debtors) {
         const name = String(d.contactInfo?.name || '').trim();
@@ -719,9 +755,10 @@ async function listStudentsIncludingExpired({
         if (!includeExpired && isExpired) continue;
         if (!includeActive && !isExpired) continue;
 
-        const userId = d.user ? String(d.user) : null;
+        const userIdRaw = d.user ? String(d.user) : null;
+        const userId = userIdRaw ? (debtorUserMap.get(userIdRaw) || userIdRaw) : null;
         const debtorId = String(d._id);
-        // Prefer user id as the selectable student id (payments reference student user)
+        // Prefer real user id as the selectable student id (payments reference student user)
         const primaryId = userId || debtorId;
 
         let studentResidence = d.residence || null;

@@ -230,18 +230,21 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         // 🆕 CRITICAL FIX: Properly resolve user from application or user object
         let actualUser = null;
         
-        // If user has a student field (it's an Application), find the User
+        // Resolve to a real User — never trust _id+email alone (Application docs also have both)
         if (user.student) {
             actualUser = await User.findById(user.student);
             if (!actualUser) {
                 throw new Error(`User not found for student ID: ${user.student}`);
             }
-        } else if (user._id && user.email) {
-            // It's already a User object
-            actualUser = user;
         } else if (user._id) {
-            // Might be a User object without email, try to find it
             actualUser = await User.findById(user._id);
+            if (!actualUser) {
+                const Application = require('../models/Application');
+                const app = await Application.findById(user._id).select('student').lean();
+                if (app?.student) {
+                    actualUser = await User.findById(app.student);
+                }
+            }
             if (!actualUser) {
                 throw new Error(`User not found for ID: ${user._id}`);
             }

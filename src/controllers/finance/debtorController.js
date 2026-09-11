@@ -305,17 +305,43 @@ exports.getDebtorById = async (req, res) => {
 
         const debtorId = debtorRaw._id.toString();
 
-        // 🆕 CRITICAL FIX: If user is null, try to fix it from application
-        if (!debtorRaw.user && debtorRaw.application) {
-            console.log(`⚠️ Debtor ${debtorId} has null user field, attempting to fix from application...`);
+        // Fix debtor.user when null or wrongly set to Application _id instead of User _id
+        if (debtorRaw.application || debtorRaw.user) {
             const Application = require('../../models/Application');
-            const application = await Application.findById(debtorRaw.application).lean();
-            if (application && application.student) {
-                console.log(`   Found student ID in application: ${application.student}`);
-                // Update debtor to link to user
-                await Debtor.findByIdAndUpdate(debtorId, { user: application.student });
-                console.log(`   ✅ Updated debtor to link to user ${application.student}`);
-                // Reload debtorRaw with updated user
+            const User = require('../../models/User');
+            let correctUserId = null;
+
+            if (debtorRaw.user) {
+                const userExists = await User.exists({ _id: debtorRaw.user });
+                if (userExists) {
+                    correctUserId = debtorRaw.user;
+                } else {
+                    const appByUserField = await Application.findById(debtorRaw.user)
+                        .select('student')
+                        .lean();
+                    if (appByUserField?.student) {
+                        correctUserId = appByUserField.student;
+                    }
+                }
+            }
+
+            if (!correctUserId && debtorRaw.application) {
+                const application = await Application.findById(debtorRaw.application)
+                    .select('student')
+                    .lean();
+                if (application?.student) {
+                    correctUserId = application.student;
+                }
+            }
+
+            if (
+                correctUserId &&
+                String(debtorRaw.user || '') !== String(correctUserId)
+            ) {
+                console.log(
+                    `⚠️ Debtor ${debtorId} user field corrected: ${debtorRaw.user || 'null'} → ${correctUserId}`
+                );
+                await Debtor.findByIdAndUpdate(debtorId, { user: correctUserId });
                 Object.assign(debtorRaw, await Debtor.findById(debtorId).lean());
             }
         }
