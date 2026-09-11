@@ -498,7 +498,7 @@ exports.getRoomsWithOccupancy = async (req, res) => {
 // Get students with location information
 exports.getStudentsWithLocation = async (req, res) => {
     try {
-        const { page = 1, limit = 500, status, residence, search } = req.query;
+        const { page = 1, limit = 1000, status, residence, search } = req.query;
         const { listStudentsIncludingExpired } = require('../../utils/studentUtils');
 
         const statusFilter =

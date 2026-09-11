@@ -134,10 +134,26 @@ router.get('/', async (req, res) => {
     try {
         // If list parameter is true, return simplified list for message recipients
         if (req.query.list === 'true') {
-            const students = await User.find({ role: 'student' })
-                .select('_id firstName lastName')
-                .sort('firstName')
-                .lean();
+            const { listStudentsIncludingExpired } = require('../../utils/studentUtils');
+            const result = await listStudentsIncludingExpired({
+                status: 'all',
+                residence: req.query.residence,
+                search: req.query.search,
+                page: 1,
+                limit: Math.min(1000, parseInt(req.query.limit, 10) || 1000)
+            });
+            const students = result.students
+                .map((s) => ({
+                    _id: s._id || s.id,
+                    firstName: s.firstName,
+                    lastName: s.lastName,
+                    email: s.email || '',
+                    debtorId: s.debtorId || null,
+                    isExpired: Boolean(s.isExpired)
+                }))
+                .sort((a, b) =>
+                    `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)
+                );
             return res.json(students);
         }
         // Otherwise, use the original getStudents controller

@@ -467,7 +467,7 @@ const safeDateFormat = (date) => {
 // Get all students with pagination and filters (includes expired by default)
 exports.getAllStudents = async (req, res) => {
     try {
-        const { page = 1, limit = 500, search, status, residence } = req.query;
+        const { page = 1, limit = 1000, search, status, residence } = req.query;
         const { listStudentsIncludingExpired } = require('../../utils/studentUtils');
 
         const statusFilter =

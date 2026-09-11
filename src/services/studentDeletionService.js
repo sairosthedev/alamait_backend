@@ -1452,7 +1452,7 @@ class StudentDeletionService {
         };
 
         try {
-            // Use the same lookup logic as the controller
+            console.log(`[student-deletion-v2] validateDeletion for ${studentId}`);
             const studentLookup = await this.findStudentById(studentId);
             if (!studentLookup || !studentLookup.student) {
                 validationResults.canDelete = false;

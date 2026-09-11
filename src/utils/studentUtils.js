@@ -508,7 +508,7 @@ async function listStudentsIncludingExpired({
     status = 'all',
     residence = null,
     page = 1,
-    limit = 50
+    limit = 1000
 } = {}) {
     const Debtor = require('../models/Debtor');
     // Ensure Residence is registered for populate
