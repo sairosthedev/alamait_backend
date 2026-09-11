@@ -481,6 +481,20 @@ exports.getAllStudents = async (req, res) => {
             limit
         });
 
+        console.log('[tenants-list]', {
+            path: '/api/admin/students',
+            query: { page, limit, search, status, residence },
+            total: result.total,
+            returned: result.students.length,
+            sample: result.students.slice(0, 3).map((s) => ({
+                name: `${s.firstName} ${s.lastName}`,
+                email: s.email,
+                status: s.status,
+                isExpired: s.isExpired,
+                debtorCode: s.debtorCode
+            }))
+        });
+
         res.json({
             students: result.students,
             currentPage: result.page,
