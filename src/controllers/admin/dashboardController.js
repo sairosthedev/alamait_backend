@@ -512,50 +512,22 @@ exports.getStudentsWithLocation = async (req, res) => {
             limit
         });
 
-        const studentIds = result.students
-            .map((s) => s._id || s.id)
-            .filter(Boolean);
-
-        const Application = require('../../models/Application');
-        const latestApps = studentIds.length
-            ? await Application.find({
-                status: 'approved',
-                student: { $in: studentIds }
-            })
-                .select('student email startDate endDate allocatedRoom createdAt')
-                .sort({ createdAt: -1 })
-                .lean()
-            : [];
-
-        const appByStudent = new Map();
-        for (const app of latestApps) {
-            const key = String(app.student);
-            if (!appByStudent.has(key)) {
-                appByStudent.set(key, app);
-            }
-        }
-
-        const studentsWithLocation = result.students.map((student) => {
-            const sid = String(student._id || student.id || '');
-            const app =
-                appByStudent.get(sid) ||
-                latestApps.find((a) => a.email && a.email === student.email);
-
-            return {
+        const studentsWithLocation = result.students.map((student) => ({
             id: student._id || student.id,
             name: `${student.firstName || ''} ${student.lastName || ''}`.trim(),
             firstName: student.firstName,
             lastName: student.lastName,
             email: student.email,
             phone: student.phone,
-            status: student.status,
+            status: student.isExpired ? 'expired' : student.status,
             isExpired: Boolean(student.isExpired),
+            applicationStatus: student.applicationStatus || null,
             expiredAt: student.expiredAt ? toApiCalendarIso(student.expiredAt) : null,
             debtorId: student.debtorId || null,
             debtorCode: student.debtorCode || null,
             accountCode: student.accountCode || null,
-            startDate: app?.startDate ? toApiCalendarIso(app.startDate) : null,
-            endDate: app?.endDate ? toApiCalendarIso(app.endDate) : null,
+            startDate: student.startDate ? toApiCalendarIso(student.startDate) : null,
+            endDate: student.endDate ? toApiCalendarIso(student.endDate) : null,
             location: student.residence
                 ? {
                     residenceId:
@@ -564,17 +536,16 @@ exports.getStudentsWithLocation = async (req, res) => {
                             : student.residence,
                     residenceName:
                         typeof student.residence === 'object' ? student.residence.name : null,
-                    roomNumber: student.currentRoom || app?.allocatedRoom
+                    roomNumber: student.currentRoom || null
                 }
                 : null,
             roomValidUntil: student.roomValidUntil
                 ? toApiCalendarIso(student.roomValidUntil)
-                : app?.endDate
-                    ? toApiCalendarIso(app.endDate)
+                : student.endDate
+                    ? toApiCalendarIso(student.endDate)
                     : null,
-            currentRoom: student.currentRoom || app?.allocatedRoom || null
-        };
-        });
+            currentRoom: student.currentRoom || null
+        }));
 
         res.json({
             students: studentsWithLocation,

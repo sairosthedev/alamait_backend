@@ -536,6 +536,81 @@ async function buildResolvedDebtorUserMap(debtors) {
  * (so anyone visible in Debtors can be selected for payment).
  * Default status=all so expired students appear in payment forms.
  */
+function isApplicationExpired(app) {
+    if (!app) return false;
+    if (String(app.status || '').toLowerCase() === 'expired') return true;
+    if (app.endDate && new Date(app.endDate) < new Date()) return true;
+    return false;
+}
+
+/**
+ * Attach lease dates from applications (any status) and normalize expired tagging.
+ */
+async function enrichStudentsWithApplications(students) {
+    if (!students.length) return students;
+
+    const Application = require('../models/Application');
+    const studentIds = [
+        ...new Set(
+            students
+                .map((s) => String(s.id || s._id || ''))
+                .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        )
+    ];
+    const emails = [...new Set(students.map((s) => s.email).filter(Boolean))];
+    const applicationIds = [
+        ...new Set(students.map((s) => s.applicationId).filter((id) => id && mongoose.Types.ObjectId.isValid(id)))
+    ];
+
+    const orClauses = [];
+    if (studentIds.length) orClauses.push({ student: { $in: studentIds } });
+    if (emails.length) orClauses.push({ email: { $in: emails } });
+    if (applicationIds.length) orClauses.push({ _id: { $in: applicationIds } });
+
+    const applications = orClauses.length
+        ? await Application.find({ $or: orClauses })
+              .select('student email status startDate endDate allocatedRoom residence createdAt')
+              .sort({ startDate: -1, createdAt: -1 })
+              .lean()
+        : [];
+
+    const pickBestApp = (student) => {
+        const sid = String(student.id || student._id || '');
+        const candidates = applications.filter(
+            (a) =>
+                (sid && String(a.student) === sid) ||
+                (student.email && a.email && a.email === student.email) ||
+                (student.applicationId && String(a._id) === String(student.applicationId))
+        );
+        if (!candidates.length) return null;
+        return candidates.sort(
+            (a, b) =>
+                new Date(b.startDate || 0).getTime() - new Date(a.startDate || 0).getTime() ||
+                new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        )[0];
+    };
+
+    return students.map((student) => {
+        const app = pickBestApp(student);
+        if (!app) return student;
+
+        const appExpired = isApplicationExpired(app);
+        const isExpired = Boolean(student.isExpired || appExpired);
+
+        return {
+            ...student,
+            applicationId: student.applicationId || String(app._id),
+            applicationStatus: app.status || null,
+            startDate: app.startDate || student.startDate || null,
+            endDate: app.endDate || student.endDate || null,
+            currentRoom: student.currentRoom || app.allocatedRoom || null,
+            roomValidUntil: student.roomValidUntil || app.endDate || null,
+            isExpired,
+            status: isExpired ? 'expired' : student.status || app.status || 'active'
+        };
+    });
+}
+
 async function listStudentsIncludingExpired({
     search = '',
     status = 'all',
@@ -544,6 +619,7 @@ async function listStudentsIncludingExpired({
     limit = 1000
 } = {}) {
     const Debtor = require('../models/Debtor');
+    const Application = require('../models/Application');
     // Ensure Residence is registered for populate
     try {
         require('../models/Residence');
@@ -738,6 +814,14 @@ async function listStudentsIncludingExpired({
     // Resolve debtor.user when it wrongly stores an Application _id instead of User _id
     const debtorUserMap = await buildResolvedDebtorUserMap(debtors);
 
+    const debtorAppIds = debtors.map((d) => d.application).filter(Boolean);
+    const debtorApps = debtorAppIds.length
+        ? await Application.find({ _id: { $in: debtorAppIds } })
+              .select('status startDate endDate allocatedRoom')
+              .lean()
+        : [];
+    const debtorAppById = new Map(debtorApps.map((a) => [String(a._id), a]));
+
     // Merge debtors — fills gaps where tenant exists in AR but not User/ExpiredStudent
     for (const d of debtors) {
         const name = String(d.contactInfo?.name || '').trim();
@@ -747,10 +831,12 @@ async function listStudentsIncludingExpired({
         const email = d.contactInfo?.email || '';
         const phone = d.contactInfo?.phone || '';
 
+        const linkedApp = d.application ? debtorAppById.get(String(d.application)) : null;
         const isExpired =
             Boolean(d.isExpired) ||
             d.status === 'expired' ||
-            String(d.status || '').toLowerCase() === 'inactive';
+            String(d.status || '').toLowerCase() === 'inactive' ||
+            isApplicationExpired(linkedApp);
 
         if (!includeExpired && isExpired) continue;
         if (!includeActive && !isExpired) continue;
@@ -783,8 +869,12 @@ async function listStudentsIncludingExpired({
             expiredAt: d.expiredAt || null,
             expirationReason: d.expirationReason || null,
             residence: studentResidence,
-            currentRoom: d.roomNumber || null,
-            roomValidUntil: null,
+            currentRoom: d.roomNumber || linkedApp?.allocatedRoom || null,
+            roomValidUntil: linkedApp?.endDate || null,
+            startDate: linkedApp?.startDate || null,
+            endDate: linkedApp?.endDate || null,
+            applicationId: d.application ? String(d.application) : null,
+            applicationStatus: linkedApp?.status || null,
             createdAt: d.createdAt || null,
             source: userId && byId.has(userId) ? byId.get(userId).source : 'debtor',
             debtorId,
@@ -799,17 +889,20 @@ async function listStudentsIncludingExpired({
         }
     }
 
-    const students = Array.from(byId.values())
+    let students = Array.from(byId.values())
         // Dedupe rows that were aliased (same person under user+debtor keys pointing to same primary)
         .filter((s, idx, arr) => {
             const key = String(s.id || s._id);
             return arr.findIndex((x) => String(x.id || x._id) === key) === idx;
-        })
-        .sort((a, b) => {
-            const an = `${a.firstName} ${a.lastName}`.trim().toLowerCase();
-            const bn = `${b.firstName} ${b.lastName}`.trim().toLowerCase();
-            return an.localeCompare(bn);
         });
+
+    students = await enrichStudentsWithApplications(students);
+
+    students.sort((a, b) => {
+        const an = `${a.firstName} ${a.lastName}`.trim().toLowerCase();
+        const bn = `${b.firstName} ${b.lastName}`.trim().toLowerCase();
+        return an.localeCompare(bn);
+    });
 
     const total = students.length;
     const start = (pageNum - 1) * limitNum;
