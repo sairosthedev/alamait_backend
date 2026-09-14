@@ -35,6 +35,28 @@ router.put('/students/:studentId/lease',
     leaseController.updateStudentLeaseDates
 );
 
+// GET reconciliation status (lease dates vs accruals) — embed on tenant/debtor detail pages
+router.get('/applications/:applicationId/reconciliation',
+    auth,
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    validateApplicationId,
+    leaseController.getLeaseReconciliationStatus
+);
+
+router.get('/debtors/:debtorId/reconciliation',
+    auth,
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    validateDebtorId,
+    leaseController.getLeaseReconciliationStatus
+);
+
+router.get('/students/:studentId/reconciliation',
+    auth,
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    validateStudentId,
+    leaseController.getLeaseReconciliationStatus
+);
+
 // PUT /api/admin/leases/applications/:applicationId/lease - Update by application (tenants without login)
 router.put('/applications/:applicationId/lease',
     auth,

@@ -3,6 +3,12 @@ const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const excelUpload = require('../../middleware/excelUpload');
 const BillingDiscrepancyController = require('../../controllers/admin/billingDiscrepancyController');
+const leaseController = require('../../controllers/admin/leaseController');
+const {
+    validateApplicationId,
+    validateDebtorId,
+    validateStudentId
+} = require('../../middleware/leaseValidation');
 
 const financeRoles = ['finance_admin', 'finance_user', 'ceo', 'admin'];
 
@@ -17,6 +23,19 @@ router.use(checkRole(...financeRoles));
 router.get('/scan', BillingDiscrepancyController.scanPeriod);
 router.post('/compare', BillingDiscrepancyController.compareList);
 router.get('/student/:studentId/diagnose', BillingDiscrepancyController.diagnoseStudent);
+
+router.get('/applications/:applicationId/reconciliation',
+    validateApplicationId,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get('/debtors/:debtorId/reconciliation',
+    validateDebtorId,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get('/students/:studentId/reconciliation',
+    validateStudentId,
+    leaseController.getLeaseReconciliationStatus
+);
 
 router.post('/reconcile', BillingDiscrepancyController.reconcileRentAccruals);
 router.post('/bulk-fix', BillingDiscrepancyController.bulkFix);

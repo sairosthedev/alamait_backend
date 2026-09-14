@@ -1057,7 +1057,11 @@ class TenantAccrualCheckService {
             
             // Get debtor information
             const Debtor = require('../models/Debtor');
-            const debtor = await Debtor.findOne({ user: studentId }).lean();
+            const debtorQuery = [{ application: applicationId }];
+            if (studentId) {
+                debtorQuery.push({ user: studentId });
+            }
+            const debtor = await Debtor.findOne({ $or: debtorQuery }).lean();
             const debtorId = debtor?._id?.toString();
             const arAccountCode = debtor?.accountCode 
                 ? (typeof debtor.accountCode === 'string' && debtor.accountCode.startsWith('1100-') 

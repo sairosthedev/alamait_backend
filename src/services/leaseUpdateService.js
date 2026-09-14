@@ -134,6 +134,166 @@ class LeaseUpdateService {
         };
     }
 
+    static formatDateKey(value) {
+        if (!value) return null;
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return null;
+        return d.toISOString().split('T')[0];
+    }
+
+    static datesMatch(a, b) {
+        const left = LeaseUpdateService.formatDateKey(a);
+        const right = LeaseUpdateService.formatDateKey(b);
+        return !!(left && right && left === right);
+    }
+
+    /**
+     * Lease vs accrual reconciliation snapshot for frontend (application, debtor, or student id).
+     */
+    static async getLeaseReconciliationStatus(identifier) {
+        const TenantAccrualCheckService = require('./tenantAccrualCheckService');
+        const ctx = await LeaseUpdateService.resolveLeaseContext(identifier);
+        const app = ctx.application;
+
+        const validationResult = await TenantAccrualCheckService.validateTenantAccruals(
+            ctx.applicationId,
+            false
+        );
+
+        const validation = validationResult.validation || null;
+        const tenantName = validation?.studentName
+            || `${app.firstName || ''} ${app.lastName || ''}`.trim()
+            || 'Unknown tenant';
+
+        const applicationLease = {
+            startDate: LeaseUpdateService.formatDateKey(app.startDate),
+            endDate: LeaseUpdateService.formatDateKey(app.endDate),
+            status: app.status,
+            applicationCode: app.applicationCode,
+            roomNumber: app.allocatedRoomDetails?.roomNumber || app.allocatedRoom || null
+        };
+
+        const debtorLease = ctx.debtor?.leaseInfo
+            ? {
+                startDate: LeaseUpdateService.formatDateKey(ctx.debtor.leaseInfo.startDate),
+                endDate: LeaseUpdateService.formatDateKey(ctx.debtor.leaseInfo.endDate)
+            }
+            : null;
+
+        const issues = [];
+
+        if (!ctx.debtor) {
+            issues.push({
+                code: 'missing_debtor',
+                severity: 'error',
+                message: 'No debtor account linked to this tenant'
+            });
+        }
+
+        if (debtorLease && !LeaseUpdateService.datesMatch(applicationLease.startDate, debtorLease.startDate)) {
+            issues.push({
+                code: 'debtor_start_mismatch',
+                severity: 'warning',
+                message: `Debtor start (${debtorLease.startDate}) differs from application (${applicationLease.startDate})`
+            });
+        }
+
+        if (debtorLease && !LeaseUpdateService.datesMatch(applicationLease.endDate, debtorLease.endDate)) {
+            issues.push({
+                code: 'debtor_end_mismatch',
+                severity: 'warning',
+                message: `Debtor end (${debtorLease.endDate}) differs from application (${applicationLease.endDate})`
+            });
+        }
+
+        if (validation && !validation.leaseStartExists && new Date(app.startDate) <= new Date()) {
+            issues.push({
+                code: 'missing_lease_start',
+                severity: 'error',
+                message: 'Lease start accrual is missing'
+            });
+        }
+
+        (validation?.monthlyAccruals?.missing || []).forEach((monthKey) => {
+            issues.push({
+                code: 'missing_monthly_accrual',
+                severity: 'error',
+                message: `Missing monthly accrual for ${monthKey}`,
+                monthKey
+            });
+        });
+
+        (validation?.errors || []).forEach((err) => {
+            issues.push({
+                code: 'validation_error',
+                severity: 'error',
+                message: err.error || err.message || 'Accrual validation error',
+                detail: err
+            });
+        });
+
+        const missingCount = validation?.monthlyAccruals?.missing?.length || 0;
+        const inSync = issues.filter(i => i.severity === 'error').length === 0;
+
+        return {
+            inSync,
+            tenant: {
+                name: tenantName,
+                applicationId: ctx.applicationId,
+                studentId: ctx.studentId,
+                debtorId: ctx.debtorId,
+                debtorCode: ctx.debtorCode
+            },
+            applicationLease,
+            debtorLease,
+            accruals: {
+                leaseStartExists: validation?.leaseStartExists ?? null,
+                expectedMonths: validation?.monthlyAccruals?.expected || [],
+                foundMonths: validation?.monthlyAccruals?.found || [],
+                missingMonths: validation?.monthlyAccruals?.missing || [],
+                missingCount
+            },
+            debtorFinancials: ctx.debtor
+                ? {
+                    totalOwed: ctx.debtor.totalOwed,
+                    totalPaid: ctx.debtor.totalPaid,
+                    currentBalance: ctx.debtor.currentBalance,
+                    status: ctx.debtor.status
+                }
+                : null,
+            issues,
+            actions: {
+                updateLease: {
+                    method: 'PUT',
+                    application: `/api/admin/leases/applications/${ctx.applicationId}/lease`,
+                    debtor: ctx.debtorId
+                        ? `/api/admin/leases/debtors/${ctx.debtorId}/lease`
+                        : null,
+                    student: ctx.studentId
+                        ? `/api/admin/leases/students/${ctx.studentId}/lease`
+                        : null,
+                    body: { startDate: 'YYYY-MM-DD', endDate: 'YYYY-MM-DD' }
+                },
+                syncAccruals: {
+                    method: 'POST',
+                    application: `/api/admin/leases/applications/${ctx.applicationId}/sync-accruals`,
+                    debtor: ctx.debtorId
+                        ? `/api/admin/leases/debtors/${ctx.debtorId}/sync-accruals`
+                        : null
+                },
+                reconcileRentAccruals: {
+                    method: 'POST',
+                    admin: '/api/admin/rent-accrual-reconciliation/reconcile',
+                    finance: '/api/finance/rent-accrual-reconciliation/reconcile',
+                    body: {
+                        applicationId: ctx.applicationId,
+                        studentId: ctx.studentId || undefined
+                    }
+                }
+            }
+        };
+    }
+
     /**
      * Update student lease dates and automatically update debtor record
      * @param {string|null} studentId - Student/User ID (optional when applicationId provided)

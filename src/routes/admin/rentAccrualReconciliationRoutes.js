@@ -3,9 +3,15 @@ const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const excelUpload = require('../../middleware/excelUpload');
 const BillingDiscrepancyController = require('../../controllers/admin/billingDiscrepancyController');
+const leaseController = require('../../controllers/admin/leaseController');
+const {
+    validateApplicationId,
+    validateDebtorId,
+    validateStudentId
+} = require('../../middleware/leaseValidation');
 
 router.use(auth);
-router.use(checkRole('admin', 'ceo'));
+router.use(checkRole('admin', 'finance_admin', 'finance_user', 'ceo'));
 
 /**
  * Admin rent accrual reconciliation
@@ -15,6 +21,19 @@ router.use(checkRole('admin', 'ceo'));
 router.get('/scan', BillingDiscrepancyController.scanPeriod);
 router.post('/compare', BillingDiscrepancyController.compareList);
 router.get('/student/:studentId/diagnose', BillingDiscrepancyController.diagnoseStudent);
+
+router.get('/applications/:applicationId/reconciliation',
+    validateApplicationId,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get('/debtors/:debtorId/reconciliation',
+    validateDebtorId,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get('/students/:studentId/reconciliation',
+    validateStudentId,
+    leaseController.getLeaseReconciliationStatus
+);
 
 router.post('/reconcile', BillingDiscrepancyController.reconcileRentAccruals);
 router.post('/bulk-fix', BillingDiscrepancyController.bulkFix);

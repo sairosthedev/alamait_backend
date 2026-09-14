@@ -241,6 +241,36 @@ exports.updateDebtorLeaseDates = async (req, res) => {
 };
 
 /**
+ * Lease vs accrual reconciliation status for frontend.
+ * @route GET /api/admin/leases/applications|debtors|students/:id/reconciliation
+ */
+exports.getLeaseReconciliationStatus = async (req, res) => {
+    try {
+        const identifier =
+            req.params.applicationId ||
+            req.params.debtorId ||
+            req.params.studentId;
+
+        const data = await LeaseUpdateService.getLeaseReconciliationStatus(identifier);
+
+        res.status(200).json({
+            success: true,
+            message: data.inSync
+                ? 'Lease and accruals are in sync'
+                : `${data.issues.filter(i => i.severity === 'error').length} issue(s) need attention`,
+            data
+        });
+    } catch (error) {
+        console.error('❌ Error getting lease reconciliation status:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error loading lease reconciliation status',
+            error: error.message
+        });
+    }
+};
+
+/**
  * Backfill missing accruals for current lease (no date change).
  * @route POST /api/admin/leases/applications/:applicationId/sync-accruals
  */
