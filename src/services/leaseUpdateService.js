@@ -538,12 +538,20 @@ class LeaseUpdateService {
                 (accrualBackfill.extendedEnd?.accrualsSkipped || 0) +
                 (accrualBackfill.earlierStart?.accrualsSkipped || 0);
 
+            let accrualMessage = 'Lease dates updated successfully';
+            if (createdCount > 0 && skippedCount > 0) {
+                accrualMessage = `Lease updated — ${createdCount} accrual(s) created, ${skippedCount} already existed`;
+            } else if (createdCount > 0) {
+                accrualMessage = `Lease updated — ${createdCount} missing accrual(s) created`;
+            } else if (skippedCount > 0) {
+                accrualMessage =
+                    `Lease updated — all ${skippedCount} monthly accrual(s) through today already exist. ` +
+                    'Future months (Oct–Dec) will post automatically when each month arrives.';
+            }
+
             return {
                 success: true,
-                message:
-                    createdCount > 0
-                        ? `Lease updated — ${createdCount} missing accrual(s) created`
-                        : 'Lease dates updated successfully',
+                message: accrualMessage,
                 studentId: resolvedStudentId,
                 applicationId: resolvedApplicationId,
                 updatedDates: {
