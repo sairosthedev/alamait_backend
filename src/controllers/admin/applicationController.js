@@ -927,19 +927,28 @@ exports.updateApplicationData = async (req, res) => {
 
         console.log('📝 Updating fields:', updateFields);
 
-        // Get original application to check if lease dates are changing
         const originalApplication = await Application.findById(applicationId);
-        const originalEndDate = originalApplication?.endDate;
-        const originalStartDate = originalApplication?.startDate;
-        const newEndDate = updateFields.endDate ? new Date(updateFields.endDate) : null;
-        const newStartDate = updateFields.startDate ? new Date(updateFields.startDate) : null;
+        const leaseStartDate = updateFields.startDate || originalApplication?.startDate;
+        const leaseEndDate = updateFields.endDate || originalApplication?.endDate;
+        const leaseDatesChanging =
+            (updateFields.startDate &&
+                String(new Date(updateFields.startDate).toISOString()) !==
+                    String(new Date(originalApplication.startDate).toISOString())) ||
+            (updateFields.endDate &&
+                String(new Date(updateFields.endDate).toISOString()) !==
+                    String(new Date(originalApplication.endDate).toISOString()));
 
-        // Update the application
-        const updatedApplication = await Application.findByIdAndUpdate(
-            applicationId,
-            { $set: updateFields },
-            { new: true, runValidators: true }
-        );
+        delete updateFields.startDate;
+        delete updateFields.endDate;
+
+        let updatedApplication = originalApplication;
+        if (Object.keys(updateFields).length > 0) {
+            updatedApplication = await Application.findByIdAndUpdate(
+                applicationId,
+                { $set: updateFields },
+                { new: true, runValidators: true }
+            );
+        }
 
         console.log('✅ Application updated successfully:', {
             id: updatedApplication._id,
@@ -948,87 +957,25 @@ exports.updateApplicationData = async (req, res) => {
         });
 
         const LeaseUpdateService = require('../../services/leaseUpdateService');
-        const adminUserId = req.user?._id || 'system';
+        let leaseUpdateResult = null;
 
-        // If lease was extended, create missing accruals and sync debtor
-        if (originalEndDate && newEndDate && newEndDate > new Date(originalEndDate)) {
-            console.log(`📅 Application end date extended — creating missing accruals...`);
-            try {
-                const accrualResult = await LeaseUpdateService.createMissingAccrualsForExtendedLease(
-                    updatedApplication,
-                    new Date(originalEndDate),
-                    newEndDate,
-                    adminUserId,
-                    null
-                );
-                console.log(
-                    `✅ Extension accrual backfill: created ${accrualResult?.accrualsCreated || 0}, skipped ${accrualResult?.accrualsSkipped || 0}`
-                );
-                await LeaseUpdateService.syncDebtorLeaseFromApplication(updatedApplication, adminUserId);
-            } catch (accrualError) {
-                console.error(`❌ Error creating accruals after lease extension: ${accrualError.message}`);
-            }
+        if (leaseDatesChanging && leaseStartDate && leaseEndDate) {
+            leaseUpdateResult = await LeaseUpdateService.updateApplicationLeaseById(
+                applicationId,
+                { startDate: leaseStartDate, endDate: leaseEndDate },
+                req.user._id,
+                { applicationOnly: true, adminUser: req.user }
+            );
+            updatedApplication = await Application.findById(applicationId);
         }
-
-        if (
-            originalStartDate &&
-            newStartDate &&
-            newStartDate < new Date(originalStartDate)
-        ) {
-            console.log(`📅 Application start date moved earlier — creating missing accruals...`);
-            try {
-                await LeaseUpdateService.createMissingAccrualsForExtendedLease(
-                    updatedApplication,
-                    newStartDate,
-                    new Date(originalStartDate),
-                    adminUserId,
-                    null
-                );
-                await LeaseUpdateService.syncDebtorLeaseFromApplication(updatedApplication, adminUserId);
-            } catch (accrualError) {
-                console.error(`❌ Error creating accruals after earlier start: ${accrualError.message}`);
-            }
-        }
-
-        // 🆕 CRITICAL: If end date was moved earlier, automatically reverse accruals for months after new end date
-        if (originalEndDate && newEndDate && newEndDate < new Date(originalEndDate)) {
-            console.log(`⚠️ Application end date moved earlier - automatically reversing accruals...`);
-            console.log(`   Original end date: ${originalEndDate.toISOString().split('T')[0]}`);
-            console.log(`   New end date: ${newEndDate.toISOString().split('T')[0]}`);
-            
-            try {
-                const AccrualCorrectionService = require('../../services/accrualCorrectionService');
-                const adminUser = req.user || { _id: req.user?._id, email: req.user?.email || 'system' };
-                
-                const correctionResult = await AccrualCorrectionService.correctAccrualsForEarlyLeaseEnd(
-                    applicationId,
-                    newEndDate,
-                    adminUser,
-                    `Application end date updated - student left early`,
-                    false // Don't update lease end date again (already updated)
-                );
-                
-                if (correctionResult.success) {
-                    console.log(`✅ Automatically reversed ${correctionResult.reversedCount || 0} accrual(s) for months after new end date`);
-                    console.log(`   Reversed transactions: ${correctionResult.reversedTransactions?.length || 0}`);
-                } else {
-                    console.error(`❌ Failed to automatically reverse accruals: ${correctionResult.error}`);
-                }
-            } catch (accrualError) {
-                console.error(`❌ Error automatically reversing accruals: ${accrualError.message}`);
-                // Don't throw - application update should still succeed even if accrual reversal fails
-            }
-        }
-
-        const leaseExtended =
-            originalEndDate && newEndDate && newEndDate > new Date(originalEndDate);
 
         res.json({
             success: true,
-            message: leaseExtended
-                ? 'Application updated and missing rent accruals created for the extended lease period'
-                : 'Application data updated successfully',
-            application: updatedApplication
+            message:
+                leaseUpdateResult?.message ||
+                'Application data updated successfully',
+            application: updatedApplication,
+            leaseUpdate: leaseUpdateResult || null
         });
 
     } catch (error) {

@@ -125,7 +125,7 @@ exports.updateStudentLeaseDates = async (req, res) => {
         
         res.status(200).json({
             success: true,
-            message: 'Student lease dates updated successfully',
+            message: result.message || 'Student lease dates updated successfully',
             data: result
         });
         
@@ -135,6 +135,134 @@ exports.updateStudentLeaseDates = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error updating student lease dates',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Update lease by application id (works for application-only tenants).
+ * @route PUT /api/admin/leases/applications/:applicationId/lease
+ */
+exports.updateApplicationLeaseDates = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors.array()
+            });
+        }
+
+        const { applicationId } = req.params;
+        const { startDate, endDate } = req.body;
+        const updatedBy = req.user._id;
+
+        const validation = LeaseUpdateService.validateLeaseUpdates({ startDate, endDate });
+        if (!validation.isValid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid lease date updates',
+                errors: validation.errors
+            });
+        }
+
+        const result = await LeaseUpdateService.updateApplicationLeaseById(
+            applicationId,
+            { startDate, endDate },
+            updatedBy,
+            { applicationOnly: true, adminUser: req.user }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: result.message,
+            data: result
+        });
+    } catch (error) {
+        console.error('❌ Error updating application lease dates:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating application lease dates',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Update lease by debtor id (finance/debtors list).
+ * @route PUT /api/admin/leases/debtors/:debtorId/lease
+ */
+exports.updateDebtorLeaseDates = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors.array()
+            });
+        }
+
+        const { debtorId } = req.params;
+        const { startDate, endDate } = req.body;
+        const ctx = await LeaseUpdateService.resolveLeaseContext(debtorId);
+
+        const validation = LeaseUpdateService.validateLeaseUpdates({ startDate, endDate });
+        if (!validation.isValid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid lease date updates',
+                errors: validation.errors
+            });
+        }
+
+        const result = await LeaseUpdateService.updateApplicationLeaseById(
+            ctx.applicationId,
+            { startDate, endDate },
+            req.user._id,
+            { applicationOnly: true, adminUser: req.user }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: result.message,
+            data: result
+        });
+    } catch (error) {
+        console.error('❌ Error updating debtor lease dates:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating debtor lease dates',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Backfill missing accruals for current lease (no date change).
+ * @route POST /api/admin/leases/applications/:applicationId/sync-accruals
+ */
+exports.syncApplicationAccruals = async (req, res) => {
+    try {
+        const identifier = req.params.applicationId || req.params.debtorId;
+
+        const result = await LeaseUpdateService.backfillAccrualsForApplication(
+            identifier,
+            req.user._id
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `Synced accruals — ${result.accrualBackfill?.accrualsCreated || 0} created, ${result.accrualBackfill?.accrualsSkipped || 0} already existed`,
+            data: result
+        });
+    } catch (error) {
+        console.error('❌ Error syncing application accruals:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error syncing accruals',
             error: error.message
         });
     }

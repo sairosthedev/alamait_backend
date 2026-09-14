@@ -11,6 +11,18 @@ exports.validateStudentId = [
         .withMessage('Student ID must be a valid MongoDB ObjectId')
 ];
 
+exports.validateApplicationId = [
+    param('applicationId')
+        .isMongoId()
+        .withMessage('Application ID must be a valid MongoDB ObjectId')
+];
+
+exports.validateDebtorId = [
+    param('debtorId')
+        .isMongoId()
+        .withMessage('Debtor ID must be a valid MongoDB ObjectId')
+];
+
 // Validate lease date updates
 exports.validateLeaseDates = [
     body('startDate')

@@ -44,6 +44,97 @@ class LeaseUpdateService {
     }
 
     /**
+     * Resolve application + debtor from student, application, or debtor id.
+     */
+    static async resolveLeaseContext(identifier) {
+        if (!identifier || !mongoose.Types.ObjectId.isValid(String(identifier))) {
+            throw new Error('Invalid lease identifier');
+        }
+
+        const id = String(identifier);
+        let application = null;
+        let debtor = null;
+
+        application = await Application.findById(id).lean();
+        if (!application) {
+            debtor = await Debtor.findById(id).lean();
+            if (debtor?.application) {
+                application = await Application.findById(debtor.application).lean();
+            }
+        }
+        if (!application) {
+            debtor = debtor || (await Debtor.findOne({ user: id }).lean());
+            if (debtor?.application) {
+                application = await Application.findById(debtor.application).lean();
+            }
+        }
+        if (!application) {
+            application = await Application.findOne({
+                student: id,
+                status: { $in: ['approved', 'expired'] }
+            })
+                .sort({ endDate: -1 })
+                .lean();
+        }
+        if (!application) {
+            throw new Error('No application found for this tenant');
+        }
+
+        if (!debtor) {
+            debtor = await Debtor.findOne({
+                $or: [{ application: application._id }, { user: application.student }]
+            }).lean();
+        }
+
+        return {
+            applicationId: application._id.toString(),
+            application,
+            debtor,
+            studentId: application.student?.toString() || null,
+            debtorId: debtor?._id?.toString() || null,
+            debtorCode: debtor?.debtorCode || null
+        };
+    }
+
+    /**
+     * Backfill all missing monthly accruals for the application's current lease (through today).
+     */
+    static async backfillAccrualsForApplication(applicationId, updatedBy) {
+        const ctx = await this.resolveLeaseContext(applicationId);
+        const app = await Application.findById(ctx.applicationId);
+        if (!app) {
+            throw new Error('Application not found');
+        }
+
+        const now = new Date();
+        const leaseEnd = new Date(app.endDate);
+        const periodEnd = leaseEnd < now ? leaseEnd : now;
+
+        const accrualBackfill = await this.createMissingAccrualsForExtendedLease(
+            app,
+            new Date(app.startDate),
+            periodEnd,
+            updatedBy,
+            null
+        );
+
+        const debtorSync = await this.syncDebtorLeaseFromApplication(app, updatedBy);
+
+        return {
+            success: true,
+            applicationId: ctx.applicationId,
+            studentId: ctx.studentId,
+            debtorCode: ctx.debtorCode,
+            lease: {
+                startDate: app.startDate,
+                endDate: app.endDate
+            },
+            accrualBackfill,
+            debtorSync
+        };
+    }
+
+    /**
      * Update student lease dates and automatically update debtor record
      * @param {string|null} studentId - Student/User ID (optional when applicationId provided)
      * @param {Object} leaseUpdates - Lease date updates
@@ -58,7 +149,11 @@ class LeaseUpdateService {
         let resolvedApplicationId = options.applicationId || null;
         let resolvedStudentId = studentId || null;
         let accrualReversalContext = null;
-        
+        const accrualBackfill = {
+            extendedEnd: null,
+            earlierStart: null
+        };
+
         try {
             await session.withTransaction(async () => {
                 console.log(`🔄 Starting lease date update for application/student: ${options.applicationId || studentId || 'unknown'}`);
@@ -142,7 +237,7 @@ class LeaseUpdateService {
                     console.log(`   New end date: ${leaseUpdates.endDate}`);
                     
                     try {
-                        await this.createMissingAccrualsForExtendedLease(
+                        accrualBackfill.extendedEnd = await this.createMissingAccrualsForExtendedLease(
                             application,
                             originalEndDate,
                             new Date(leaseUpdates.endDate),
@@ -151,7 +246,10 @@ class LeaseUpdateService {
                         );
                     } catch (accrualError) {
                         console.error(`❌ Error creating missing accruals for extended lease: ${accrualError.message}`);
-                        // Don't throw - lease update should still succeed even if accrual creation fails
+                        accrualBackfill.extendedEnd = {
+                            success: false,
+                            error: accrualError.message
+                        };
                     }
                 }
                 
@@ -162,7 +260,7 @@ class LeaseUpdateService {
                     console.log(`   New start date: ${leaseUpdates.startDate}`);
                     
                     try {
-                        await this.createMissingAccrualsForExtendedLease(
+                        accrualBackfill.earlierStart = await this.createMissingAccrualsForExtendedLease(
                             application,
                             new Date(leaseUpdates.startDate),
                             originalStartDate,
@@ -171,7 +269,10 @@ class LeaseUpdateService {
                         );
                     } catch (accrualError) {
                         console.error(`❌ Error creating missing accruals for earlier start date: ${accrualError.message}`);
-                        // Don't throw - lease update should still succeed even if accrual creation fails
+                        accrualBackfill.earlierStart = {
+                            success: false,
+                            error: accrualError.message
+                        };
                     }
                 }
                 
@@ -200,7 +301,9 @@ class LeaseUpdateService {
                     
                     debtor.leaseInfo.startDate = new Date(leaseUpdates.startDate);
                     debtor.leaseInfo.endDate = new Date(leaseUpdates.endDate);
-                    debtor.updatedBy = updatedBy;
+                    if (mongoose.Types.ObjectId.isValid(String(updatedBy))) {
+                        debtor.updatedBy = updatedBy;
+                    }
                     debtor.updatedAt = new Date();
                     
                     // Recalculate financial information based on new lease dates
@@ -268,14 +371,29 @@ class LeaseUpdateService {
                 }
             }
             
+            const createdCount =
+                (accrualBackfill.extendedEnd?.accrualsCreated || 0) +
+                (accrualBackfill.earlierStart?.accrualsCreated || 0);
+            const skippedCount =
+                (accrualBackfill.extendedEnd?.accrualsSkipped || 0) +
+                (accrualBackfill.earlierStart?.accrualsSkipped || 0);
+
             return {
                 success: true,
-                message: 'Lease dates updated successfully',
+                message:
+                    createdCount > 0
+                        ? `Lease updated — ${createdCount} missing accrual(s) created`
+                        : 'Lease dates updated successfully',
                 studentId: resolvedStudentId,
                 applicationId: resolvedApplicationId,
                 updatedDates: {
                     startDate: leaseUpdates.startDate,
                     endDate: leaseUpdates.endDate
+                },
+                accrualBackfill: {
+                    accrualsCreated: createdCount,
+                    accrualsSkipped: skippedCount,
+                    details: accrualBackfill
                 }
             };
             
@@ -516,7 +634,9 @@ class LeaseUpdateService {
 
         debtor.leaseInfo.startDate = new Date(application.startDate);
         debtor.leaseInfo.endDate = new Date(application.endDate);
-        debtor.updatedBy = updatedBy;
+        if (mongoose.Types.ObjectId.isValid(String(updatedBy))) {
+            debtor.updatedBy = updatedBy;
+        }
         debtor.updatedAt = new Date();
 
         try {
