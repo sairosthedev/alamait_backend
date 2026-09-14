@@ -10,6 +10,10 @@ const { parseCalendarDate, getCalendarParts } = require('../utils/calendarDate')
  * Service to handle updating student lease dates and automatically updating debtor records
  */
 class LeaseUpdateService {
+    static applySession(query, session) {
+        return session ? query.session(session) : query;
+    }
+
     static calendarDateKey(parts) {
         return parts.year * 10000 + parts.month * 100 + parts.day;
     }
@@ -294,21 +298,38 @@ class LeaseUpdateService {
             console.log(`🧮 Recalculating debtor financials for: ${debtor.debtorCode}`);
             
             // Get residence and room information
-            const residence = await Residence.findById(application.residence).session(session);
+            const residence = await this.applySession(
+                Residence.findById(application.residence),
+                session
+            );
             if (!residence) {
                 throw new Error('Residence not found');
             }
-            
-            // Find the allocated room
-            const allocatedRoom = residence.rooms.find(room => 
-                room.roomNumber === application.allocatedRoomDetails?.roomNumber
+
+            const roomNumber =
+                application.allocatedRoomDetails?.roomNumber ||
+                application.allocatedRoom ||
+                application.roomNumber ||
+                '';
+
+            const allocatedRoom = residence.rooms.find(
+                (room) =>
+                    room.roomNumber === roomNumber ||
+                    room.roomNumber?.toLowerCase() === String(roomNumber).toLowerCase()
             );
-            
+
             if (!allocatedRoom) {
-                throw new Error('Allocated room not found');
+                console.warn(
+                    `⚠️ Room "${roomNumber || 'unknown'}" not found in residence — using rent fallback`
+                );
             }
-            
-            const roomPrice = allocatedRoom.price || application.allocatedRoomDetails?.price || 0;
+
+            const roomPrice =
+                allocatedRoom?.price ||
+                application.allocatedRoomDetails?.price ||
+                application.monthlyRent ||
+                debtor?.leaseInfo?.roomPrice ||
+                0;
             
             // Calculate new lease period
             const startDate = new Date(application.startDate);
@@ -468,12 +489,54 @@ class LeaseUpdateService {
     }
     
     /**
+     * Sync debtor lease dates and financials after an application lease change.
+     */
+    static async syncDebtorLeaseFromApplication(application, updatedBy, session = null) {
+        const studentId = application.student?.toString() || null;
+        let debtor = null;
+
+        if (studentId) {
+            debtor = await this.applySession(Debtor.findOne({ user: studentId }), session);
+        }
+        if (!debtor) {
+            debtor = await this.applySession(
+                Debtor.findOne({ application: application._id }),
+                session
+            );
+        }
+
+        if (!debtor) {
+            console.log(`⚠️ No debtor record found for application: ${application.applicationCode}`);
+            return { updated: false };
+        }
+
+        if (!debtor.leaseInfo) {
+            debtor.leaseInfo = {};
+        }
+
+        debtor.leaseInfo.startDate = new Date(application.startDate);
+        debtor.leaseInfo.endDate = new Date(application.endDate);
+        debtor.updatedBy = updatedBy;
+        debtor.updatedAt = new Date();
+
+        try {
+            await this.recalculateDebtorFinancials(debtor, application, session);
+        } catch (recalcError) {
+            console.error(`❌ Error recalculating debtor financials: ${recalcError.message}`);
+        }
+
+        await this.applySession(debtor.save(), session);
+        console.log(`✅ Synced debtor ${debtor.debtorCode} lease dates and financials`);
+        return { updated: true, debtorCode: debtor.debtorCode };
+    }
+
+    /**
      * Create missing accruals for extended lease period
      * @param {Object} application - Application record
      * @param {Date} periodStart - Start of the period to check
      * @param {Date} periodEnd - End of the period to check
      * @param {string} updatedBy - User ID who is making the update
-     * @param {Object} session - MongoDB session
+     * @param {Object} session - MongoDB session (optional)
      */
     static async createMissingAccrualsForExtendedLease(application, periodStart, periodEnd, updatedBy, session) {
         try {
@@ -481,30 +544,72 @@ class LeaseUpdateService {
             
             const RentalAccrualService = require('./rentalAccrualService');
             const TransactionEntry = require('../models/TransactionEntry');
-            const Debtor = require('../models/Debtor');
             const now = new Date();
             const currentMonth = now.getMonth() + 1;
             const currentYear = now.getFullYear();
-            
-            // Get student ID from application
-            const studentId = application.student?.toString() || application.student;
-            if (!studentId) {
-                console.warn(`⚠️ Cannot find student ID from application - skipping accrual check`);
-                return;
+
+            const appDoc =
+                application?.startDate && application?.endDate
+                    ? application
+                    : await this.applySession(Application.findById(application._id), session);
+
+            if (!appDoc) {
+                console.warn(`⚠️ Application not found — skipping accrual backfill`);
+                return { success: false, accrualsCreated: 0, accrualsSkipped: 0, errors: [] };
             }
-            
-            // Look up debtor to get debtorId for more accurate accrual checking
-            const debtor = await Debtor.findOne({ user: studentId }).session(session).lean();
+
+            let studentId = appDoc.student?.toString() || appDoc.student || null;
+
+            const debtor = await this.applySession(
+                Debtor.findOne({
+                    $or: [
+                        ...(studentId ? [{ user: studentId }] : []),
+                        { application: appDoc._id }
+                    ]
+                }),
+                session
+            ).lean();
+
+            if (!studentId && debtor?.user) {
+                studentId = debtor.user.toString();
+            }
+            if (!studentId) {
+                studentId = appDoc._id.toString();
+                console.log(`   ℹ️ No user on application — using application ID for accrual backfill`);
+            }
+
             const debtorId = debtor?._id?.toString();
-            const arAccountCode = debtor?.accountCode ? (typeof debtor.accountCode === 'string' && debtor.accountCode.startsWith('1100-') ? debtor.accountCode : `1100-${debtorId}`) : (debtorId ? `1100-${debtorId}` : null);
-            
+            const arAccountCode = debtor?.accountCode
+                ? typeof debtor.accountCode === 'string' && debtor.accountCode.startsWith('1100-')
+                    ? debtor.accountCode
+                    : `1100-${debtorId}`
+                : debtorId
+                  ? `1100-${debtorId}`
+                  : null;
+
             console.log(`   📋 Student ID: ${studentId}, Debtor ID: ${debtorId || 'N/A'}, AR Account Code: ${arAccountCode || 'N/A'}`);
-            
-            // Calculate months to check
-            const startMonth = periodStart.getMonth() + 1;
-            const startYear = periodStart.getFullYear();
-            const endMonth = periodEnd.getMonth() + 1;
-            const endYear = periodEnd.getFullYear();
+
+            // When extending the lease end, start from the month after the old end date
+            let iterationStart = new Date(periodStart);
+            const periodEndDate = new Date(periodEnd);
+            if (periodEndDate > iterationStart) {
+                const oldEndMonth = iterationStart.getMonth();
+                const oldEndYear = iterationStart.getFullYear();
+                const newEndMonth = periodEndDate.getMonth();
+                const newEndYear = periodEndDate.getFullYear();
+                if (
+                    newEndYear > oldEndYear ||
+                    (newEndYear === oldEndYear && newEndMonth > oldEndMonth)
+                ) {
+                    iterationStart.setMonth(iterationStart.getMonth() + 1);
+                    iterationStart.setDate(1);
+                }
+            }
+
+            const startMonth = iterationStart.getMonth() + 1;
+            const startYear = iterationStart.getFullYear();
+            const endMonth = periodEndDate.getMonth() + 1;
+            const endYear = periodEndDate.getFullYear();
             
             let month = startMonth;
             let year = startYear;
@@ -526,7 +631,7 @@ class LeaseUpdateService {
                 }
                 
                 // Skip the lease start month (handled by lease_start process)
-                const leaseStartDate = new Date(application.startDate);
+                const leaseStartDate = new Date(appDoc.startDate);
                 const leaseStartMonth = leaseStartDate.getMonth() + 1;
                 const leaseStartYear = leaseStartDate.getFullYear();
                 
@@ -547,34 +652,47 @@ class LeaseUpdateService {
                     studentId,
                     month,
                     year,
-                    application._id,
+                    appDoc._id,
                     debtorId
                 );
+
+                if (!existingAccrual && appDoc._id) {
+                    existingAccrual = await RentalAccrualService.checkExistingMonthlyAccrual(
+                        appDoc._id.toString(),
+                        month,
+                        year,
+                        appDoc._id,
+                        debtorId
+                    );
+                }
                 
                 // Also check by AR account code if we have it
                 if (!existingAccrual && arAccountCode) {
                     console.log(`   🔍 Checking by AR account code ${arAccountCode} for ${month}/${year}...`);
                     const monthKey = `${year}-${String(month).padStart(2, '0')}`;
-                    existingAccrual = await TransactionEntry.findOne({
-                        source: 'rental_accrual',
-                        status: { $ne: 'deleted' },
-                        'entries.accountCode': arAccountCode,
-                        $and: [
-                            {
-                                $or: [
-                                    { 'metadata.type': 'monthly_rent_accrual' },
-                                    { description: { $regex: /Monthly.*accrual/i } }
-                                ]
-                            },
-                            {
-                                $or: [
-                                    { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
-                                    { 'metadata.month': monthKey },
-                                    { description: { $regex: new RegExp(monthKey) } }
-                                ]
-                            }
-                        ]
-                    }).session(session);
+                    existingAccrual = await this.applySession(
+                        TransactionEntry.findOne({
+                            source: 'rental_accrual',
+                            status: { $ne: 'deleted' },
+                            'entries.accountCode': arAccountCode,
+                            $and: [
+                                {
+                                    $or: [
+                                        { 'metadata.type': 'monthly_rent_accrual' },
+                                        { description: { $regex: /Monthly.*accrual/i } }
+                                    ]
+                                },
+                                {
+                                    $or: [
+                                        { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+                                        { 'metadata.month': monthKey },
+                                        { description: { $regex: new RegExp(monthKey) } }
+                                    ]
+                                }
+                            ]
+                        }),
+                        session
+                    );
                 }
                 
                 if (existingAccrual) {
@@ -588,15 +706,21 @@ class LeaseUpdateService {
                         // Create student-like object from application for createStudentRentAccrual
                         const studentData = {
                             student: studentId,
-                            firstName: application.firstName,
-                            lastName: application.lastName,
-                            email: application.email || '',
-                            residence: application.residence,
-                            allocatedRoom: application.allocatedRoom || application.allocatedRoomDetails?.roomNumber || '',
-                            startDate: application.startDate,
-                            endDate: application.endDate,
-                            application: application._id,
-                            applicationCode: application.applicationCode
+                            firstName: appDoc.firstName,
+                            lastName: appDoc.lastName,
+                            email: appDoc.email || '',
+                            residence: appDoc.residence,
+                            allocatedRoom:
+                                appDoc.allocatedRoom ||
+                                appDoc.allocatedRoomDetails?.roomNumber ||
+                                debtor?.roomNumber ||
+                                '',
+                            startDate: appDoc.startDate,
+                            endDate: appDoc.endDate,
+                            application: appDoc._id,
+                            applicationCode: appDoc.applicationCode,
+                            debtor: debtorId || null,
+                            debtorAccountCode: arAccountCode || null
                         };
                         
                         const result = await RentalAccrualService.createStudentRentAccrual(studentData, month, year);

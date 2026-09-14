@@ -927,10 +927,12 @@ exports.updateApplicationData = async (req, res) => {
 
         console.log('📝 Updating fields:', updateFields);
 
-        // Get original application to check if endDate is being moved earlier
+        // Get original application to check if lease dates are changing
         const originalApplication = await Application.findById(applicationId);
         const originalEndDate = originalApplication?.endDate;
+        const originalStartDate = originalApplication?.startDate;
         const newEndDate = updateFields.endDate ? new Date(updateFields.endDate) : null;
+        const newStartDate = updateFields.startDate ? new Date(updateFields.startDate) : null;
 
         // Update the application
         const updatedApplication = await Application.findByIdAndUpdate(
@@ -944,6 +946,49 @@ exports.updateApplicationData = async (req, res) => {
             studentName: `${updatedApplication.firstName} ${updatedApplication.lastName}`,
             email: updatedApplication.email
         });
+
+        const LeaseUpdateService = require('../../services/leaseUpdateService');
+        const adminUserId = req.user?._id || 'system';
+
+        // If lease was extended, create missing accruals and sync debtor
+        if (originalEndDate && newEndDate && newEndDate > new Date(originalEndDate)) {
+            console.log(`📅 Application end date extended — creating missing accruals...`);
+            try {
+                const accrualResult = await LeaseUpdateService.createMissingAccrualsForExtendedLease(
+                    updatedApplication,
+                    new Date(originalEndDate),
+                    newEndDate,
+                    adminUserId,
+                    null
+                );
+                console.log(
+                    `✅ Extension accrual backfill: created ${accrualResult?.accrualsCreated || 0}, skipped ${accrualResult?.accrualsSkipped || 0}`
+                );
+                await LeaseUpdateService.syncDebtorLeaseFromApplication(updatedApplication, adminUserId);
+            } catch (accrualError) {
+                console.error(`❌ Error creating accruals after lease extension: ${accrualError.message}`);
+            }
+        }
+
+        if (
+            originalStartDate &&
+            newStartDate &&
+            newStartDate < new Date(originalStartDate)
+        ) {
+            console.log(`📅 Application start date moved earlier — creating missing accruals...`);
+            try {
+                await LeaseUpdateService.createMissingAccrualsForExtendedLease(
+                    updatedApplication,
+                    newStartDate,
+                    new Date(originalStartDate),
+                    adminUserId,
+                    null
+                );
+                await LeaseUpdateService.syncDebtorLeaseFromApplication(updatedApplication, adminUserId);
+            } catch (accrualError) {
+                console.error(`❌ Error creating accruals after earlier start: ${accrualError.message}`);
+            }
+        }
 
         // 🆕 CRITICAL: If end date was moved earlier, automatically reverse accruals for months after new end date
         if (originalEndDate && newEndDate && newEndDate < new Date(originalEndDate)) {
@@ -975,9 +1020,14 @@ exports.updateApplicationData = async (req, res) => {
             }
         }
 
+        const leaseExtended =
+            originalEndDate && newEndDate && newEndDate > new Date(originalEndDate);
+
         res.json({
             success: true,
-            message: 'Application data updated successfully',
+            message: leaseExtended
+                ? 'Application updated and missing rent accruals created for the extended lease period'
+                : 'Application data updated successfully',
             application: updatedApplication
         });
 
