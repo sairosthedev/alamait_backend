@@ -161,6 +161,109 @@ async function resolveDebtorForNegotiation({
 }
 
 /**
+ * Find monthly rent accrual for negotiation — tolerant of application/debtor/user id mismatches.
+ */
+async function findRentAccrualForNegotiation({
+    studentId,
+    studentName,
+    applicationId,
+    debtorId,
+    accrualMonth,
+    accrualYear,
+    accrualTransactionId
+}) {
+    if (accrualTransactionId) {
+        const byId = await TransactionEntry.findById(accrualTransactionId);
+        if (byId && !['deleted', 'reversed'].includes(String(byId.status))) {
+            return byId;
+        }
+    }
+
+    const monthNum = parseInt(accrualMonth, 10);
+    const yearNum = parseInt(accrualYear, 10);
+    if (!monthNum || !yearNum) {
+        return null;
+    }
+
+    const RentalAccrualService = require('./rentalAccrualService');
+    const { debtor } = await resolveDebtorForNegotiation({
+        studentId,
+        studentName,
+        applicationId,
+        debtorId,
+        originalAccrual: null
+    });
+
+    let appId = applicationId || debtor?.application?.toString() || null;
+    if (!appId && mongoose.Types.ObjectId.isValid(studentId)) {
+        const maybeApp = await Application.findById(studentId).select('_id').lean();
+        if (maybeApp) appId = maybeApp._id.toString();
+    }
+
+    const resolvedDebtorId = debtorId || debtor?._id?.toString() || null;
+
+    const candidateIds = [
+        studentId,
+        appId,
+        resolvedDebtorId,
+        debtor?.user?.toString()
+    ].filter(Boolean);
+
+    for (const id of [...new Set(candidateIds.map(String))]) {
+        const found = await RentalAccrualService.checkExistingMonthlyAccrual(
+            id,
+            monthNum,
+            yearNum,
+            appId,
+            resolvedDebtorId
+        );
+        if (found) return found;
+    }
+
+    const monthKey = `${yearNum}-${String(monthNum).padStart(2, '0')}`;
+    const monthStart = new Date(yearNum, monthNum - 1, 1, 0, 0, 0, 0);
+    const monthEnd = new Date(yearNum, monthNum, 0, 23, 59, 59, 999);
+
+    if (debtor) {
+        const accountCode = debtor.accountCode || `1100-${debtor._id}`;
+        const byAr = await TransactionEntry.findOne({
+            source: 'rental_accrual',
+            status: { $nin: ['deleted', 'reversed'] },
+            'entries.accountCode': accountCode,
+            $or: [
+                { 'metadata.accrualMonth': monthNum, 'metadata.accrualYear': yearNum },
+                { 'metadata.accrualMonth': String(monthNum), 'metadata.accrualYear': String(yearNum) },
+                { 'metadata.month': monthKey },
+                { date: { $gte: monthStart, $lte: monthEnd } }
+            ]
+        }).sort({ date: -1 });
+        if (byAr) return byAr;
+    }
+
+    if (studentName) {
+        const nameEscaped = escapeRegex(studentName);
+        const byName = await TransactionEntry.findOne({
+            source: 'rental_accrual',
+            status: { $nin: ['deleted', 'reversed'] },
+            $or: [
+                {
+                    date: { $gte: monthStart, $lte: monthEnd },
+                    description: { $regex: new RegExp(nameEscaped, 'i') }
+                },
+                {
+                    'metadata.accrualMonth': monthNum,
+                    'metadata.accrualYear': yearNum,
+                    description: { $regex: new RegExp(nameEscaped, 'i') }
+                }
+            ]
+        }).sort({ date: -1 });
+        if (byName) return byName;
+    }
+
+    return null;
+}
+
+/**
  * Create a negotiated rent adjustment (shared by finance transactions API and reconciliation).
  */
 async function createRentNegotiationAdjustment({
@@ -212,44 +315,15 @@ async function createRentNegotiationAdjustment({
     const monthNum = parseInt(accrualMonth, 10);
     const yearNum = parseInt(accrualYear, 10);
 
-    let originalAccrual = null;
-    if (accrualTransactionId) {
-        originalAccrual = await TransactionEntry.findById(accrualTransactionId);
-    } else if (monthNum && yearNum) {
-        const studentIdObj = mongoose.Types.ObjectId.isValid(studentId)
-            ? new mongoose.Types.ObjectId(studentId)
-            : null;
-
-        let debtorForAccrual = await Debtor.findOne({ user: studentId }).lean();
-        if (!debtorForAccrual && studentIdObj) {
-            debtorForAccrual = await Debtor.findOne({ user: studentIdObj }).lean();
-        }
-
-        const matchOr = [
-            { 'metadata.studentId': studentId },
-            { sourceId: studentIdObj }
-        ];
-        if (applicationId) {
-            matchOr.push(
-                { 'metadata.applicationId': applicationId },
-                { sourceId: applicationId }
-            );
-        }
-        if (debtorId) {
-            matchOr.push({ 'metadata.debtorId': debtorId });
-        }
-        if (debtorForAccrual) {
-            matchOr.push({ 'metadata.debtorId': debtorForAccrual._id.toString() });
-        }
-
-        originalAccrual = await TransactionEntry.findOne({
-            source: 'rental_accrual',
-            status: { $nin: ['deleted', 'reversed'] },
-            'metadata.accrualMonth': monthNum,
-            'metadata.accrualYear': yearNum,
-            $or: matchOr
-        }).sort({ date: -1 });
-    }
+    const originalAccrual = await findRentAccrualForNegotiation({
+        studentId,
+        studentName,
+        applicationId,
+        debtorId,
+        accrualMonth: monthNum,
+        accrualYear: yearNum,
+        accrualTransactionId
+    });
 
     const { debtor, actualUserId } = await resolveDebtorForNegotiation({
         studentId,
@@ -427,5 +501,7 @@ async function createRentNegotiationAdjustment({
 }
 
 module.exports = {
-    createRentNegotiationAdjustment
+    createRentNegotiationAdjustment,
+    findRentAccrualForNegotiation,
+    resolveDebtorForNegotiation
 };

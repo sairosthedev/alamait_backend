@@ -2766,6 +2766,8 @@ class TransactionController {
                 accrualMonth,
                 accrualYear,
                 accrualTransactionId,
+                applicationId,
+                debtorId,
                 paymentType = 'rent' // NEW: Specify what type of payment is being negotiated
             } = req.body;
 
@@ -2823,6 +2825,40 @@ class TransactionController {
                 return res.status(400).json({
                     success: false,
                     message: 'Negotiated amount must differ from the current ledger amount'
+                });
+            }
+
+            // Rent negotiations use the shared service (robust accrual + debtor lookup)
+            if (paymentType === 'rent') {
+                const { createRentNegotiationAdjustment } = require('../../services/negotiatedPaymentService');
+                const result = await createRentNegotiationAdjustment({
+                    studentId,
+                    studentName,
+                    originalAmount: original,
+                    negotiatedAmount: negotiated,
+                    accrualMonth,
+                    accrualYear,
+                    accrualTransactionId,
+                    applicationId,
+                    debtorId,
+                    residenceId: residenceId || residence,
+                    negotiationReason,
+                    description,
+                    user: req.user
+                });
+
+                if (!result.success) {
+                    return res.status(400).json({
+                        success: false,
+                        message: result.error || 'Failed to create negotiated rent adjustment',
+                        data: result
+                    });
+                }
+
+                return res.status(200).json({
+                    success: true,
+                    message: result.skipped ? result.message : 'Negotiated rent adjustment created successfully',
+                    data: result
                 });
             }
 
@@ -2928,7 +2964,11 @@ class TransactionController {
                     }
                 }
 
-                if (!originalAccrual) {
+                if (!originalAccrual && original > 0) {
+                    console.warn(
+                        `⚠️ No accrual linked for ${studentName} ${accrualMonth}/${accrualYear} — proceeding with supplied originalAmount $${original}`
+                    );
+                } else if (!originalAccrual) {
                     return res.status(400).json({
                         success: false,
                         message: `No accrual found for student ${studentName} for ${accrualMonth}/${accrualYear}. Please ensure the monthly accrual or lease start transaction has been created first.`
