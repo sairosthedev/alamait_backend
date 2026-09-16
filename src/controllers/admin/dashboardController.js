@@ -184,34 +184,45 @@ exports.getMaintenanceStats = async (req, res) => {
     }
 };
 
-// Get occupancy statistics
+// Get occupancy statistics (lease-based, not stale embedded room.status)
 exports.getOccupancyStats = async (req, res) => {
     try {
+        const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
         const residences = await Residence.find();
-        
+
         let totalRooms = 0;
         let occupiedRooms = 0;
         const occupancyByResidence = [];
 
         for (const residence of residences) {
-            const totalRoomsInResidence = residence.rooms.length;
-            const occupiedRoomsInResidence = residence.rooms.filter(
-                room => room.status === 'occupied'
-            ).length;
+            let occupiedInResidence = 0;
+            for (const room of residence.rooms || []) {
+                const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(
+                    residence._id,
+                    room.roomNumber
+                );
+                if (occ.currentOccupancy > 0) {
+                    occupiedInResidence += 1;
+                }
+            }
 
+            const totalRoomsInResidence = residence.rooms.length;
             totalRooms += totalRoomsInResidence;
-            occupiedRooms += occupiedRoomsInResidence;
+            occupiedRooms += occupiedInResidence;
 
             occupancyByResidence.push({
                 residenceId: residence._id,
                 name: residence.name,
                 totalRooms: totalRoomsInResidence,
-                occupiedRooms: occupiedRoomsInResidence,
-                occupancyRate: (occupiedRoomsInResidence / totalRoomsInResidence) * 100
+                occupiedRooms: occupiedInResidence,
+                occupancyRate:
+                    totalRoomsInResidence > 0
+                        ? (occupiedInResidence / totalRoomsInResidence) * 100
+                        : 0
             });
         }
 
-        const overallOccupancyRate = (occupiedRooms / totalRooms) * 100;
+        const overallOccupancyRate = totalRooms > 0 ? (occupiedRooms / totalRooms) * 100 : 0;
 
         res.json({
             overall: {
@@ -435,6 +446,21 @@ exports.getRoomsWithOccupancy = async (req, res) => {
                             room.roomNumber
                         );
                         const currentOccupancy = occ.currentOccupancy;
+                        const derivedStatus =
+                            currentOccupancy === 0
+                                ? 'available'
+                                : currentOccupancy >= room.capacity
+                                  ? 'occupied'
+                                  : 'reserved';
+                        const leaseOccupants = (occ.validStudents || []).map((o) => ({
+                            id: o.id,
+                            applicationId: o.applicationId || null,
+                            name: o.name,
+                            email: o.email,
+                            leaseStart: o.leaseStart,
+                            leaseEnd: o.leaseEnd,
+                            status: o.status
+                        }));
                         return {
                             id: room._id,
                             roomNumber: room.roomNumber,
@@ -442,7 +468,8 @@ exports.getRoomsWithOccupancy = async (req, res) => {
                             capacity: room.capacity,
                             currentOccupancy,
                             occupancyRate: occ.occupancyRate,
-                            status: room.status,
+                            status: derivedStatus,
+                            storedStatus: room.status,
                             price: room.price,
                             features: room.features || [],
                             floor: room.floor,
@@ -457,13 +484,8 @@ exports.getRoomsWithOccupancy = async (req, res) => {
                                 amenities: residence.amenities || [],
                                 contactInfo: residence.contactInfo || {}
                             },
-                            occupants: room.occupants?.map((occupant) => ({
-                                id: occupant._id,
-                                name: `${occupant.firstName} ${occupant.lastName}`,
-                                email: occupant.email,
-                                phone: occupant.phone
-                            })) || [],
-                            leaseOccupants: occ.validStudents || [],
+                            occupants: leaseOccupants,
+                            leaseOccupants,
                             statistics: {
                                 averageOccupancy: room.averageOccupancy || 0,
                                 maintenanceRequests: room.maintenanceRequests || 0,
@@ -501,8 +523,8 @@ exports.getStudentsWithLocation = async (req, res) => {
         const { page = 1, limit = 1000, status, residence, search } = req.query;
         const { listStudentsIncludingExpired } = require('../../utils/studentUtils');
 
-        const statusFilter =
-            String(status || '').toLowerCase() === 'expired' ? 'expired' : 'all';
+        const rawStatus = String(status || 'all').toLowerCase();
+        const statusFilter = ['active', 'expired', 'all'].includes(rawStatus) ? rawStatus : 'all';
 
         const result = await listStudentsIncludingExpired({
             search,
@@ -514,13 +536,17 @@ exports.getStudentsWithLocation = async (req, res) => {
 
         const studentsWithLocation = result.students.map((student) => ({
             id: student._id || student.id,
+            applicationId: student.applicationId || null,
+            applicationCode: student.applicationCode || null,
             name: `${student.firstName || ''} ${student.lastName || ''}`.trim(),
             firstName: student.firstName,
             lastName: student.lastName,
             email: student.email,
             phone: student.phone,
-            status: student.isExpired ? 'expired' : student.status,
+            status: student.isExpired ? 'expired' : student.status || 'active',
             isExpired: Boolean(student.isExpired),
+            leaseActive: student.leaseActive !== false && !student.isExpired,
+            applicationOnly: Boolean(student.applicationOnly),
             applicationStatus: student.applicationStatus || null,
             expiredAt: student.expiredAt ? toApiCalendarIso(student.expiredAt) : null,
             debtorId: student.debtorId || null,

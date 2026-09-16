@@ -2783,8 +2783,16 @@ class TransactionController {
                 paymentType
             });
 
-            // Validate required fields
-            if (!description || !studentName || !studentId || !originalAmount || !negotiatedAmount) {
+            // Validate required fields (negotiatedAmount may be 0 — tenant absent that month)
+            const missingRequired =
+                !description
+                || !studentName
+                || !studentId
+                || originalAmount == null
+                || originalAmount === ''
+                || negotiatedAmount == null
+                || negotiatedAmount === '';
+            if (missingRequired) {
                 return res.status(400).json({
                     success: false,
                     message: 'Description, student name, student ID, original amount, and negotiated amount are required'
@@ -2804,10 +2812,10 @@ class TransactionController {
             const original = parseFloat(originalAmount);
             const negotiated = parseFloat(negotiatedAmount);
 
-            if (isNaN(original) || isNaN(negotiated) || original <= 0 || negotiated <= 0) {
+            if (isNaN(original) || isNaN(negotiated) || original <= 0 || negotiated < 0) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Original amount and negotiated amount must be positive numbers'
+                    message: 'Original amount must be greater than zero; negotiated amount must be zero or greater (use 0 when tenant was not present that month)'
                 });
             }
 

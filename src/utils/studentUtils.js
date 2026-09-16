@@ -498,14 +498,21 @@ async function getLinkedStudentIdentifiers(studentId) {
 }
 
 /**
- * When debtor.user stores an Application _id, map it to the real User _id.
+ * When debtor.user stores an Application _id or a dangling id, map to a real User _id when possible.
  */
 async function buildResolvedDebtorUserMap(debtors) {
     const Application = require('../models/Application');
     const User = require('../models/User');
     const map = new Map();
     const rawUserIds = [...new Set((debtors || []).map((d) => String(d.user)).filter(Boolean))];
-    if (!rawUserIds.length) return map;
+    const debtorAppIds = [
+        ...new Set((debtors || []).map((d) => d.application).filter(Boolean).map(String))
+    ];
+
+    const lookupIds = [...new Set([...rawUserIds, ...debtorAppIds])];
+    if (!lookupIds.length) {
+        return { map, validUserIds: new Set() };
+    }
 
     const existingUsers = new Set(
         (await User.find({ _id: { $in: rawUserIds } }).select('_id').lean()).map((u) =>
@@ -518,16 +525,54 @@ async function buildResolvedDebtorUserMap(debtors) {
     }
 
     const needsAppLookup = rawUserIds.filter((id) => !existingUsers.has(id));
-    if (needsAppLookup.length) {
-        const apps = await Application.find({ _id: { $in: needsAppLookup } })
-            .select('student')
-            .lean();
-        for (const app of apps) {
-            if (app.student) map.set(String(app._id), String(app.student));
+    const appIdsToLoad = [...new Set([...needsAppLookup, ...debtorAppIds])];
+    const apps = appIdsToLoad.length
+        ? await Application.find({ _id: { $in: appIdsToLoad } }).select('student').lean()
+        : [];
+    const appById = new Map(apps.map((a) => [String(a._id), a]));
+
+    for (const id of needsAppLookup) {
+        const app = appById.get(id);
+        if (app?.student) map.set(id, String(app.student));
+    }
+
+    for (const d of debtors || []) {
+        const raw = d.user ? String(d.user) : null;
+        if (!raw || map.has(raw) || existingUsers.has(raw)) continue;
+        const linkedApp = d.application ? appById.get(String(d.application)) : null;
+        if (linkedApp?.student) {
+            map.set(raw, String(linkedApp.student));
         }
     }
 
-    return map;
+    return { map, validUserIds: existingUsers };
+}
+
+function parseStatusFilter(status) {
+    const raw = String(status || 'all').toLowerCase();
+    if (raw === 'active' || raw === 'expired' || raw === 'all') return raw;
+    return 'all';
+}
+
+function scoreApplicationForTenant(app, asOf = new Date()) {
+    if (!app) return -1000;
+    const status = String(app.status || '').toLowerCase();
+    if (['cancelled', 'rejected', 'forfeited', 'waitlisted'].includes(status)) return -1000;
+    if (!app.startDate || !app.endDate) return -100;
+    const start = new Date(app.startDate);
+    const end = new Date(app.endDate);
+    if (end < asOf) return 10 + start.getTime() / 1e15;
+    if (start > asOf) return 20 + start.getTime() / 1e15;
+    let score = 100;
+    if (status === 'approved') score += 50;
+    return score + start.getTime() / 1e15;
+}
+
+function pickBestApplication(candidates, asOf = new Date()) {
+    if (!candidates?.length) return null;
+    return [...candidates].sort(
+        (a, b) => scoreApplicationForTenant(b, asOf) - scoreApplicationForTenant(a, asOf)
+    )[0];
 }
 
 /**
@@ -538,8 +583,10 @@ async function buildResolvedDebtorUserMap(debtors) {
  */
 function isApplicationExpired(app) {
     if (!app) return false;
-    if (String(app.status || '').toLowerCase() === 'expired') return true;
+    const status = String(app.status || '').toLowerCase();
+    if (['cancelled', 'rejected', 'forfeited'].includes(status)) return true;
     if (app.endDate && new Date(app.endDate) < new Date()) return true;
+    // Lease end still in the future — active even if status was wrongly set to expired
     return false;
 }
 
@@ -569,25 +616,24 @@ async function enrichStudentsWithApplications(students) {
 
     const applications = orClauses.length
         ? await Application.find({ $or: orClauses })
-              .select('student email status startDate endDate allocatedRoom residence createdAt')
+              .select(
+                  'student email phone firstName lastName status startDate endDate allocatedRoom residence createdAt applicationCode'
+              )
               .sort({ startDate: -1, createdAt: -1 })
               .lean()
         : [];
+
+    const now = new Date();
 
     const pickBestApp = (student) => {
         const sid = String(student.id || student._id || '');
         const candidates = applications.filter(
             (a) =>
                 (sid && String(a.student) === sid) ||
-                (student.email && a.email && a.email === student.email) ||
-                (student.applicationId && String(a._id) === String(student.applicationId))
+                (student.applicationId && String(a._id) === String(student.applicationId)) ||
+                (student.email && a.email && a.email.toLowerCase() === student.email.toLowerCase())
         );
-        if (!candidates.length) return null;
-        return candidates.sort(
-            (a, b) =>
-                new Date(b.startDate || 0).getTime() - new Date(a.startDate || 0).getTime() ||
-                new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-        )[0];
+        return pickBestApplication(candidates, now);
     };
 
     return students.map((student) => {
@@ -595,18 +641,24 @@ async function enrichStudentsWithApplications(students) {
         if (!app) return student;
 
         const appExpired = isApplicationExpired(app);
-        const isExpired = Boolean(student.isExpired || appExpired);
+        const isExpired = appExpired;
 
         return {
             ...student,
             applicationId: student.applicationId || String(app._id),
+            applicationCode: student.applicationCode || app.applicationCode || null,
             applicationStatus: app.status || null,
+            firstName: student.firstName || app.firstName || '',
+            lastName: student.lastName || app.lastName || '',
+            email: student.email || app.email || '',
+            phone: student.phone || app.phone || '',
             startDate: app.startDate || student.startDate || null,
             endDate: app.endDate || student.endDate || null,
-            currentRoom: student.currentRoom || app.allocatedRoom || null,
-            roomValidUntil: student.roomValidUntil || app.endDate || null,
+            currentRoom: app.allocatedRoom || student.currentRoom || null,
+            roomValidUntil: app.endDate || student.roomValidUntil || null,
             isExpired,
-            status: isExpired ? 'expired' : student.status || app.status || 'active'
+            status: isExpired ? 'expired' : 'active',
+            leaseActive: !appExpired
         };
     });
 }
@@ -629,7 +681,7 @@ async function listStudentsIncludingExpired({
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10) || 50));
-    const statusFilter = String(status || 'all').toLowerCase();
+    const statusFilter = parseStatusFilter(status);
     const searchTrim = String(search || '').trim();
     const searchRe = searchTrim
         ? new RegExp(searchTrim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
@@ -811,13 +863,14 @@ async function listStudentsIncludingExpired({
         });
     }
 
-    // Resolve debtor.user when it wrongly stores an Application _id instead of User _id
-    const debtorUserMap = await buildResolvedDebtorUserMap(debtors);
+    const { map: debtorUserMap, validUserIds } = await buildResolvedDebtorUserMap(debtors);
 
     const debtorAppIds = debtors.map((d) => d.application).filter(Boolean);
     const debtorApps = debtorAppIds.length
         ? await Application.find({ _id: { $in: debtorAppIds } })
-              .select('status startDate endDate allocatedRoom')
+              .select(
+                  'status startDate endDate allocatedRoom firstName lastName email phone student residence applicationCode'
+              )
               .lean()
         : [];
     const debtorAppById = new Map(debtorApps.map((a) => [String(a._id), a]));
@@ -832,20 +885,23 @@ async function listStudentsIncludingExpired({
         const phone = d.contactInfo?.phone || '';
 
         const linkedApp = d.application ? debtorAppById.get(String(d.application)) : null;
-        const isExpired =
-            Boolean(d.isExpired) ||
-            d.status === 'expired' ||
-            String(d.status || '').toLowerCase() === 'inactive' ||
-            isApplicationExpired(linkedApp);
+        const isExpired = linkedApp
+            ? isApplicationExpired(linkedApp)
+            : Boolean(d.isExpired) ||
+              d.status === 'expired' ||
+              String(d.status || '').toLowerCase() === 'inactive';
 
         if (!includeExpired && isExpired) continue;
         if (!includeActive && !isExpired) continue;
 
         const userIdRaw = d.user ? String(d.user) : null;
-        const userId = userIdRaw ? (debtorUserMap.get(userIdRaw) || userIdRaw) : null;
+        let userId = userIdRaw ? (debtorUserMap.get(userIdRaw) || userIdRaw) : null;
+        if (userId && !validUserIds.has(userId)) {
+            userId = null;
+        }
         const debtorId = String(d._id);
-        // Prefer real user id as the selectable student id (payments reference student user)
-        const primaryId = userId || debtorId;
+        const applicationId = d.application ? String(d.application) : null;
+        const primaryId = userId || applicationId || debtorId;
 
         let studentResidence = d.residence || null;
         if (studentResidence && typeof studentResidence === 'object' && studentResidence._id) {
@@ -860,20 +916,22 @@ async function listStudentsIncludingExpired({
                 ? new mongoose.Types.ObjectId(primaryId)
                 : primaryId,
             id: primaryId,
-            firstName: firstName || 'Tenant',
-            lastName,
-            email,
-            phone,
-            status: isExpired ? 'expired' : d.status || 'active',
+            firstName: linkedApp?.firstName || firstName || 'Tenant',
+            lastName: linkedApp?.lastName || lastName,
+            email: linkedApp?.email || email,
+            phone: linkedApp?.phone || phone,
+            status: isExpired ? 'expired' : 'active',
             isExpired,
+            applicationOnly: !userId,
             expiredAt: d.expiredAt || null,
             expirationReason: d.expirationReason || null,
-            residence: studentResidence,
-            currentRoom: d.roomNumber || linkedApp?.allocatedRoom || null,
+            residence: studentResidence || linkedApp?.residence || null,
+            currentRoom: linkedApp?.allocatedRoom || d.roomNumber || null,
             roomValidUntil: linkedApp?.endDate || null,
             startDate: linkedApp?.startDate || null,
             endDate: linkedApp?.endDate || null,
-            applicationId: d.application ? String(d.application) : null,
+            applicationId,
+            applicationCode: linkedApp?.applicationCode || null,
             applicationStatus: linkedApp?.status || null,
             createdAt: d.createdAt || null,
             source: userId && byId.has(userId) ? byId.get(userId).source : 'debtor',

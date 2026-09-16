@@ -577,17 +577,33 @@ exports.getRoomsByResidence = async (req, res) => {
                     residenceId,
                     room.roomNumber
                 );
+                const leaseOccupants = (occ.validStudents || []).map((o) => ({
+                    id: o.id,
+                    applicationId: o.applicationId || null,
+                    name: o.name,
+                    email: o.email,
+                    leaseStart: o.leaseStart,
+                    leaseEnd: o.leaseEnd
+                }));
                 return {
                     roomNumber: room.roomNumber,
                     type: room.type,
                     capacity: room.capacity,
                     price: room.price,
-                    status: room.status,
+                    status:
+                        occ.currentOccupancy === 0
+                            ? 'available'
+                            : occ.currentOccupancy >= room.capacity
+                              ? 'occupied'
+                              : 'reserved',
+                    storedStatus: room.status,
                     currentOccupancy: occ.currentOccupancy,
                     floor: room.floor,
                     area: room.area,
                     features: room.features || [],
-                    isAvailable: occ.isAvailable
+                    isAvailable: occ.isAvailable,
+                    occupants: leaseOccupants,
+                    leaseOccupants
                 };
             })
         );
@@ -625,17 +641,33 @@ exports.getResidenceRooms = async (req, res) => {
                     residence._id,
                     room.roomNumber
                 );
+                const leaseOccupants = (occ.validStudents || []).map((o) => ({
+                    id: o.id,
+                    applicationId: o.applicationId || null,
+                    name: o.name,
+                    email: o.email,
+                    leaseStart: o.leaseStart,
+                    leaseEnd: o.leaseEnd
+                }));
                 return {
                     roomNumber: room.roomNumber,
                     type: room.type,
                     capacity: room.capacity,
                     currentOccupancy: occ.currentOccupancy,
-                    status: room.status,
+                    status:
+                        occ.currentOccupancy === 0
+                            ? 'available'
+                            : occ.currentOccupancy >= room.capacity
+                              ? 'occupied'
+                              : 'reserved',
+                    storedStatus: room.status,
                     price: room.price,
                     floor: room.floor,
                     area: room.area,
                     features: room.features || [],
-                    isAvailable: occ.isAvailable
+                    isAvailable: occ.isAvailable,
+                    occupants: leaseOccupants,
+                    leaseOccupants
                 };
             })
         );

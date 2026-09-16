@@ -916,7 +916,13 @@ class BillingDiscrepancyService {
         if (comparison.status === 'amount_lower_in_system') {
             return 'System effective rent is below Excel actual — negotiate up to match monthly room rate';
         }
-        if (comparison.status === 'amount_higher_in_system' || comparison.fixAction === 'negotiate') {
+        if (
+            comparison.status === 'amount_higher_in_system'
+            || comparison.fixAction === 'negotiate'
+        ) {
+            if (comparison.actualAmount != null && Number(comparison.actualAmount) <= 0.01) {
+                return 'Tenant not present this month — negotiate ledger rent down to zero';
+            }
             return 'System effective rent is above Excel actual — negotiate down';
         }
         if (comparison.status === 'missing_from_system') {
@@ -3025,7 +3031,9 @@ class BillingDiscrepancyService {
                         debtorId,
                         reason: row.actualAmount > (systemAmount ?? dbAccrualAmount)
                             ? 'Reconciliation — room rate increase for month'
-                            : 'Reconciliation — adjusted to actual amount'
+                            : Number(row.actualAmount) <= 0.01
+                                ? 'Tenant not present this month — rent waived to zero'
+                                : 'Reconciliation — adjusted to actual amount'
                     }
                     : null,
                 reconcileParams: fixAction === 'reconcile_accrual' && applicationId

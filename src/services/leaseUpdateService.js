@@ -120,6 +120,12 @@ class LeaseUpdateService {
 
         const debtorSync = await this.syncDebtorLeaseFromApplication(app, updatedBy);
 
+        try {
+            await LeaseUpdateService.syncTenantRoomTracking(app.toObject ? app.toObject() : app);
+        } catch (roomErr) {
+            console.error(`⚠️ Room sync after accrual backfill: ${roomErr.message}`);
+        }
+
         return {
             success: true,
             applicationId: ctx.applicationId,
@@ -377,6 +383,15 @@ class LeaseUpdateService {
                 application.endDate = normalizedEndDate;
                 application.updatedBy = updatedBy;
                 application.updatedAt = new Date();
+
+                const now = new Date();
+                const terminalStatuses = ['cancelled', 'rejected', 'forfeited', 'waitlisted'];
+                if (
+                    normalizedEndDate >= now &&
+                    !terminalStatuses.includes(String(application.status || '').toLowerCase())
+                ) {
+                    application.status = 'approved';
+                }
                 
                 await application.save({ session });
                 console.log(`✅ Updated application lease dates:`);
@@ -498,8 +513,27 @@ class LeaseUpdateService {
                 console.log(`   Before: Start: ${originalStartDate?.toISOString().split('T')[0]}, End: ${originalEndDate?.toISOString().split('T')[0]}`);
                 console.log(`   After: Start: ${application.startDate.toISOString().split('T')[0]}, End: ${application.endDate.toISOString().split('T')[0]}`);
                 
+                if (student) {
+                    const roomNumber =
+                        application.allocatedRoom ||
+                        application.allocatedRoomDetails?.roomNumber ||
+                        student.currentRoom;
+                    if (roomNumber) {
+                        student.currentRoom = roomNumber;
+                    }
+                    student.roomValidUntil = normalizedEndDate;
+                    await student.save({ session });
+                }
+
                 console.log(`🎉 Lease date update completed for application: ${application.applicationCode}`);
             });
+
+            try {
+                const appForRoom = await Application.findById(resolvedApplicationId).lean();
+                await LeaseUpdateService.syncTenantRoomTracking(appForRoom);
+            } catch (roomSyncError) {
+                console.error(`⚠️ Room tracking sync after lease update: ${roomSyncError.message}`);
+            }
 
             if (accrualReversalContext) {
                 console.log(`⚠️ Application end date moved earlier - reversing accruals after lease commit...`);
@@ -802,6 +836,19 @@ class LeaseUpdateService {
 
         debtor.leaseInfo.startDate = new Date(application.startDate);
         debtor.leaseInfo.endDate = new Date(application.endDate);
+        const roomNumber =
+            application.allocatedRoom ||
+            application.allocatedRoomDetails?.roomNumber ||
+            debtor.roomNumber;
+        if (roomNumber) {
+            debtor.roomNumber = roomNumber;
+        }
+        if (new Date(application.endDate) >= new Date()) {
+            debtor.isExpired = false;
+            if (debtor.status === 'expired' || debtor.status === 'inactive') {
+                debtor.status = 'active';
+            }
+        }
         if (mongoose.Types.ObjectId.isValid(String(updatedBy))) {
             debtor.updatedBy = updatedBy;
         }
@@ -816,6 +863,27 @@ class LeaseUpdateService {
         await this.applySession(debtor.save(), session);
         console.log(`✅ Synced debtor ${debtor.debtorCode} lease dates and financials`);
         return { updated: true, debtorCode: debtor.debtorCode };
+    }
+
+    /**
+     * Keep room occupancy + debtor room fields aligned with the application lease.
+     */
+    static async syncTenantRoomTracking(application) {
+        if (!application) return { updated: false };
+
+        const RoomOccupancyUtils = require('../utils/roomOccupancyUtils');
+        const roomNumber =
+            application.allocatedRoom || application.allocatedRoomDetails?.roomNumber;
+        const residenceId = application.residence?._id || application.residence;
+
+        if (roomNumber && residenceId) {
+            await RoomOccupancyUtils.updateRoomOccupancy(
+                String(residenceId),
+                roomNumber
+            );
+        }
+
+        return { updated: true, roomNumber: roomNumber || null, residenceId: residenceId || null };
     }
 
     /**

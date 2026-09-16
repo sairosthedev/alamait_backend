@@ -470,8 +470,8 @@ exports.getAllStudents = async (req, res) => {
         const { page = 1, limit = 1000, search, status, residence } = req.query;
         const { listStudentsIncludingExpired } = require('../../utils/studentUtils');
 
-        const statusFilter =
-            String(status || '').toLowerCase() === 'expired' ? 'expired' : 'all';
+        const rawStatus = String(status || 'all').toLowerCase();
+        const statusFilter = ['active', 'expired', 'all'].includes(rawStatus) ? rawStatus : 'all';
 
         const result = await listStudentsIncludingExpired({
             search,

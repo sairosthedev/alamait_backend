@@ -181,8 +181,27 @@ async function createRentNegotiationAdjustment({
     const original = parseFloat(originalAmount);
     const negotiated = parseFloat(negotiatedAmount);
 
-    if (!studentId || !studentName || !Number.isFinite(original) || !Number.isFinite(negotiated)) {
-        return { success: false, error: 'studentId, studentName, originalAmount, and negotiatedAmount are required' };
+    if (
+        !studentId
+        || !studentName
+        || originalAmount == null
+        || originalAmount === ''
+        || negotiatedAmount == null
+        || negotiatedAmount === ''
+    ) {
+        return {
+            success: false,
+            error: 'studentId, studentName, originalAmount, and negotiatedAmount are required'
+        };
+    }
+    if (!Number.isFinite(original) || !Number.isFinite(negotiated)) {
+        return { success: false, error: 'originalAmount and negotiatedAmount must be valid numbers' };
+    }
+    if (original <= 0) {
+        return { success: false, error: 'originalAmount must be greater than zero' };
+    }
+    if (negotiated < 0) {
+        return { success: false, error: 'negotiatedAmount cannot be negative (use 0 when tenant was not present)' };
     }
     if (Math.abs(negotiated - original) < 0.01) {
         return { success: false, error: 'Negotiated amount must differ from the current ledger amount' };
@@ -320,7 +339,9 @@ async function createRentNegotiationAdjustment({
         discountAmount: isIncrease ? 0 : adjustmentAmount,
         negotiationReason: negotiationReason || (isIncrease
             ? 'Reconciliation — room rate increase for month'
-            : 'Reconciliation — adjusted to actual amount'),
+            : negotiated <= 0.01
+                ? 'Tenant not present this month — rent waived to zero'
+                : 'Reconciliation — adjusted to actual amount'),
         accrualMonth: monthNum,
         accrualYear: yearNum,
         originalAccrualId: originalAccrual?._id

@@ -16,7 +16,7 @@ class RoomOccupancyUtils {
     static buildLeaseActiveQuery(residenceId, roomNumber, asOf) {
         return {
             residence: residenceId,
-            status: 'approved',
+            status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
             startDate: { $exists: true, $ne: null, $lte: asOf },
             endDate: { $exists: true, $ne: null, $gte: asOf },
             paymentStatus: { $ne: 'cancelled' },
@@ -35,7 +35,7 @@ class RoomOccupancyUtils {
         const end = new Date(periodEnd);
         const query = {
             residence: residenceId,
-            status: 'approved',
+            status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
             startDate: { $exists: true, $ne: null, $lte: end },
             endDate: { $exists: true, $ne: null, $gte: start },
             paymentStatus: { $ne: 'cancelled' },
@@ -115,12 +115,17 @@ class RoomOccupancyUtils {
 
             const addFromApplication = (app) => {
                 const sid = app.student && (app.student._id || app.student);
-                const key = sid ? String(sid) : (app.email && String(app.email).toLowerCase()) || null;
+                const key = sid
+                    ? String(sid)
+                    : (app._id && String(app._id)) ||
+                      (app.email && String(app.email).toLowerCase()) ||
+                      null;
                 if (!key) {
                     return;
                 }
                 allOccupants.set(key, {
-                    id: sid || null,
+                    id: sid || String(app._id),
+                    applicationId: app._id,
                     name: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
                     email: app.email,
                     status: app.status,
@@ -149,6 +154,7 @@ class RoomOccupancyUtils {
                 isAvailable: validStudents.length < capacity,
                 validStudents: validStudents.map((s) => ({
                     id: s.id,
+                    applicationId: s.applicationId || null,
                     name: s.name,
                     email: s.email,
                     status: s.status,
