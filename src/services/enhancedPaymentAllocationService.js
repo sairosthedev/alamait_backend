@@ -74,6 +74,180 @@ class EnhancedPaymentAllocationService {
   }
 
   /**
+   * Find a monthly rent accrual by metadata month (not just transaction date).
+   */
+  static async findAccrualForPaymentMonth({
+    paymentMonthKey,
+    accountCode,
+    userId,
+    applicationId,
+    debtorId
+  }) {
+    if (!paymentMonthKey) return null;
+
+    const [yearStr, monStr] = paymentMonthKey.split('-');
+    const monthNum = parseInt(monStr, 10);
+    const yearNum = parseInt(yearStr, 10);
+    if (!monthNum || !yearNum) return null;
+
+    const RentalAccrualService = require('./rentalAccrualService');
+    const candidateIds = [...new Set([userId, applicationId, debtorId].filter(Boolean).map(String))];
+
+    for (const id of candidateIds) {
+      const found = await RentalAccrualService.checkExistingMonthlyAccrual(
+        id,
+        monthNum,
+        yearNum,
+        applicationId,
+        debtorId
+      );
+      if (found) return found;
+    }
+
+    if (accountCode) {
+      const monthKey = paymentMonthKey;
+      const byMetadata = await TransactionEntry.findOne({
+        source: { $in: ['rental_accrual', 'lease_start'] },
+        status: { $nin: ['reversed', 'deleted'] },
+        voided: { $ne: true },
+        'entries.accountCode': accountCode,
+        $or: [
+          { 'metadata.accrualMonth': monthNum, 'metadata.accrualYear': yearNum },
+          { 'metadata.accrualMonth': String(monthNum), 'metadata.accrualYear': String(yearNum) },
+          { 'metadata.month': monthKey },
+          { description: { $regex: new RegExp(monthKey.replace('-', '[-/]')) } }
+        ]
+      }).sort({ date: -1 });
+
+      if (byMetadata) return byMetadata;
+    }
+
+    return null;
+  }
+
+  /**
+   * Build an outstanding-balance month row from a known accrual transaction.
+   */
+  static async computeMonthOutstandingFromAccrual(accrualForMonth, paymentMonthKey, debtorAccountCode) {
+    if (!accrualForMonth || !paymentMonthKey || !debtorAccountCode) return null;
+
+    const paymentMonthDate = new Date(`${paymentMonthKey}-01T12:00:00.000Z`);
+    const accrualEntry = accrualForMonth.entries?.find(
+      (e) => e.accountCode === debtorAccountCode && e.debit > 0
+    );
+    const accrualAmount = accrualEntry?.debit || 0;
+
+    const paymentAllocations = await TransactionEntry.find({
+      'entries.accountCode': debtorAccountCode,
+      source: { $in: ['payment', 'advance_payment_application', 'accounts_receivable_collection'] },
+      status: { $ne: 'reversed' },
+      'metadata.monthSettled': paymentMonthKey
+    }).lean();
+
+    let totalPaid = 0;
+    paymentAllocations.forEach((tx) => {
+      const creditEntry = tx.entries?.find(
+        (e) => e.accountCode === debtorAccountCode && e.credit > 0
+      );
+      if (creditEntry) totalPaid += creditEntry.credit;
+    });
+
+    const [yearStr, monStr] = paymentMonthKey.split('-');
+    const negotiatedAdjustments = await TransactionEntry.find({
+      'entries.accountCode': debtorAccountCode,
+      source: 'manual',
+      status: { $ne: 'reversed' },
+      $and: [
+        {
+          $or: [
+            { 'metadata.type': 'negotiated_payment_adjustment' },
+            { 'metadata.transactionType': 'negotiated_payment_adjustment' },
+            { description: { $regex: /negotiated|discount/i } }
+          ]
+        },
+        {
+          $or: [
+            { 'metadata.accrualMonth': parseInt(monStr, 10), 'metadata.accrualYear': parseInt(yearStr, 10) },
+            { 'metadata.monthSettled': paymentMonthKey },
+            { 'metadata.month': paymentMonthKey }
+          ]
+        }
+      ]
+    }).lean();
+
+    let totalNegotiatedDiscount = 0;
+    negotiatedAdjustments.forEach((adj) => {
+      const creditEntry = adj.entries?.find(
+        (e) => e.accountCode === debtorAccountCode && e.credit > 0
+      );
+      if (creditEntry) totalNegotiatedDiscount += creditEntry.credit;
+    });
+
+    const netAccrualAmount = Math.max(0, accrualAmount - totalNegotiatedDiscount);
+    const outstanding = netAccrualAmount - totalPaid;
+
+    return {
+      monthKey: paymentMonthKey,
+      year: paymentMonthDate.getFullYear(),
+      month: paymentMonthDate.getMonth() + 1,
+      monthName: paymentMonthDate.toLocaleString('default', { month: 'long' }),
+      rent: { owed: netAccrualAmount, paid: totalPaid, outstanding: Math.max(0, outstanding) },
+      adminFee: { owed: 0, paid: 0, outstanding: 0 },
+      deposit: { owed: 0, paid: 0, outstanding: 0 },
+      levies: { owed: 0, paid: 0, outstanding: 0 },
+      totalOutstanding: Math.max(0, outstanding),
+      transactionId: accrualForMonth._id,
+      date: accrualForMonth.date,
+      metadata: accrualForMonth.metadata
+    };
+  }
+
+  /**
+   * When ledger shows an accrual for the payment month, inject it into outstandingBalances.
+   */
+  static async ensurePaymentMonthInOutstandingBalances(
+    outstandingBalances,
+    paymentMonthKey,
+    accountCode,
+    userId,
+    applicationId,
+    debtorId
+  ) {
+    let balances = outstandingBalances ? [...outstandingBalances] : [];
+    const existing = balances.find((b) => b.monthKey === paymentMonthKey);
+    if (existing?.rent?.outstanding > 0 && this.monthHasVerifiedRentAccrual(existing)) {
+      return balances;
+    }
+
+    const accrual = await this.findAccrualForPaymentMonth({
+      paymentMonthKey,
+      accountCode,
+      userId,
+      applicationId,
+      debtorId
+    });
+
+    if (!accrual) return balances;
+
+    const monthRow = await this.computeMonthOutstandingFromAccrual(
+      accrual,
+      paymentMonthKey,
+      accountCode
+    );
+    if (!monthRow) return balances;
+
+    balances = balances.filter((b) => b.monthKey !== paymentMonthKey);
+    if (monthRow.rent.outstanding > 0 || monthRow.rent.owed > 0) {
+      balances.push(monthRow);
+      console.log(
+        `✅ Injected payment month ${paymentMonthKey} from accrual ${accrual._id} — outstanding $${monthRow.rent.outstanding}`
+      );
+    }
+
+    return balances;
+  }
+
+  /**
    * Order months for component allocation when paymentMonth is set on the payment.
    * Rent with an explicit paymentMonth: settle ONLY that month (remainder → advance).
    * Otherwise: payment month first, then earlier months that have verified accruals.
@@ -337,8 +511,14 @@ class EnhancedPaymentAllocationService {
       // STEP 3: Determine payment month
       const paymentDate = new Date(paymentData.date);
       const paymentMonthKey = paymentData.paymentMonth || `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
+      const paymentDateMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
+      const isSameMonthAsPaymentDate = paymentMonthKey === paymentDateMonthKey;
       console.log(`📅 Payment month: ${paymentMonthKey}`);
       console.log(`📅 Payment date: ${paymentDate.toISOString().split('T')[0]}`);
+
+      const accountCodeForQuery = finalAccountCode || debtorDoc?.accountCode;
+      const debtorApplicationId = debtorDoc?.application?.toString?.() || paymentData.applicationId || null;
+      const debtorIdStr = debtorDoc?._id?.toString?.() || paymentData.debtorId || null;
 
       // Payment month before lease start → no rent is due yet; whole amount is advance
       let forceAdvanceBeforeLease = false;
@@ -353,13 +533,23 @@ class EnhancedPaymentAllocationService {
           );
         }
       }
+
+      // Attach payment month's accrual by metadata month (not transaction date alone)
+      if (accountCodeForQuery && paymentMonthKey && !forceAdvanceBeforeLease) {
+        outstandingBalances = await this.ensurePaymentMonthInOutstandingBalances(
+          outstandingBalances,
+          paymentMonthKey,
+          accountCodeForQuery,
+          actualUserId,
+          debtorApplicationId,
+          debtorIdStr
+        );
+      }
       
       // 🆕 CRITICAL: Check if payment date is before payment month (advance payment detection)
       // Compare YYYY-MM keys to avoid timezone edge cases (e.g. Apr 6 local vs Apr 1 UTC).
       let isAdvancePaymentByDate = forceAdvanceBeforeLease;
       if (!isAdvancePaymentByDate && paymentData.paymentMonth) {
-        const paymentDateMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
-
         if (paymentDateMonthKey < paymentData.paymentMonth) {
           isAdvancePaymentByDate = true;
           console.log(`⚠️ ADVANCE PAYMENT DETECTED: Payment date month (${paymentDateMonthKey}) is before payment month (${paymentData.paymentMonth})`);
@@ -510,6 +700,22 @@ class EnhancedPaymentAllocationService {
           console.log(`   👉 Will allocate to current/previous months first; ONLY true excess will be advance`);
           // Do NOT return here – fall through into normal allocation flow below.
         } else {
+          if (accountCodeForQuery && paymentData.paymentMonth) {
+            outstandingBalances = await this.ensurePaymentMonthInOutstandingBalances(
+              outstandingBalances,
+              paymentData.paymentMonth,
+              accountCodeForQuery,
+              actualUserId,
+              debtorApplicationId,
+              debtorIdStr
+            );
+          }
+
+          if (outstandingBalances && outstandingBalances.length > 0) {
+            console.log(
+              `✅ Found accrual/outstanding for payment month ${paymentData.paymentMonth} — settling accrual instead of advance`
+            );
+          } else {
           console.log(`⚠️ Payment date is before payment month and no outstanding balances exist`);
           console.log(`   ✅ Treating entire payment as ADVANCE (deferred income for future periods)`);
           
@@ -563,52 +769,20 @@ class EnhancedPaymentAllocationService {
             },
             allocationRecord
           };
+          }
         }
       }
       
-      // 🆕 CRITICAL FIX: Before treating as advance payment, check if accrual exists for payment month
-      // Even if getDetailedOutstandingBalances returns empty, we should check directly for accruals
-      if ((!outstandingBalances || outstandingBalances.length === 0) && finalAccountCode && paymentData.paymentMonth) {
-        console.log(`🔍 Double-checking for accruals for payment month: ${paymentData.paymentMonth}`);
-        console.log(`   Using account code: ${finalAccountCode}`);
-        
-        try {
-          const paymentMonthDate = new Date(paymentData.paymentMonth + '-01'); // Parse YYYY-MM format
-          const paymentMonthStart = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth(), 1);
-          const paymentMonthEnd = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth() + 1, 0, 23, 59, 59, 999);
-          
-          const directAccrualCheck = await TransactionEntry.findOne({
-            'entries.accountCode': finalAccountCode,
-            source: { $in: ['rental_accrual', 'lease_start'] },
-            status: { $ne: 'reversed' },
-            voided: { $ne: true },
-            date: {
-              $gte: paymentMonthStart,
-              $lte: paymentMonthEnd
-            }
-          }).lean();
-          
-          if (directAccrualCheck) {
-            console.warn(`⚠️  CRITICAL: Found accrual for payment month ${paymentData.paymentMonth}!`);
-            console.warn(`   Accrual ID: ${directAccrualCheck._id}`);
-            console.warn(`   This payment should NOT be an advance payment - it should settle the accrual!`);
-            console.warn(`   Re-checking outstanding balances with direct accrual...`);
-            
-            // Re-check outstanding balances now that we know accrual exists
-            outstandingBalances = await this.getDetailedOutstandingBalances(actualUserId);
-            if (outstandingBalances && outstandingBalances.length > 0) {
-              console.log(`✅ Found outstanding balances after direct accrual check - processing as regular payment`);
-              // Continue with normal allocation flow below
-            } else {
-              console.error(`❌ Accrual exists but getDetailedOutstandingBalances returned empty - this is a bug!`);
-              console.error(`   Accrual: ${directAccrualCheck._id}, Account Code: ${finalAccountCode}`);
-            }
-          } else {
-            console.log(`✅ Confirmed: No accrual found for payment month ${paymentData.paymentMonth} - can proceed as advance payment`);
-          }
-        } catch (directCheckError) {
-          console.error(`❌ Error in direct accrual check: ${directCheckError.message}`);
-        }
+      // Re-inject payment month accrual if balances still empty (getDetailedOutstandingBalances can miss metadata month)
+      if ((!outstandingBalances || outstandingBalances.length === 0) && accountCodeForQuery && paymentMonthKey) {
+        outstandingBalances = await this.ensurePaymentMonthInOutstandingBalances(
+          outstandingBalances,
+          paymentMonthKey,
+          accountCodeForQuery,
+          actualUserId,
+          debtorApplicationId,
+          debtorIdStr
+        );
       }
       
       // 🧾 DEBUG LOG: If we STILL think there are no outstanding balances, dump key context
@@ -647,14 +821,24 @@ class EnhancedPaymentAllocationService {
           // Wait a bit and check again for accruals (in case accrual is being created concurrently)
           await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
           
-          // Re-check for outstanding balances
-          const recheckBalances = await this.getDetailedOutstandingBalances(actualUserId);
+          let recheckBalances = await this.getDetailedOutstandingBalances(actualUserId);
+          if (accountCodeForQuery && paymentMonthKey) {
+            recheckBalances = await this.ensurePaymentMonthInOutstandingBalances(
+              recheckBalances,
+              paymentMonthKey,
+              accountCodeForQuery,
+              actualUserId,
+              debtorApplicationId,
+              debtorIdStr
+            );
+          }
           if (recheckBalances && recheckBalances.length > 0) {
             console.log(`✅ Found accruals after waiting - processing as regular payment allocation`);
-            // Continue with normal allocation flow (will fall through to next section)
             outstandingBalances = recheckBalances;
-          } else {
-            console.log(`⚠️ Still no accruals found - treating as advance payment`);
+          } else if (isSameMonthAsPaymentDate) {
+            console.log(
+              `⚠️ Same-month payment (${paymentMonthKey}) but no accrual found — treating as advance (accrual may post later)`
+            );
             console.log(`   ⚠️ Note: This may create both advance_payment and payment_allocation if accrual is created later`);
             console.log(`   ⚠️ Consider creating accrual before processing payment for current month`);
             
