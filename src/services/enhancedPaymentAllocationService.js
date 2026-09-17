@@ -2154,8 +2154,18 @@ class EnhancedPaymentAllocationService {
       
       const debtorId = debtorDoc?._id?.toString();
       const actualUserId = debtorDoc?.user?.toString() || userIdString; // Use actual user ID from debtor if found
-      
+      const legacyArAccountCode =
+        actualUserId && arAccountCode !== `1100-${actualUserId}` ? `1100-${actualUserId}` : null;
+      const arAccountCodes = [arAccountCode, legacyArAccountCode].filter(
+        (code, index, arr) => code && arr.indexOf(code) === index
+      );
+      const isDebtorArCode = (code) =>
+        !!code && (arAccountCodes.includes(code) || String(code).startsWith('1100-'));
+
       console.log(`🔍 Debtor found: ${!!debtorDoc}, AR Account Code: ${arAccountCode}, Debtor ID: ${debtorId || 'N/A'}`);
+      if (legacyArAccountCode) {
+        console.log(`🔍 Also merging legacy AR account: ${legacyArAccountCode}`);
+      }
       console.log(`🔍 Query User ID: ${userIdString}, Actual User ID: ${actualUserId}`);
       if (actualUserId !== userIdString) {
         console.log(`⚠️ User ID mismatch detected - using actual user ID for queries`);
@@ -2281,11 +2291,13 @@ class EnhancedPaymentAllocationService {
         if (!isLeaseStart && !isMonthlyRent && !isLevyAccrual) {
           return false;
         }
-        const hasMatchingAccount = tx.entries && tx.entries.some(entry =>
-          entry.accountCode === arAccountCode
+        const arEntry = tx.entries?.find(
+          (entry) => isDebtorArCode(entry.accountCode) && Number(entry.debit) > 0
         );
-        if (hasMatchingAccount) {
-          console.log(`🔍 Accrual (${tx.metadata?.type}): ${tx.transactionId} - ${tx.description} (AR: ${arAccountCode})`);
+        if (arEntry) {
+          console.log(
+            `🔍 Accrual (${tx.metadata?.type}): ${tx.transactionId} - ${tx.description} (AR: ${arEntry.accountCode})`
+          );
           return true;
         }
         return false;
@@ -2306,9 +2318,11 @@ class EnhancedPaymentAllocationService {
         const matchesStudent = tx.metadata?.studentId?.toString() === userIdString
           || tx.metadata?.userId?.toString() === userIdString
           || (tx.sourceId && tx.sourceId.toString() === userIdString);
-        const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e =>
-          e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0
-        );
+        const touchesAR =
+          Array.isArray(tx.entries) &&
+          tx.entries.some(
+            (e) => isDebtorArCode(e.accountCode) && e.accountType === 'Asset' && e.credit > 0
+          );
         // Include if it's a payment/allocation that matches the student or directly credits the debtor AR account
         return (isAllocation || isPaymentSource) && (matchesStudent || touchesAR);
       });
@@ -2322,9 +2336,9 @@ class EnhancedPaymentAllocationService {
       const manualAdjustments = allUserTransactions.filter(tx => {
         const isManual = tx.source === 'manual';
         // Check if transaction touches the debtor's AR account code (exact match required)
-        const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => 
-          e.accountCode === arAccountCode && e.accountType === 'Asset'
-        );
+        const touchesAR =
+          Array.isArray(tx.entries) &&
+          tx.entries.some((e) => isDebtorArCode(e.accountCode) && e.accountType === 'Asset');
         const matchesStudent = tx.metadata?.studentId?.toString() === userIdString || 
                              tx.metadata?.studentId?.toString() === actualUserId ||
                              tx.metadata?.userId?.toString() === userIdString ||
@@ -2354,7 +2368,11 @@ class EnhancedPaymentAllocationService {
       if (payments.length > 0) {
         console.log(`🔍 Payment transactions found:`);
         payments.forEach((payment, index) => {
-          const arEntry = Array.isArray(payment.entries) && payment.entries.find(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
+          const arEntry =
+            Array.isArray(payment.entries) &&
+            payment.entries.find(
+              (e) => isDebtorArCode(e.accountCode) && e.accountType === 'Asset' && e.credit > 0
+            );
           const amount = arEntry?.credit || 0;
           console.log(`  Payment ${index + 1}: ${payment.transactionId}`);
           console.log(`    Date: ${payment.date}`);
@@ -2574,7 +2592,7 @@ class EnhancedPaymentAllocationService {
         // Look for monthSettled in metadata for payment allocation transactions
         let monthSettled = payment.metadata?.monthSettled;
         const paymentType = payment.metadata?.paymentType;
-        const arEntry = Array.isArray(payment.entries) && payment.entries.find(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
+        const arEntry = Array.isArray(payment.entries) && payment.entries.find(e => isDebtorArCode(e.accountCode) && e.accountType === 'Asset' && e.credit > 0);
         const amount = arEntry?.credit || 0;
         if (amount <= 0) return;
         
@@ -2743,14 +2761,14 @@ class EnhancedPaymentAllocationService {
         adjustment.entries.forEach(entry => {
           // 🆕 CRITICAL: Check if entry matches the debtor's AR account code (exact match required)
           // Negotiated payments must use the correct debtor account code
-          const matchesAR = entry.accountCode === arAccountCode;
+          const matchesAR = isDebtorArCode(entry.accountCode);
           
           if (matchesAR && entry.accountType === 'Asset') {
             const amount = entry.credit || 0;
             const description = (entry.description || '').toLowerCase();
             
             console.log(`   💰 AR adjustment: ${entry.debit > 0 ? 'debit' : 'credit'} $${amount} - ${entry.description}`);
-            console.log(`      Entry AR Code: ${entry.accountCode}, Expected: ${arAccountCode}`);
+            console.log(`      Entry AR Code: ${entry.accountCode}, Expected: ${arAccountCodes.join(' or ')}`);
             
             if (adjustment.metadata?.type === 'negotiated_payment_adjustment' || adjustment.metadata?.transactionType === 'negotiated_payment_adjustment') {
               // Negotiated payment reduces rent owed
@@ -2808,7 +2826,7 @@ class EnhancedPaymentAllocationService {
           .filter(tx => tx.date && new Date(tx.date) < earliestAccrualDate)
           .map(tx => {
             const arEntry = Array.isArray(tx.entries)
-              ? tx.entries.find(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0)
+              ? tx.entries.find(e => isDebtorArCode(e.accountCode) && e.accountType === 'Asset' && e.credit > 0)
               : null;
             const amount = arEntry?.credit || 0;
             return {
