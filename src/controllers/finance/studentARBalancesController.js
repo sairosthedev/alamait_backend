@@ -25,7 +25,13 @@ class StudentARBalancesController {
 
       console.log(`🔍 API Request: Getting detailed AR balances for student ${studentId}`);
       
-      const outstandingBalances = await EnhancedPaymentAllocationService.getDetailedOutstandingBalances(studentId);
+      const Debtor = require('../../models/Debtor');
+      const debtor = await Debtor.findOne({ user: studentId }).select('_id accountCode contactInfo').lean();
+      const outstandingBalances = await EnhancedPaymentAllocationService.getDetailedOutstandingBalances(studentId, {
+        debtorId: debtor?._id?.toString(),
+        accountCode: debtor?.accountCode,
+        studentName: debtor?.contactInfo?.name
+      });
       
       res.json({
         success: true,

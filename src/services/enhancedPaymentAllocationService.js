@@ -1940,6 +1940,7 @@ class EnhancedPaymentAllocationService {
 
       // Resolve debtor to get exact AR account code - use User ID consistently
       const Debtor = require('../models/Debtor');
+      const DebtorLedgerService = require('./debtorLedgerService');
       if (!debtorDoc) {
         debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id user');
 
@@ -2169,6 +2170,26 @@ class EnhancedPaymentAllocationService {
       console.log(`🔍 Query User ID: ${userIdString}, Actual User ID: ${actualUserId}`);
       if (actualUserId !== userIdString) {
         console.log(`⚠️ User ID mismatch detected - using actual user ID for queries`);
+      }
+
+      // Same transaction fetch + monthly math as debtor detail (DebtorLedgerService)
+      if (debtorId && actualUserId) {
+        console.log(`📊 Using DebtorLedgerService for payment AR balances (debtor ${debtorId})`);
+        const ledgerData = await DebtorLedgerService.getDebtorLedger(debtorId, actualUserId);
+        const outstandingArray = DebtorLedgerService.toDetailedOutstandingBalances(ledgerData);
+        const totalOutstanding = outstandingArray.reduce(
+          (sum, month) => sum + (month.totalOutstanding || 0),
+          0
+        );
+        console.log(
+          `📅 Ledger-based outstanding for user ${userId}: ${outstandingArray.length} months, total $${totalOutstanding}`
+        );
+        outstandingArray.forEach((month) => {
+          console.log(
+            `  ${month.monthKey}: owed $${month.rent.owed}, paid $${month.rent.paid}, out $${month.rent.outstanding}`
+          );
+        });
+        return outstandingArray;
       }
       
       // 🆕 CRITICAL FIX: Always search by debtor account code FIRST (this is what accruals use)

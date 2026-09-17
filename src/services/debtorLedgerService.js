@@ -178,12 +178,30 @@ class DebtorLedgerService {
             .sort({ date: 1 });
             
             console.log(`📊 Found ${transactions.length} transactions for AR account ${arAccountCode}`);
+
+            // Collect all AR account codes present in fetched transactions (debtor + legacy user-id format)
+            const arAccountCodes = new Set([arAccountCode]);
+            if (studentId && arAccountCode !== `1100-${studentId}`) {
+                arAccountCodes.add(`1100-${studentId}`);
+            }
+            transactions.forEach((tx) => {
+                (tx.entries || []).forEach((entry) => {
+                    if (entry.accountCode?.startsWith('1100-') && entry.accountCode !== '1100') {
+                        arAccountCodes.add(entry.accountCode);
+                    }
+                });
+            });
+            const arAccountCodeList = Array.from(arAccountCodes);
+            if (arAccountCodeList.length > 1) {
+                console.log(`   📋 Merging AR account codes: ${arAccountCodeList.join(', ')}`);
+            }
             
             // Process transactions to build ledger
             const ledgerData = {
                 studentId,
                 debtorId,
                 arAccountCode,
+                arAccountCodes: arAccountCodeList,
                 monthlyBreakdown: {},
                 totalExpected: 0,
                 totalPaid: 0,
@@ -193,7 +211,7 @@ class DebtorLedgerService {
             
             // Process each transaction
             for (const transaction of transactions) {
-                const processedTransaction = await this.processTransactionForLedger(transaction, arAccountCode);
+                const processedTransaction = await this.processTransactionForLedger(transaction, arAccountCodeList);
                 if (processedTransaction) {
                     // Handle case where processTransactionForLedger returns an array (mixed transaction)
                     const transactionsToProcess = Array.isArray(processedTransaction) ? processedTransaction : [processedTransaction];
@@ -315,15 +333,79 @@ class DebtorLedgerService {
     }
 
     /**
+     * Resolve billing month from accrual metadata or transaction date.
+     */
+    static resolveLedgerMonthKey(transaction, fallbackDate = transaction?.date) {
+        if (transaction?.metadata?.accrualYear && transaction?.metadata?.accrualMonth) {
+            return `${transaction.metadata.accrualYear}-${String(transaction.metadata.accrualMonth).padStart(2, '0')}`;
+        }
+        if (transaction?.metadata?.month && /^\d{4}-\d{2}$/.test(transaction.metadata.month)) {
+            return transaction.metadata.month;
+        }
+        const d = new Date(fallbackDate || transaction.date);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    /**
+     * Convert debtor ledger monthly breakdown to detailed outstanding balance format
+     * used by payment allocation / Smart Allocate (matches debtor view).
+     */
+    static toDetailedOutstandingBalances(ledgerData) {
+        const rows = [];
+        const breakdown = ledgerData?.monthlyBreakdown || {};
+
+        for (const monthKey of Object.keys(breakdown).sort()) {
+            if (!/^\d{4}-\d{2}$/.test(monthKey)) continue;
+
+            const month = breakdown[monthKey];
+            const owing = Math.max(0, month.owing || 0);
+            if (owing <= 0) continue;
+
+            const accrualTx = (month.transactions || []).find((t) => t.type === 'accrual');
+            const [yearStr, monStr] = monthKey.split('-');
+            const accrualDate = new Date(`${monthKey}-01T00:00:00.000Z`);
+
+            rows.push({
+                monthKey,
+                year: Number(yearStr),
+                month: Number(monStr),
+                monthName: accrualDate.toLocaleString('default', { month: 'long' }),
+                date: accrualDate,
+                rent: {
+                    owed: month.expected || 0,
+                    paid: month.paid || 0,
+                    outstanding: owing,
+                    originalOwed: month.expected || 0,
+                    negotiatedDiscount: 0
+                },
+                adminFee: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0 },
+                deposit: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0 },
+                levies: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0 },
+                totalOutstanding: owing,
+                transactionId: accrualTx?.entryId || null,
+                source: accrualTx?.source || 'rental_accrual',
+                metadata: accrualTx?.metadata || {},
+                fullySettled: false
+            });
+        }
+
+        return rows;
+    }
+
+    /**
      * Process a single transaction for ledger computation
      * @param {Object} transaction - Transaction entry
-     * @param {string} arAccountCode - AR account code to filter by
+     * @param {string|string[]} arAccountCode - AR account code(s) to filter by
      * @returns {Promise<Object|Array|null>} Processed transaction data
      */
     static async processTransactionForLedger(transaction, arAccountCode) {
         try {
+            const arAccountCodes = Array.isArray(arAccountCode) ? arAccountCode : [arAccountCode];
+            const codeSet = new Set(arAccountCodes.filter(Boolean));
+            const primaryArCode = arAccountCodes[0];
+
             // Find ALL AR account entries in this transaction (there may be multiple)
-            const arEntries = transaction.entries.filter(entry => entry.accountCode === arAccountCode);
+            const arEntries = transaction.entries.filter((entry) => codeSet.has(entry.accountCode));
             if (arEntries.length === 0) {
                 return null;
             }
@@ -351,6 +433,7 @@ class DebtorLedgerService {
                     }
                     
                     return {
+                        entryId: transaction._id,
                         transactionId: transaction.transactionId,
                         date: transaction.date,
                         monthKey: accrualMonthKey, // Use original accrual month for proper grouping
@@ -366,7 +449,7 @@ class DebtorLedgerService {
                             originalAccrualId: transaction.metadata?.originalAccrualId
                         },
                         arEntry: {
-                            accountCode: arAccountCode,
+                            accountCode: arEntries[0]?.accountCode || primaryArCode,
                             accountName: arEntries.find(e => e.credit > 0)?.accountName || `Accounts Receivable`,
                             debit: 0,
                             credit: totalCredit
@@ -395,6 +478,7 @@ class DebtorLedgerService {
                         'advance';
                     
                     return {
+                        entryId: transaction._id,
                         transactionId: transaction.transactionId,
                         date: transaction.date,
                         monthKey,
@@ -409,7 +493,7 @@ class DebtorLedgerService {
                             note: 'Advance payment - will be allocated when accrual is created'
                         },
                         arEntry: {
-                            accountCode: arAccountCode,
+                            accountCode: arEntries[0]?.accountCode || primaryArCode,
                             accountName: arEntries.find(e => e.credit > 0)?.accountName || `Accounts Receivable`,
                             debit: 0,
                             credit: totalCredit
@@ -421,7 +505,7 @@ class DebtorLedgerService {
             }
             
             const transactionDate = new Date(transaction.date);
-            const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
+            const monthKey = this.resolveLedgerMonthKey(transaction, transaction.date);
             
             let description = transaction.description || 'Transaction';
             
@@ -467,6 +551,7 @@ class DebtorLedgerService {
                 // Return both as separate entries so ledger shows both accrual and payment
                 return [
                     {
+                        entryId: transaction._id,
                         transactionId: transaction.transactionId,
                         date: transaction.date,
                         monthKey,
@@ -477,13 +562,14 @@ class DebtorLedgerService {
                         source: transaction.source,
                         metadata: transaction.metadata,
                         arEntry: {
-                            accountCode: arAccountCode,
+                            accountCode: arEntries[0]?.accountCode || primaryArCode,
                             accountName: arEntries[0]?.accountName || `Accounts Receivable`,
                             debit: totalDebit,
                             credit: 0
                         }
                     },
                     {
+                        entryId: transaction._id,
                         transactionId: transaction.transactionId,
                         date: advancePaymentDate, // Use original payment date, not accrual date
                         monthKey: advancePaymentMonthKey, // Use payment month for proper sorting
@@ -498,7 +584,7 @@ class DebtorLedgerService {
                             isAdvancePaymentAllocation: true
                         },
                         arEntry: {
-                            accountCode: arAccountCode,
+                            accountCode: arEntries[0]?.accountCode || primaryArCode,
                             accountName: arEntries[0]?.accountName || `Accounts Receivable`,
                             debit: 0,
                             credit: totalCredit
@@ -527,6 +613,7 @@ class DebtorLedgerService {
                     }
                     
                     return {
+                        entryId: transaction._id,
                         transactionId: transaction.transactionId,
                         date: transaction.date,
                         monthKey: accrualMonthKey,
@@ -541,7 +628,7 @@ class DebtorLedgerService {
                             adjustmentType: 'negotiated_discount'
                         },
                         arEntry: {
-                            accountCode: arAccountCode,
+                            accountCode: arEntries[0]?.accountCode || primaryArCode,
                             accountName: arEntries.find(e => e.credit > 0)?.accountName || `Accounts Receivable`,
                             debit: 0,
                             credit: totalCredit
@@ -589,10 +676,17 @@ class DebtorLedgerService {
                 category = 'payment';
             }
             
+            // Payments bucket by cash receipt date (same as debtor ledger view)
+            const paymentMonthKey =
+                type === 'payment'
+                    ? `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`
+                    : monthKey;
+
             return {
+                entryId: transaction._id,
                 transactionId: transaction.transactionId,
                 date: transaction.date,
-                monthKey,
+                monthKey: paymentMonthKey,
                 type,
                 category,
                 amount,
@@ -600,7 +694,7 @@ class DebtorLedgerService {
                 source: transaction.source,
                 metadata: transaction.metadata,
                 arEntry: {
-                    accountCode: arAccountCode,
+                    accountCode: arEntries[0]?.accountCode || primaryArCode,
                     accountName: arEntries[0]?.accountName || `Accounts Receivable`,
                     debit: totalDebit,
                     credit: totalCredit

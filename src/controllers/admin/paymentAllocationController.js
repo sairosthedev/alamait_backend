@@ -87,7 +87,11 @@ const getStudentARBalances = async (req, res) => {
         // Force fresh data fetch - no caching
         // The service will use debtor.accountCode (1100-{debtorId}) to find accruals
         // Use actualUserId (from debtor if found, otherwise original studentId)
-        const arBalances = await EnhancedPaymentAllocationService.getDetailedOutstandingBalances(actualUserId);
+        const arBalances = await EnhancedPaymentAllocationService.getDetailedOutstandingBalances(actualUserId, {
+            debtorId: debtor?._id?.toString(),
+            accountCode: debtor?.accountCode,
+            studentName: debtor?.contactInfo?.name
+        });
         
         console.log(`📊 AR Balances result:`, {
             found: arBalances ? arBalances.length : 0,
