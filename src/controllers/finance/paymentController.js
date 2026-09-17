@@ -881,20 +881,26 @@ exports.processPayment = async (req, res) => {
         let debtor = null;
         
         if (studentIdForDebtor) {
-            const Debtor = require('../../models/Debtor');
             const User = require('../../models/User');
-            const idStr = String(studentIdForDebtor);
+            const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
+            const resolvedStudentName =
+                req.body.studentName ||
+                (typeof student === 'object' && student
+                    ? `${student.firstName || ''} ${student.lastName || ''}`.trim()
+                    : null);
 
-            // Accept User id, Debtor id, or AR account code (Add Payment may send any of these)
-            debtor = await Debtor.findOne({ user: idStr });
-            if (!debtor && mongoose.Types.ObjectId.isValid(idStr)) {
-                debtor = await Debtor.findById(idStr);
-            }
-            if (!debtor) {
-                const code = idStr.startsWith('1100-') ? idStr : `1100-${idStr}`;
-                debtor = await Debtor.findOne({ accountCode: code });
-            }
-            
+            const resolved = await EnhancedPaymentAllocationService.resolveDebtorForPaymentContext({
+                studentId: studentIdForDebtor,
+                residence,
+                room: req.body.room,
+                studentName: resolvedStudentName,
+                accountCode: req.body.accountCode || req.body.debtorAccountCode,
+                debtorId: req.body.debtorId,
+                paymentMonth: req.body.paymentMonth
+            });
+
+            debtor = resolved.debtorDoc;
+
             if (!debtor) {
                 console.log('🏗️ No debtor record found - creating one like admin system does...');
                 
@@ -1111,6 +1117,7 @@ exports.processPayment = async (req, res) => {
             totalAmount: paymentTotal,
             payments: normalizedPayments,
             residence: payment.residence,
+            room: payment.room,
             paymentMonth: payment.paymentMonth,
             rentAmount: payment.rentAmount || 0,
             adminFee: payment.adminFee || 0,

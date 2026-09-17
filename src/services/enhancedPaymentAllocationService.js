@@ -74,6 +74,183 @@ class EnhancedPaymentAllocationService {
   }
 
   /**
+   * Resolve the canonical debtor for a payment — handles user id, debtor id,
+   * application id, AR account code, and residence + room fallbacks.
+   */
+  static async resolveDebtorForPaymentContext({
+    studentId,
+    residence = null,
+    room = null,
+    studentName = null,
+    accountCode = null,
+    debtorId = null,
+    paymentMonth = null
+  }) {
+    const Debtor = require('../models/Debtor');
+    const Application = require('../models/Application');
+    const select =
+      'accountCode _id user debtorCode application contactInfo startDate residence roomNumber';
+    const idStr = String(studentId || '').trim();
+
+    if (!idStr && !accountCode && !debtorId) {
+      return { debtorDoc: null, actualUserId: null, accountCode: null };
+    }
+
+    let debtorDoc = null;
+    const codeFromPayload =
+      accountCode && String(accountCode).startsWith('1100-') ? accountCode : null;
+
+    // Prefer debtor with an accrual for the payment month when room context is known
+    if (!debtorDoc && paymentMonth && residence && room) {
+      const roomNorm = String(room).trim();
+      let roomCandidates = await Debtor.find({ residence, roomNumber: roomNorm })
+        .select(select)
+        .lean();
+      if (roomCandidates.length > 1 && studentName) {
+        const needle = String(studentName).trim().toLowerCase();
+        const byName = roomCandidates.filter((d) =>
+          String(d.contactInfo?.name || '')
+            .toLowerCase()
+            .includes(needle.split(/\s+/)[0])
+        );
+        if (byName.length > 0) roomCandidates = byName;
+      }
+      for (const candidate of roomCandidates) {
+        const accrual = await this.findAccrualForPaymentMonth({
+          paymentMonthKey: paymentMonth,
+          accountCode: candidate.accountCode,
+          userId: candidate.user?.toString(),
+          applicationId: candidate.application?.toString(),
+          debtorId: candidate._id.toString(),
+          residence,
+          room: roomNorm
+        });
+        if (accrual) {
+          debtorDoc = candidate;
+          console.log(
+            `✅ Picked debtor ${candidate.debtorCode} — has accrual for ${paymentMonth} at ${roomNorm}`
+          );
+          break;
+        }
+      }
+    }
+
+    if (codeFromPayload) {
+      const debtorIdFromCode = codeFromPayload.replace('1100-', '');
+      if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
+        debtorDoc = await Debtor.findById(debtorIdFromCode).select(select).lean();
+      }
+    }
+
+    if (!debtorDoc && debtorId && mongoose.Types.ObjectId.isValid(debtorId)) {
+      debtorDoc = await Debtor.findById(debtorId).select(select).lean();
+    }
+
+    if (!debtorDoc && idStr && mongoose.Types.ObjectId.isValid(idStr)) {
+      debtorDoc = await Debtor.findById(idStr).select(select).lean();
+    }
+
+    if (!debtorDoc && idStr) {
+      debtorDoc = await Debtor.findOne({ user: idStr }).select(select).lean();
+    }
+
+    if (!debtorDoc && idStr) {
+      debtorDoc = await Debtor.findOne({ application: idStr }).select(select).lean();
+    }
+
+    if (!debtorDoc && idStr) {
+      const application = await Application.findById(idStr)
+        .select('student email firstName lastName residence room')
+        .lean();
+      if (application) {
+        if (application.student) {
+          debtorDoc = await Debtor.findOne({ user: application.student.toString() })
+            .select(select)
+            .lean();
+        }
+        if (!debtorDoc) {
+          debtorDoc = await Debtor.findOne({ application: idStr }).select(select).lean();
+        }
+        if (!debtorDoc && application.email) {
+          const emailQuery = { 'contactInfo.email': application.email };
+          const resId = residence || application.residence;
+          if (resId) emailQuery.residence = resId;
+          debtorDoc = await Debtor.findOne(emailQuery).select(select).lean();
+        }
+      }
+    }
+
+    if (!debtorDoc && idStr) {
+      const code = idStr.startsWith('1100-') ? idStr : `1100-${idStr}`;
+      debtorDoc = await Debtor.findOne({ accountCode: code }).select(select).lean();
+    }
+
+    if (!debtorDoc && residence && room) {
+      const roomNorm = String(room).trim();
+      const roomQuery = { residence, roomNumber: roomNorm };
+      {
+        let candidates = await Debtor.find(roomQuery).select(select).lean();
+        if (candidates.length > 1 && studentName) {
+          const needle = String(studentName).trim().toLowerCase();
+          const byName = candidates.filter((d) =>
+            String(d.contactInfo?.name || '')
+              .toLowerCase()
+              .includes(needle.split(/\s+/)[0])
+          );
+          if (byName.length > 0) candidates = byName;
+        }
+        if (candidates.length === 1) {
+          debtorDoc = candidates[0];
+        } else if (candidates.length > 1 && paymentMonth) {
+          for (const candidate of candidates) {
+            const accrual = await this.findAccrualForPaymentMonth({
+              paymentMonthKey: paymentMonth,
+              accountCode: candidate.accountCode,
+              userId: candidate.user?.toString(),
+              applicationId: candidate.application?.toString(),
+              debtorId: candidate._id.toString(),
+              residence,
+              room
+            });
+            if (accrual) {
+              debtorDoc = candidate;
+              console.log(
+                `✅ Picked debtor ${candidate.debtorCode} — has accrual for ${paymentMonth}`
+              );
+              break;
+            }
+          }
+        }
+        if (!debtorDoc && candidates.length > 0) {
+          debtorDoc = candidates.sort((a, b) => String(b._id).localeCompare(String(a._id)))[0];
+          console.log(
+            `⚠️ Multiple debtors for ${room} — using newest: ${debtorDoc.debtorCode || debtorDoc._id}`
+          );
+        }
+      }
+    }
+
+    const actualUserId = debtorDoc?.user?.toString() || idStr || null;
+    const resolvedAccountCode = debtorDoc?.accountCode || codeFromPayload || null;
+
+    if (debtorDoc) {
+      console.log(
+        `✅ Resolved debtor ${debtorDoc.debtorCode || debtorDoc._id} → AR ${resolvedAccountCode}`
+      );
+    }
+
+    return { debtorDoc, actualUserId, accountCode: resolvedAccountCode };
+  }
+
+  static accrualBelongsToAccount(accrual, accountCode) {
+    if (!accrual) return false;
+    if (!accountCode) return true;
+    return accrual.entries?.some(
+      (e) => e.accountCode === accountCode && Number(e.debit) > 0
+    );
+  }
+
+  /**
    * Find a monthly rent accrual by metadata month (not just transaction date).
    */
   static async findAccrualForPaymentMonth({
@@ -81,7 +258,9 @@ class EnhancedPaymentAllocationService {
     accountCode,
     userId,
     applicationId,
-    debtorId
+    debtorId,
+    residence = null,
+    room = null
   }) {
     if (!paymentMonthKey) return null;
 
@@ -101,7 +280,7 @@ class EnhancedPaymentAllocationService {
         applicationId,
         debtorId
       );
-      if (found) return found;
+      if (found && this.accrualBelongsToAccount(found, accountCode)) return found;
     }
 
     const monthKey = paymentMonthKey;
@@ -123,7 +302,7 @@ class EnhancedPaymentAllocationService {
         ...monthCriteria
       }).sort({ date: -1 });
 
-      if (byMetadata) return byMetadata;
+      if (byMetadata && this.accrualBelongsToAccount(byMetadata, accountCode)) return byMetadata;
     }
 
     // Last resort: month + student/application/debtor ids without requiring AR account code
@@ -145,7 +324,34 @@ class EnhancedPaymentAllocationService {
         $and: [monthCriteria, { $or: studentOrCriteria }]
       }).sort({ date: -1 });
 
-      if (byMonthAndStudent) return byMonthAndStudent;
+      if (byMonthAndStudent && this.accrualBelongsToAccount(byMonthAndStudent, accountCode)) {
+        return byMonthAndStudent;
+      }
+    }
+
+    if (residence && room && accountCode) {
+      const byResidenceRoom = await TransactionEntry.findOne({
+        source: { $in: ['rental_accrual', 'lease_start'] },
+        status: { $nin: ['reversed', 'deleted'] },
+        voided: { $ne: true },
+        'entries.accountCode': accountCode,
+        $and: [
+          monthCriteria,
+          {
+            $or: [
+              { 'metadata.residence': String(residence), 'metadata.room': String(room).trim() },
+              {
+                'metadata.residence': new mongoose.Types.ObjectId(String(residence)),
+                'metadata.room': String(room).trim()
+              }
+            ]
+          }
+        ]
+      }).sort({ date: -1 });
+
+      if (byResidenceRoom && this.accrualBelongsToAccount(byResidenceRoom, accountCode)) {
+        return byResidenceRoom;
+      }
     }
 
     return null;
@@ -244,7 +450,9 @@ class EnhancedPaymentAllocationService {
     accountCode,
     userId,
     applicationId,
-    debtorId
+    debtorId,
+    residence = null,
+    room = null
   ) {
     let balances = outstandingBalances ? [...outstandingBalances] : [];
     const existing = balances.find((b) => b.monthKey === paymentMonthKey);
@@ -257,7 +465,9 @@ class EnhancedPaymentAllocationService {
       accountCode,
       userId,
       applicationId,
-      debtorId
+      debtorId,
+      residence,
+      room
     });
 
     if (!accrual) return balances;
@@ -475,70 +685,22 @@ class EnhancedPaymentAllocationService {
         console.log(`📊 Account Code from payload: ${accountCode || 'Not provided'}`);
       }
       
-      // 🆕 CRITICAL: Use accountCode from payload if provided (most reliable)
-      let finalAccountCode = accountCode;
-      let actualUserId = userId;
-      let debtorDoc = null;
-      
-      // STEP 1: If accountCode provided, extract debtor ID and find debtor
-      if (accountCode && accountCode.startsWith('1100-')) {
-        const Debtor = require('../models/Debtor');
-        const mongoose = require('mongoose');
-        const debtorIdFromCode = accountCode.replace('1100-', '');
-        
-        if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
-          debtorDoc = await Debtor.findById(debtorIdFromCode).select('accountCode _id user debtorCode application contactInfo startDate').lean();
-          if (debtorDoc) {
-            actualUserId = debtorDoc.user?.toString() || userId;
-            finalAccountCode = debtorDoc.accountCode || accountCode; // Use debtor's account code if different
-            console.log(`✅ Found debtor by account code from payload: ${debtorDoc.debtorCode}`);
-            console.log(`   Account Code: ${finalAccountCode}`);
-            console.log(`   User ID: ${actualUserId}`);
-          } else {
-            console.log(`⚠️ Account code provided but debtor not found: ${accountCode}`);
-            console.log(`   Will try to find debtor by user ID as fallback`);
-          }
-        }
-      }
-      
-      // STEP 2: If debtor not found by account code, find by user ID
-      if (!debtorDoc) {
-      const Debtor = require('../models/Debtor');
-      const Application = require('../models/Application');
-      const mongoose = require('mongoose');
-      
-      if (mongoose.Types.ObjectId.isValid(userId)) {
-        debtorDoc = await Debtor.findById(userId).select('accountCode _id user debtorCode application contactInfo startDate').lean();
-        if (debtorDoc) {
-          actualUserId = debtorDoc.user?.toString() || userId;
-            if (!finalAccountCode) {
-              finalAccountCode = debtorDoc.accountCode;
-            }
-        }
-      }
-      
-      if (!debtorDoc) {
-        const application = await Application.findById(userId).select('student').lean();
-        if (application && application.student) {
-          actualUserId = application.student.toString();
-          debtorDoc = await Debtor.findOne({ user: actualUserId }).select('accountCode _id user debtorCode application contactInfo startDate').lean();
-          if (!debtorDoc) {
-            debtorDoc = await Debtor.findOne({ application: userId }).select('accountCode _id user debtorCode application contactInfo startDate').lean();
-          }
-            if (debtorDoc && !finalAccountCode) {
-              finalAccountCode = debtorDoc.accountCode;
-            }
-        } else {
-          debtorDoc = await Debtor.findOne({ user: userId }).select('accountCode _id user debtorCode application contactInfo startDate').lean();
-            if (debtorDoc && !finalAccountCode) {
-              finalAccountCode = debtorDoc.accountCode;
-            }
-          }
-        }
-      }
-      
+      const resolved = await this.resolveDebtorForPaymentContext({
+        studentId: userId,
+        residence: paymentData.residence,
+        room: paymentData.room,
+        studentName: paymentData.studentName,
+        accountCode,
+        debtorId: paymentData.debtorId,
+        paymentMonth: paymentData.paymentMonth
+      });
+
+      let finalAccountCode = resolved.accountCode || accountCode;
+      let actualUserId = resolved.actualUserId || userId;
+      let debtorDoc = resolved.debtorDoc;
+
       if (debtorDoc) {
-        actualUserId = debtorDoc.user.toString();
+        actualUserId = debtorDoc.user?.toString() || actualUserId;
         if (!finalAccountCode) {
           finalAccountCode = debtorDoc.accountCode;
         }
@@ -551,7 +713,13 @@ class EnhancedPaymentAllocationService {
       }
       
       // STEP 2: Get AR balances using same method as AR balances API
-      let outstandingBalances = await this.getDetailedOutstandingBalances(actualUserId);
+      let outstandingBalances = await this.getDetailedOutstandingBalances(actualUserId, {
+        residence: paymentData.residence,
+        room: paymentData.room,
+        studentName: paymentData.studentName,
+        accountCode: finalAccountCode,
+        debtorId: debtorDoc?._id?.toString?.()
+      });
       console.log(`📊 Found ${outstandingBalances?.length || 0} months with outstanding balances`);
       
       // STEP 3: Determine payment month
@@ -585,14 +753,16 @@ class EnhancedPaymentAllocationService {
       }
 
       // Attach payment month's accrual by metadata month (not transaction date alone)
-      if (accountCodeForQuery && paymentMonthKey && !forceAdvanceBeforeLease) {
+      if (paymentMonthKey && !forceAdvanceBeforeLease) {
         outstandingBalances = await this.ensurePaymentMonthInOutstandingBalances(
           outstandingBalances,
           paymentMonthKey,
           accountCodeForQuery,
           actualUserId,
           debtorApplicationId,
-          debtorIdStr
+          debtorIdStr,
+          paymentData.residence,
+          paymentData.room
         );
       }
       
@@ -750,14 +920,16 @@ class EnhancedPaymentAllocationService {
           console.log(`   👉 Will allocate to current/previous months first; ONLY true excess will be advance`);
           // Do NOT return here – fall through into normal allocation flow below.
         } else {
-          if (accountCodeForQuery && paymentData.paymentMonth) {
+          if (paymentData.paymentMonth) {
             outstandingBalances = await this.ensurePaymentMonthInOutstandingBalances(
               outstandingBalances,
               paymentData.paymentMonth,
               accountCodeForQuery,
               actualUserId,
               debtorApplicationId,
-              debtorIdStr
+              debtorIdStr,
+              paymentData.residence,
+              paymentData.room
             );
           }
 
@@ -824,14 +996,16 @@ class EnhancedPaymentAllocationService {
       }
       
       // Re-inject payment month accrual if balances still empty (getDetailedOutstandingBalances can miss metadata month)
-      if ((!outstandingBalances || outstandingBalances.length === 0) && accountCodeForQuery && paymentMonthKey) {
+      if ((!outstandingBalances || outstandingBalances.length === 0) && paymentMonthKey) {
         outstandingBalances = await this.ensurePaymentMonthInOutstandingBalances(
           outstandingBalances,
           paymentMonthKey,
           accountCodeForQuery,
           actualUserId,
           debtorApplicationId,
-          debtorIdStr
+          debtorIdStr,
+          paymentData.residence,
+          paymentData.room
         );
       }
       
@@ -880,7 +1054,9 @@ class EnhancedPaymentAllocationService {
               accountCodeForQuery,
               actualUserId,
               debtorApplicationId,
-              debtorIdStr
+              debtorIdStr,
+              paymentData.residence,
+              paymentData.room
             );
           }
           if (recheckBalances && recheckBalances.length > 0) {
@@ -1702,7 +1878,7 @@ class EnhancedPaymentAllocationService {
    * @param {string} userId - User ID (should be the actual User._id)
    * @returns {Array} Array of outstanding balance objects sorted by date (oldest first)
    */
-  static async getDetailedOutstandingBalances(userId) {
+  static async getDetailedOutstandingBalances(userId, context = {}) {
     try {
       if (ALLOCATION_DEBUG) console.log(`🔍 Getting detailed outstanding balances for user: ${userId}`);
       
@@ -1710,20 +1886,32 @@ class EnhancedPaymentAllocationService {
       const userIdString = String(userId);
       if (ALLOCATION_DEBUG) console.log(`🔍 Processing user ID: ${userIdString} (type: ${typeof userId})`);
       
+      const resolved = await this.resolveDebtorForPaymentContext({
+        studentId: userIdString,
+        residence: context.residence,
+        room: context.room,
+        studentName: context.studentName,
+        accountCode: context.accountCode,
+        debtorId: context.debtorId
+      });
+
+      let debtorDoc = resolved.debtorDoc;
+      const resolvedUserId = resolved.actualUserId || userIdString;
+
       // Resolve debtor to get exact AR account code - use User ID consistently
       const Debtor = require('../models/Debtor');
-      let debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id user');
-
-      // Also try ObjectId if string lookup missed
-      if (!debtorDoc && mongoose.Types.ObjectId.isValid(userIdString)) {
-        debtorDoc = await Debtor.findOne({ user: new mongoose.Types.ObjectId(userIdString) })
-          .select('accountCode _id user');
-      }
-
-      // Never fuzzy-scan all debtors — that loads the full collection on every miss
       if (!debtorDoc) {
-        debtorDoc = await Debtor.findOne({ accountCode: `1100-${userIdString}` })
-          .select('accountCode _id user');
+        debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id user');
+
+        if (!debtorDoc && mongoose.Types.ObjectId.isValid(userIdString)) {
+          debtorDoc = await Debtor.findOne({ user: new mongoose.Types.ObjectId(userIdString) })
+            .select('accountCode _id user');
+        }
+
+        if (!debtorDoc) {
+          debtorDoc = await Debtor.findOne({ accountCode: `1100-${userIdString}` })
+            .select('accountCode _id user');
+        }
       }
       
       // 🆕 CRITICAL: If debtor not found by user ID, try to find by transactions' sourceId or metadata.debtorId
