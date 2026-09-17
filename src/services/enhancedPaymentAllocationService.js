@@ -65,12 +65,125 @@ class EnhancedPaymentAllocationService {
   }
 
   /**
-   * True when an outstanding month row is backed by a real accrual for that monthKey.
+   * True when an outstanding month row is backed by a real rent charge for that monthKey
+   * (monthly accrual, lease start, or negotiated rent adjustment).
    */
   static monthHasVerifiedRentAccrual(month) {
     if (!month?.transactionId || month.isVirtualMonth) return false;
+    if (!(month.rent?.outstanding > 0)) return false;
     const accrualMonth = this.resolveAccrualMonthKey({ metadata: month.metadata, date: month.date });
-    return accrualMonth === month.monthKey;
+    if (accrualMonth === month.monthKey) return true;
+    const meta = month.metadata || {};
+    if (
+      meta.type === 'negotiated_payment_adjustment' ||
+      meta.transactionType === 'negotiated_payment_adjustment'
+    ) {
+      const mk =
+        meta.accrualYear && meta.accrualMonth
+          ? `${meta.accrualYear}-${String(meta.accrualMonth).padStart(2, '0')}`
+          : null;
+      return mk === month.monthKey;
+    }
+    return false;
+  }
+
+  /**
+   * Best AR transaction to attach payment allocations for a billing month.
+   */
+  static async findPrimaryAllocationTargetForMonth(paymentMonthKey, accountCode, userId, debtorId) {
+    const [yearStr, monStr] = paymentMonthKey.split('-');
+    const monthNum = parseInt(monStr, 10);
+    const yearNum = parseInt(yearStr, 10);
+    if (!monthNum || !yearNum) return null;
+
+    const monthCriteria = {
+      $or: [
+        { 'metadata.accrualMonth': monthNum, 'metadata.accrualYear': yearNum },
+        { 'metadata.accrualMonth': String(monthNum), 'metadata.accrualYear': String(yearNum) },
+        { 'metadata.month': paymentMonthKey }
+      ]
+    };
+    const studentOrCriteria = [
+      ...(debtorId ? [{ 'metadata.debtorId': String(debtorId) }] : []),
+      ...(userId ? [{ 'metadata.studentId': String(userId) }, { 'metadata.userId': String(userId) }] : [])
+    ];
+    const andClauses = [monthCriteria];
+    if (studentOrCriteria.length) andClauses.push({ $or: studentOrCriteria });
+
+    const buildQuery = (extra = {}) => ({
+      status: { $nin: ['reversed', 'deleted'] },
+      voided: { $ne: true },
+      ...(accountCode ? { 'entries.accountCode': accountCode } : {}),
+      $and: andClauses,
+      ...extra
+    });
+
+    const rental = await TransactionEntry.findOne(
+      buildQuery({
+        source: { $in: ['rental_accrual', 'lease_start'] },
+        'metadata.type': { $in: ['monthly_rent_accrual', 'lease_start'] }
+      })
+    )
+      .sort({ date: -1 })
+      .lean();
+    if (rental) return rental._id;
+
+    const leaseStart = await TransactionEntry.findOne(
+      buildQuery({ source: { $in: ['rental_accrual', 'lease_start'] } })
+    )
+      .sort({ date: -1 })
+      .lean();
+    if (leaseStart) return leaseStart._id;
+
+    const negotiatedAnd = [
+      monthCriteria,
+      {
+        $or: [
+          { 'metadata.type': 'negotiated_payment_adjustment' },
+          { 'metadata.transactionType': 'negotiated_payment_adjustment' }
+        ]
+      }
+    ];
+    if (studentOrCriteria.length) negotiatedAnd.push({ $or: studentOrCriteria });
+
+    const negotiated = await TransactionEntry.findOne({
+      status: { $nin: ['reversed', 'deleted'] },
+      voided: { $ne: true },
+      ...(accountCode ? { 'entries.accountCode': accountCode } : {}),
+      source: 'manual',
+      $and: negotiatedAnd
+    })
+      .sort({ date: -1 })
+      .lean();
+    return negotiated?._id || null;
+  }
+
+  /**
+   * Outstanding for one month using the same ledger math as the debtor screen.
+   */
+  static async computeMonthOutstandingFromLedger(paymentMonthKey, debtorId, userId, accountCode) {
+    if (!paymentMonthKey || !debtorId || !userId) return null;
+
+    const DebtorLedgerService = require('./debtorLedgerService');
+    const ledger = await DebtorLedgerService.getDebtorLedger(String(debtorId), String(userId));
+    const month = ledger.monthlyBreakdown?.[paymentMonthKey];
+    if (!month || !(month.owing > 0)) return null;
+
+    const rows = DebtorLedgerService.toDetailedOutstandingBalances({
+      monthlyBreakdown: { [paymentMonthKey]: month }
+    });
+    const row = rows[0];
+    if (!row) return null;
+
+    const targetId = await this.findPrimaryAllocationTargetForMonth(
+      paymentMonthKey,
+      accountCode || ledger.arAccountCode,
+      userId,
+      debtorId
+    );
+    if (targetId) row.transactionId = targetId;
+
+    return row;
   }
 
   /**
@@ -394,6 +507,42 @@ class EnhancedPaymentAllocationService {
       }
     }
 
+    // Negotiated rent charge (increase or decrease) for this month — settles like an accrual
+    const negotiatedCriteria = {
+      source: 'manual',
+      status: { $nin: ['reversed', 'deleted'] },
+      voided: { $ne: true },
+      $and: [
+        monthCriteria,
+        {
+          $or: [
+            { 'metadata.type': 'negotiated_payment_adjustment' },
+            { 'metadata.transactionType': 'negotiated_payment_adjustment' }
+          ]
+        }
+      ]
+    };
+    if (accountCode) {
+      const byNegotiatedAccount = await TransactionEntry.findOne({
+        ...negotiatedCriteria,
+        'entries.accountCode': accountCode
+      }).sort({ date: -1 });
+      if (byNegotiatedAccount && this.accrualBelongsToAccount(byNegotiatedAccount, accountCode)) {
+        return byNegotiatedAccount;
+      }
+    }
+    if (candidateIds.length > 0) {
+      const byNegotiatedStudent = await TransactionEntry.findOne({
+        ...negotiatedCriteria,
+        $or: [
+          { 'metadata.debtorId': { $in: candidateIds } },
+          { 'metadata.studentId': { $in: candidateIds } },
+          { 'metadata.userId': { $in: candidateIds } }
+        ]
+      }).sort({ date: -1 });
+      if (byNegotiatedStudent) return byNegotiatedStudent;
+    }
+
     return null;
   }
 
@@ -455,14 +604,28 @@ class EnhancedPaymentAllocationService {
     }).lean();
 
     let totalNegotiatedDiscount = 0;
+    let totalNegotiatedIncrease = 0;
     negotiatedAdjustments.forEach((adj) => {
       const creditEntry = adj.entries?.find(
         (e) => e.accountCode === effectiveAccountCode && e.credit > 0
       );
+      const debitEntry = adj.entries?.find(
+        (e) => e.accountCode === effectiveAccountCode && e.debit > 0
+      );
       if (creditEntry) totalNegotiatedDiscount += creditEntry.credit;
+      if (
+        debitEntry &&
+        (adj.metadata?.adjustmentDirection === 'increase' ||
+          adj.metadata?.type === 'negotiated_payment_adjustment')
+      ) {
+        totalNegotiatedIncrease += debitEntry.debit;
+      }
     });
 
-    const netAccrualAmount = Math.max(0, accrualAmount - totalNegotiatedDiscount);
+    const netAccrualAmount = Math.max(
+      0,
+      accrualAmount + totalNegotiatedIncrease - totalNegotiatedDiscount
+    );
     const outstanding = netAccrualAmount - totalPaid;
 
     return {
@@ -496,8 +659,26 @@ class EnhancedPaymentAllocationService {
   ) {
     let balances = outstandingBalances ? [...outstandingBalances] : [];
     const existing = balances.find((b) => b.monthKey === paymentMonthKey);
-    if (existing?.rent?.outstanding > 0 && this.monthHasVerifiedRentAccrual(existing)) {
+    if (existing?.rent?.outstanding > 0 && existing.transactionId) {
       return balances;
+    }
+
+    // Same ledger math as debtor view (includes negotiated increases)
+    if (debtorId && userId) {
+      const ledgerRow = await this.computeMonthOutstandingFromLedger(
+        paymentMonthKey,
+        debtorId,
+        userId,
+        accountCode
+      );
+      if (ledgerRow && ledgerRow.rent.outstanding > 0) {
+        balances = balances.filter((b) => b.monthKey !== paymentMonthKey);
+        balances.push(ledgerRow);
+        console.log(
+          `✅ Injected payment month ${paymentMonthKey} from ledger — outstanding $${ledgerRow.rent.outstanding}`
+        );
+        return balances;
+      }
     }
 
     const accrual = await this.findAccrualForPaymentMonth({
@@ -831,122 +1012,25 @@ class EnhancedPaymentAllocationService {
         // Use accountCode from payload if available, otherwise use debtor account code
         const accountCodeForQuery = finalAccountCode || (debtorDoc && debtorDoc.accountCode);
         if (!hasPaymentMonthBalance && accountCodeForQuery) {
-        console.log(`🔍 Balance not found in getDetailedOutstandingBalances - directly checking for accrual...`);
-          console.log(`   Using account code: ${accountCodeForQuery}`);
-        const TransactionEntry = require('../models/TransactionEntry');
-          const debtorAccountCode = accountCodeForQuery;
-        
-          // Query for accrual for payment month (not payment date month)
-          const paymentMonthDate = new Date(paymentData.paymentMonth + '-01');
-          const paymentMonthStart = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth(), 1);
-          const paymentMonthEnd = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth() + 1, 0, 23, 59, 59, 999);
-        
-        const accrualForMonth = await TransactionEntry.findOne({
-          'entries.accountCode': debtorAccountCode,
-          source: { $in: ['rental_accrual', 'lease_start'] },
-          status: { $ne: 'reversed' },
-          date: {
-            $gte: paymentMonthStart,
-            $lte: paymentMonthEnd
-          }
-        }).lean();
-        
-        if (accrualForMonth) {
-          console.log(`✅ Found accrual for payment month ${paymentMonthKey}: ${accrualForMonth.transactionId}`);
-          
-          // Calculate outstanding balance
-          const accrualEntry = accrualForMonth.entries.find(e => 
-            e.accountCode === debtorAccountCode && e.debit > 0
+          console.log(
+            `🔍 Balance not found in outstanding list — resolving payment month ${paymentMonthKey} from ledger/accrual/negotiated charge`
           );
-          const accrualAmount = accrualEntry?.debit || 0;
-          
-          // Find all payment allocations for this month
-          const paymentAllocations = await TransactionEntry.find({
-            'entries.accountCode': debtorAccountCode,
-            source: 'payment',
-            status: { $ne: 'reversed' },
-            'metadata.monthSettled': paymentMonthKey
-          }).lean();
-          
-          let totalPaid = 0;
-          paymentAllocations.forEach(tx => {
-            const creditEntry = tx.entries.find(e => 
-              e.accountCode === debtorAccountCode && e.credit > 0
+          outstandingBalances = await this.ensurePaymentMonthInOutstandingBalances(
+            outstandingBalances,
+            paymentMonthKey,
+            accountCodeForQuery,
+            actualUserId,
+            debtorApplicationId,
+            debtorIdStr,
+            paymentData.residence,
+            paymentData.room
+          );
+          paymentMonthBalance = outstandingBalances?.find((b) => b.monthKey === paymentMonthKey);
+          hasPaymentMonthBalance = paymentMonthBalance && paymentMonthBalance.rent?.outstanding > 0;
+          if (hasPaymentMonthBalance) {
+            console.log(
+              `✅ Payment month ${paymentMonthKey} outstanding $${paymentMonthBalance.rent.outstanding} — will settle, not advance`
             );
-            if (creditEntry) totalPaid += creditEntry.credit;
-          });
-          
-          // 🆕 CRITICAL: Find negotiated payment adjustments for this month and subtract from accrual
-          const [yearStr, monStr] = paymentMonthKey.split('-');
-          const negotiatedAdjustments = await TransactionEntry.find({
-            'entries.accountCode': debtorAccountCode,
-            source: 'manual',
-            status: { $ne: 'reversed' },
-            $and: [
-              {
-                $or: [
-                  { 'metadata.type': 'negotiated_payment_adjustment' },
-                  { 'metadata.transactionType': 'negotiated_payment_adjustment' },
-                  { description: { $regex: /negotiated|discount/i } }
-                ]
-              },
-              {
-                $or: [
-                  { 'metadata.accrualMonth': parseInt(monStr), 'metadata.accrualYear': parseInt(yearStr) },
-                  { 'metadata.monthSettled': paymentMonthKey },
-                  { 'metadata.month': paymentMonthKey }
-                ]
-              }
-            ]
-          }).lean();
-          
-          let totalNegotiatedDiscount = 0;
-          negotiatedAdjustments.forEach(adj => {
-            const creditEntry = adj.entries.find(e => 
-              e.accountCode === debtorAccountCode && e.credit > 0
-            );
-            if (creditEntry) {
-              totalNegotiatedDiscount += creditEntry.credit;
-              console.log(`   📉 Found negotiated discount for ${paymentMonthKey}: $${creditEntry.credit}`);
-            }
-          });
-          
-          // Calculate net accrual after negotiated adjustments
-          const netAccrualAmount = Math.max(0, accrualAmount - totalNegotiatedDiscount);
-          const outstanding = netAccrualAmount - totalPaid;
-          
-          console.log(`   📊 Accrual calculation for ${paymentMonthKey}:`);
-          console.log(`      Original Accrual: $${accrualAmount}`);
-          console.log(`      Negotiated Discounts: $${totalNegotiatedDiscount}`);
-          console.log(`      Net Accrual (after discounts): $${netAccrualAmount}`);
-          console.log(`      Payments Received: $${totalPaid}`);
-          console.log(`      Outstanding Balance: $${outstanding}`);
-          
-          if (outstanding > 0) {
-              console.log(`✅ Payment month ${paymentMonthKey} has outstanding balance: $${outstanding} (net accrual: $${netAccrualAmount}, paid: $${totalPaid}${totalNegotiatedDiscount > 0 ? `, negotiated discounts: $${totalNegotiatedDiscount}` : ''})`);
-            hasPaymentMonthBalance = true;
-            
-            // Add to outstandingBalances
-            if (!outstandingBalances) outstandingBalances = [];
-            paymentMonthBalance = {
-              monthKey: paymentMonthKey,
-                year: paymentMonthDate.getFullYear(),
-                month: paymentMonthDate.getMonth() + 1,
-                monthName: paymentMonthDate.toLocaleString('default', { month: 'long' }),
-                rent: { owed: netAccrualAmount, paid: totalPaid, outstanding: outstanding }, // Use net accrual after negotiated discounts
-              adminFee: { owed: 0, paid: 0, outstanding: 0 },
-              deposit: { owed: 0, paid: 0, outstanding: 0 },
-              levies: { owed: 0, paid: 0, outstanding: 0 },
-              totalOutstanding: outstanding,
-              transactionId: accrualForMonth._id,
-              date: accrualForMonth.date
-            };
-            outstandingBalances.push(paymentMonthBalance);
-          } else {
-              console.log(`ℹ️ Payment month ${paymentMonthKey} is fully paid (net accrual: $${netAccrualAmount}, paid: $${totalPaid}${totalNegotiatedDiscount > 0 ? `, negotiated discounts: $${totalNegotiatedDiscount}` : ''})`);
-          }
-        } else {
-          console.log(`ℹ️ No accrual found for payment month ${paymentMonthKey}`);
           }
         }
       }
@@ -1609,9 +1693,23 @@ class EnhancedPaymentAllocationService {
               continue;
             }
 
-            if (!this.monthHasVerifiedRentAccrual(month)) {
-              console.log(`ℹ️ Skipping ${month.monthKey} — no verified rent accrual for that month`);
+            const strictTargetMonth =
+              paymentData.paymentMonth && month.monthKey === paymentMonthKey;
+            if (
+              !this.monthHasVerifiedRentAccrual(month) &&
+              !(strictTargetMonth && month.rent.outstanding > 0 && month.transactionId)
+            ) {
+              console.log(`ℹ️ Skipping ${month.monthKey} — no verified rent charge for that month`);
               continue;
+            }
+            if (strictTargetMonth && !this.monthHasVerifiedRentAccrual(month)) {
+              const targetId = await this.findPrimaryAllocationTargetForMonth(
+                month.monthKey,
+                finalAccountCode || paymentData.debtorAccountCode,
+                actualUserId,
+                debtorDoc?._id?.toString?.()
+              );
+              if (targetId) month.transactionId = targetId;
             }
             
             // Cap at month's outstanding so we never over-allocate; remainder becomes advance (separate entry below)

@@ -378,7 +378,17 @@ class DebtorLedgerService {
             const owing = Math.max(0, month.owing || 0);
             if (owing <= 0) continue;
 
-            const accrualTx = (month.transactions || []).find((t) => t.type === 'accrual');
+            const accrualTx =
+                (month.transactions || []).find(
+                    (t) =>
+                        t.type === 'accrual' &&
+                        t.source === 'rental_accrual' &&
+                        t.metadata?.type === 'monthly_rent_accrual'
+                ) ||
+                (month.transactions || []).find(
+                    (t) => t.type === 'accrual' && t.source === 'rental_accrual'
+                ) ||
+                (month.transactions || []).find((t) => t.type === 'accrual');
             const [yearStr, monStr] = monthKey.split('-');
             const accrualDate = new Date(`${monthKey}-01T00:00:00.000Z`);
 
