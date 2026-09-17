@@ -1075,10 +1075,91 @@ exports.processPayment = async (req, res) => {
             console.log(`✅ Payment synchronized with debtor and AR account code`);
         }
         
-        // Send immediate success response; heavy processing continues in background
-        const paymentResponse = payment.toObject ? payment.toObject() : payment;
+        // Run Smart FIFO allocation before responding so journals settle the correct month
+        const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
+        let normalizedPayments = EnhancedPaymentAllocationService.normalizePaymentComponents(
+            payment.payments,
+            {
+                totalAmount: payment.totalAmount,
+                rentAmount: payment.rentAmount,
+                adminFee: payment.adminFee,
+                deposit: payment.deposit,
+                levies: payment.levies,
+                date: payment.date,
+            }
+        );
+        const paymentsSum = normalizedPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+        const paymentTotal = Number(payment.totalAmount) || 0;
+        const fieldsSum =
+            (Number(payment.rentAmount) || 0) +
+            (Number(payment.adminFee) || 0) +
+            (Number(payment.deposit) || 0) +
+            (Number(payment.levies) || 0);
+        const unaccounted = Math.max(0, paymentTotal - paymentsSum);
+        if (unaccounted > 0 && fieldsSum < paymentTotal - 0.01) {
+            normalizedPayments = [
+                ...normalizedPayments,
+                { type: 'rent', amount: unaccounted, date: payment.date }
+            ];
+            console.log(`ℹ️ Payments breakdown was short by $${unaccounted}. Added implicit rent component for allocation.`);
+        }
+
+        const arAccountCode = payment.debtorAccountCode || payment.accountCode || debtor?.accountCode;
+        const allocationData = {
+            paymentId: payment._id.toString(),
+            studentId: payment.student,
+            totalAmount: paymentTotal,
+            payments: normalizedPayments,
+            residence: payment.residence,
+            paymentMonth: payment.paymentMonth,
+            rentAmount: payment.rentAmount || 0,
+            adminFee: payment.adminFee || 0,
+            deposit: payment.deposit || 0,
+            levies: payment.levies || 0,
+            method: payment.method,
+            date: payment.date,
+            accountCode: arAccountCode,
+            debtorAccountCode: arAccountCode,
+            applicationId: debtor?.application?.toString?.() || undefined,
+            debtorId: debtor?._id?.toString?.() || undefined,
+            studentName: debtor?.contactInfo?.name || undefined
+        };
+
+        console.log('🎯 Starting Smart FIFO allocation before response...');
+        console.log('📝 Allocation data:', allocationData);
+
+        let allocationResult;
         try {
-            // Bust payments list cache so Unknown names aren't sticky after create
+            allocationResult = await EnhancedPaymentAllocationService.smartFIFOAllocation(allocationData);
+        } catch (allocationError) {
+            console.error('❌ Error in Smart FIFO allocation:', allocationError.message);
+            return res.status(422).json({
+                success: false,
+                message: allocationError.message || 'Payment saved but allocation failed',
+                payment: payment.toObject ? payment.toObject() : payment
+            });
+        }
+
+        if (!allocationResult?.success) {
+            console.error('❌ Smart FIFO allocation failed:', allocationResult?.error || allocationResult?.message);
+            return res.status(422).json({
+                success: false,
+                message: allocationResult?.message || allocationResult?.error || 'Payment saved but allocation failed',
+                payment: payment.toObject ? payment.toObject() : payment
+            });
+        }
+
+        payment.metadata = payment.metadata || {};
+        payment.metadata.smartFIFOAllocationCalled = true;
+        payment.metadata.smartFIFOAllocationCalledAt = new Date();
+        payment.allocation = allocationResult.allocation;
+        await payment.save();
+        console.log('✅ Smart FIFO allocation completed:', allocationResult.allocation?.summary);
+
+        const updatedPayment = await Payment.findById(payment._id);
+        const paymentResponse = updatedPayment?.toObject ? updatedPayment.toObject() : payment.toObject();
+
+        try {
             if (typeof cacheService.deletePattern === 'function') {
                 cacheService.deletePattern('finance-payments-');
             } else if (typeof cacheService.clear === 'function') {
@@ -1091,11 +1172,10 @@ exports.processPayment = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Payment created successfully with double-entry accounting (processing allocation in background)",
+            message: 'Payment created successfully with double-entry accounting',
             payment: {
                 ...paymentResponse,
                 studentName: resolvedStudentName || undefined,
-                // Helpful for UIs that still key off student populate
                 studentInfo: resolvedStudentName
                     ? {
                         _id: finalUserId,
@@ -1105,126 +1185,8 @@ exports.processPayment = async (req, res) => {
                     : undefined
             }
         });
-        
-        // Run Smart FIFO allocation, transaction verification, and emails in the background (non-blocking)
-        (async () => {
-        
-        // Always trigger Smart FIFO allocation
-        try {
-            console.log('🎯 Starting Smart FIFO allocation...');
-            
-            const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
-            
-            // Normalize components — never spread Mongoose subdocs (drops `type` field)
-            let normalizedPayments = EnhancedPaymentAllocationService.normalizePaymentComponents(
-                payment.payments,
-                {
-                    totalAmount: payment.totalAmount,
-                    rentAmount: payment.rentAmount,
-                    adminFee: payment.adminFee,
-                    deposit: payment.deposit,
-                    levies: payment.levies,
-                    date: payment.date,
-                }
-            );
-            const paymentsSum = normalizedPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-            const totalAmount = Number(payment.totalAmount) || 0;
-            const fieldsSum =
-                (Number(payment.rentAmount) || 0) +
-                (Number(payment.adminFee) || 0) +
-                (Number(payment.deposit) || 0) +
-                (Number(payment.levies) || 0);
-            const unaccounted = Math.max(0, totalAmount - paymentsSum);
-            if (unaccounted > 0 && fieldsSum < totalAmount - 0.01) {
-                normalizedPayments = [
-                    ...normalizedPayments,
-                    { type: 'rent', amount: unaccounted, date: payment.date }
-                ];
-                console.log(`ℹ️ Payments breakdown was short by $${unaccounted}. Added implicit rent component for allocation.`);
-            }
 
-            const allocationData = {
-                paymentId: payment._id.toString(),
-                studentId: payment.student,
-                totalAmount: totalAmount,
-                payments: normalizedPayments,
-                residence: payment.residence,
-                paymentMonth: payment.paymentMonth,
-                rentAmount: payment.rentAmount || 0,
-                adminFee: payment.adminFee || 0,
-                deposit: payment.deposit || 0,
-                levies: payment.levies || 0,
-                method: payment.method,
-                date: payment.date,
-                // 🆕 Pass through AR account so advance creation can safely use 1100-{debtorId}
-                debtorAccountCode: payment.debtorAccountCode || payment.accountCode,
-                // Prefer debtor display name (User may be missing for archived tenants)
-                studentName: debtor?.contactInfo?.name || undefined
-            };
-            
-            console.log('📝 Allocation data:', allocationData);
-            
-            const allocationResult = await EnhancedPaymentAllocationService.smartFIFOAllocation(allocationData);
-            
-                        if (allocationResult.success) {
-                            console.log('✅ Smart FIFO allocation completed successfully');
-                            console.log('📊 Allocation summary:', allocationResult.allocation.summary);
-                            
-                            // 🆕 CRITICAL FIX: Only set flag AFTER successful allocation
-                            // This prevents the post-save hook from skipping fallback if allocation fails
-                            payment.metadata = payment.metadata || {};
-                            payment.metadata.smartFIFOAllocationCalled = true;
-                            payment.metadata.smartFIFOAllocationCalledAt = new Date();
-                            
-                            // Update payment with allocation results
-                            payment.allocation = allocationResult.allocation;
-                            await payment.save();
-                            
-                            console.log('✅ Payment updated with allocation breakdown');
-                            console.log(`   ✅ Flagged payment to prevent duplicate transaction creation`);
-                            
-                            // Update the response with the new allocation data
-                            if (res.locals && res.locals.payment) {
-                                res.locals.payment.allocation = allocationResult.allocation;
-                            }
-                        } else {
-                            console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
-                            console.error('   The Payment post-save hook will create a fallback transaction if needed');
-                            // Don't set flag if allocation failed - let hook create fallback
-                        }
-        } catch (allocationError) {
-            console.error('❌ Error in Smart FIFO allocation:', allocationError.message);
-            console.error('   Stack:', allocationError.stack);
-            console.error('   The Payment post-save hook will create a fallback transaction if needed');
-        }
-        
-        // 🆕 CRITICAL FIX: Verify transaction was created, create fallback if needed
-        try {
-            const TransactionEntry = require('../../models/TransactionEntry');
-            const existingTx = await TransactionEntry.findOne({
-                $or: [
-                    { sourceId: payment._id },
-                    { 'metadata.paymentId': payment._id.toString() },
-                    { reference: payment._id.toString() }
-                ],
-                source: { $in: ['payment', 'advance_payment'] }
-            });
-            
-            if (!existingTx) {
-                console.warn(`⚠️  No transaction found for payment ${payment.paymentId} after allocation attempt`);
-                console.warn(`   The Payment post-save hook will create a fallback transaction`);
-            } else {
-                console.log(`✅ Transaction verified for payment ${payment.paymentId}: ${existingTx.transactionId}`);
-            }
-        } catch (verifyError) {
-            console.error('❌ Error verifying transaction creation:', verifyError.message);
-            // Non-critical - post-save hook will handle it
-        }
-        
-        // Refresh payment from database to get latest allocation data
-        const updatedPayment = await Payment.findById(payment._id);
-        
-        // Send payment confirmation email (non-blocking with fallback)
+        // Emails only — allocation and journals are already complete
         setTimeout(async () => {
             try {
                 console.log('📧 Sending payment confirmation email...');
@@ -1366,25 +1328,8 @@ exports.processPayment = async (req, res) => {
                 console.error('❌ Error sending payment confirmation email:', emailError.message);
                 // Don't fail the payment if email fails
             }
-        }, 1000); // Send email 1 second after response
-        
-        // 🆕 CRITICAL FIX: Actually verify if transaction was created before claiming it was
-        const TransactionEntry = require('../../models/TransactionEntry');
-        const existingTx = await TransactionEntry.findOne({
-            $or: [
-                { sourceId: updatedPayment._id },
-                { 'metadata.paymentId': updatedPayment._id.toString() },
-                { reference: updatedPayment._id.toString() },
-                { 'metadata.paymentId': updatedPayment.paymentId }
-            ],
-            source: { $in: ['payment', 'advance_payment'] },
-            status: { $ne: 'reversed' }
-        });
-        
-        console.log('ℹ️ Background verification for payment', updatedPayment.paymentId, 'transactionCreated:', !!existingTx);
-        
-        })();
-        
+        }, 1000);
+
         return;
 
     } catch (error) {

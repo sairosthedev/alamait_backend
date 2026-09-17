@@ -104,22 +104,48 @@ class EnhancedPaymentAllocationService {
       if (found) return found;
     }
 
+    const monthKey = paymentMonthKey;
+    const monthCriteria = {
+      $or: [
+        { 'metadata.accrualMonth': monthNum, 'metadata.accrualYear': yearNum },
+        { 'metadata.accrualMonth': String(monthNum), 'metadata.accrualYear': String(yearNum) },
+        { 'metadata.month': monthKey },
+        { description: { $regex: new RegExp(monthKey.replace('-', '[-/]')) } }
+      ]
+    };
+
     if (accountCode) {
-      const monthKey = paymentMonthKey;
       const byMetadata = await TransactionEntry.findOne({
         source: { $in: ['rental_accrual', 'lease_start'] },
         status: { $nin: ['reversed', 'deleted'] },
         voided: { $ne: true },
         'entries.accountCode': accountCode,
-        $or: [
-          { 'metadata.accrualMonth': monthNum, 'metadata.accrualYear': yearNum },
-          { 'metadata.accrualMonth': String(monthNum), 'metadata.accrualYear': String(yearNum) },
-          { 'metadata.month': monthKey },
-          { description: { $regex: new RegExp(monthKey.replace('-', '[-/]')) } }
-        ]
+        ...monthCriteria
       }).sort({ date: -1 });
 
       if (byMetadata) return byMetadata;
+    }
+
+    // Last resort: month + student/application/debtor ids without requiring AR account code
+    if (candidateIds.length > 0) {
+      const studentOrCriteria = [
+        { 'metadata.studentId': { $in: candidateIds } },
+        { 'metadata.userId': { $in: candidateIds } },
+        { 'metadata.applicationId': { $in: candidateIds } },
+        { 'metadata.debtorId': { $in: candidateIds } },
+        ...candidateIds
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+          .map((id) => ({ sourceId: new mongoose.Types.ObjectId(id) }))
+      ];
+
+      const byMonthAndStudent = await TransactionEntry.findOne({
+        source: { $in: ['rental_accrual', 'lease_start'] },
+        status: { $nin: ['reversed', 'deleted'] },
+        voided: { $ne: true },
+        $and: [monthCriteria, { $or: studentOrCriteria }]
+      }).sort({ date: -1 });
+
+      if (byMonthAndStudent) return byMonthAndStudent;
     }
 
     return null;
@@ -129,16 +155,23 @@ class EnhancedPaymentAllocationService {
    * Build an outstanding-balance month row from a known accrual transaction.
    */
   static async computeMonthOutstandingFromAccrual(accrualForMonth, paymentMonthKey, debtorAccountCode) {
-    if (!accrualForMonth || !paymentMonthKey || !debtorAccountCode) return null;
+    if (!accrualForMonth || !paymentMonthKey) return null;
 
     const paymentMonthDate = new Date(`${paymentMonthKey}-01T12:00:00.000Z`);
-    const accrualEntry = accrualForMonth.entries?.find(
-      (e) => e.accountCode === debtorAccountCode && e.debit > 0
+    const arEntryFromAccrual = accrualForMonth.entries?.find(
+      (e) => String(e.accountCode || '').startsWith('1100-') && Number(e.debit) > 0
     );
+    const effectiveAccountCode = debtorAccountCode || arEntryFromAccrual?.accountCode;
+    if (!effectiveAccountCode) return null;
+
+    const accrualEntry =
+      accrualForMonth.entries?.find(
+        (e) => e.accountCode === effectiveAccountCode && Number(e.debit) > 0
+      ) || arEntryFromAccrual;
     const accrualAmount = accrualEntry?.debit || 0;
 
     const paymentAllocations = await TransactionEntry.find({
-      'entries.accountCode': debtorAccountCode,
+      'entries.accountCode': effectiveAccountCode,
       source: { $in: ['payment', 'advance_payment_application', 'accounts_receivable_collection'] },
       status: { $ne: 'reversed' },
       'metadata.monthSettled': paymentMonthKey
@@ -147,14 +180,14 @@ class EnhancedPaymentAllocationService {
     let totalPaid = 0;
     paymentAllocations.forEach((tx) => {
       const creditEntry = tx.entries?.find(
-        (e) => e.accountCode === debtorAccountCode && e.credit > 0
+        (e) => e.accountCode === effectiveAccountCode && e.credit > 0
       );
       if (creditEntry) totalPaid += creditEntry.credit;
     });
 
     const [yearStr, monStr] = paymentMonthKey.split('-');
     const negotiatedAdjustments = await TransactionEntry.find({
-      'entries.accountCode': debtorAccountCode,
+      'entries.accountCode': effectiveAccountCode,
       source: 'manual',
       status: { $ne: 'reversed' },
       $and: [
@@ -178,7 +211,7 @@ class EnhancedPaymentAllocationService {
     let totalNegotiatedDiscount = 0;
     negotiatedAdjustments.forEach((adj) => {
       const creditEntry = adj.entries?.find(
-        (e) => e.accountCode === debtorAccountCode && e.credit > 0
+        (e) => e.accountCode === effectiveAccountCode && e.credit > 0
       );
       if (creditEntry) totalNegotiatedDiscount += creditEntry.credit;
     });
@@ -229,10 +262,17 @@ class EnhancedPaymentAllocationService {
 
     if (!accrual) return balances;
 
+    let resolvedAccountCode = accountCode;
+    if (!resolvedAccountCode && accrual.entries?.length) {
+      resolvedAccountCode = accrual.entries.find(
+        (e) => String(e.accountCode || '').startsWith('1100-') && Number(e.debit) > 0
+      )?.accountCode;
+    }
+
     const monthRow = await this.computeMonthOutstandingFromAccrual(
       accrual,
       paymentMonthKey,
-      accountCode
+      resolvedAccountCode
     );
     if (!monthRow) return balances;
 
@@ -413,7 +453,13 @@ class EnhancedPaymentAllocationService {
         console.log('📋 Payment Data:', JSON.stringify(paymentData, null, 2));
       }
       
-      const { studentId: userId, totalAmount, payments: rawPayments, accountCode } = paymentData;
+      // Controller often passes debtorAccountCode; normalize so accrual lookup works
+      const accountCodeFromPayload =
+        paymentData.accountCode || paymentData.debtorAccountCode || null;
+      paymentData.accountCode = accountCodeFromPayload;
+
+      const { studentId: userId, totalAmount, payments: rawPayments } = paymentData;
+      const accountCode = accountCodeFromPayload;
       const payments = this.normalizePaymentComponents(rawPayments, paymentData);
       
       // 🆕 FIX: Clear any potential caching issues by adding a small delay
@@ -516,7 +562,11 @@ class EnhancedPaymentAllocationService {
       console.log(`📅 Payment month: ${paymentMonthKey}`);
       console.log(`📅 Payment date: ${paymentDate.toISOString().split('T')[0]}`);
 
-      const accountCodeForQuery = finalAccountCode || debtorDoc?.accountCode;
+      const accountCodeForQuery =
+        finalAccountCode ||
+        debtorDoc?.accountCode ||
+        paymentData.debtorAccountCode ||
+        paymentData.accountCode;
       const debtorApplicationId = debtorDoc?.application?.toString?.() || paymentData.applicationId || null;
       const debtorIdStr = debtorDoc?._id?.toString?.() || paymentData.debtorId || null;
 
@@ -821,11 +871,12 @@ class EnhancedPaymentAllocationService {
           // Wait a bit and check again for accruals (in case accrual is being created concurrently)
           await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
           
+          const targetMonthKey = paymentData.paymentMonth || paymentMonthKey;
           let recheckBalances = await this.getDetailedOutstandingBalances(actualUserId);
-          if (accountCodeForQuery && paymentMonthKey) {
+          if (targetMonthKey) {
             recheckBalances = await this.ensurePaymentMonthInOutstandingBalances(
               recheckBalances,
-              paymentMonthKey,
+              targetMonthKey,
               accountCodeForQuery,
               actualUserId,
               debtorApplicationId,
@@ -835,7 +886,13 @@ class EnhancedPaymentAllocationService {
           if (recheckBalances && recheckBalances.length > 0) {
             console.log(`✅ Found accruals after waiting - processing as regular payment allocation`);
             outstandingBalances = recheckBalances;
+          } else if (paymentData.paymentMonth) {
+            throw new Error(
+              `No rent accrual found for payment month ${paymentData.paymentMonth}. ` +
+                `Sync accruals for this tenant before recording the payment.`
+            );
           } else if (isSameMonthAsPaymentDate) {
+            // Only auto-advance same-month when paymentMonth was NOT explicitly chosen
             console.log(
               `⚠️ Same-month payment (${paymentMonthKey}) but no accrual found — treating as advance (accrual may post later)`
             );
@@ -955,6 +1012,13 @@ class EnhancedPaymentAllocationService {
         }
       }
       
+      if (!outstandingBalances || outstandingBalances.length === 0) {
+        throw new Error(
+          `No outstanding balances to allocate payment ${paymentData.paymentId}. ` +
+            `Ensure accruals exist for ${paymentData.paymentMonth || 'the payment month'}.`
+        );
+      }
+
       console.log(`📊 Found ${outstandingBalances.length} months with outstanding balances`);
       
       // 3. Process payments according to business rules
