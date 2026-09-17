@@ -58,6 +58,23 @@ class DebtorLedgerService {
                     {
                         'metadata.debtorId': debtorId
                     },
+                    // Negotiated rent adjustments (increase or decrease) by metadata alone
+                    {
+                        'metadata.transactionType': 'negotiated_payment_adjustment',
+                        'metadata.debtorId': debtorId.toString()
+                    },
+                    {
+                        'metadata.type': 'negotiated_payment_adjustment',
+                        'metadata.debtorId': debtorId.toString()
+                    },
+                    {
+                        'metadata.transactionType': 'negotiated_payment_adjustment',
+                        'metadata.studentId': studentId?.toString()
+                    },
+                    {
+                        'metadata.type': 'negotiated_payment_adjustment',
+                        'metadata.studentId': studentId?.toString()
+                    },
                     // 🆕 CRITICAL: Include reversal transactions by sourceId (original accrual ID)
                     // Reversals reference the original accrual transaction, so we need to find them
                     {
@@ -593,32 +610,52 @@ class DebtorLedgerService {
                 ];
             }
             
-            // 🆕 CRITICAL FIX: Handle negotiated payment adjustments specially
-            // Negotiated payments reduce AR (credit to AR) and should reduce amount owing
-            if (transaction.source === 'manual' && 
-                (transaction.metadata?.type === 'negotiated_payment_adjustment' || 
-                 transaction.metadata?.transactionType === 'negotiated_payment_adjustment' ||
-                 transaction.description?.toLowerCase().includes('negotiated'))) {
-                // Negotiated payment adjustment - credit to AR reduces amount owing
-                if (totalCredit > 0) {
-                    const transactionDate = new Date(transaction.date);
-                    const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
-                    
-                    // Try to get the accrual month from metadata
-                    let accrualMonthKey = monthKey;
-                    if (transaction.metadata?.accrualMonth && transaction.metadata?.accrualYear) {
-                        const year = transaction.metadata.accrualYear;
-                        const month = String(transaction.metadata.accrualMonth).padStart(2, '0');
-                        accrualMonthKey = `${year}-${month}`;
-                    }
-                    
+            // Negotiated rent adjustments: decrease (AR credit) or increase (AR debit)
+            const isNegotiatedAdjustment =
+                transaction.source === 'manual' &&
+                (transaction.metadata?.type === 'negotiated_payment_adjustment' ||
+                    transaction.metadata?.transactionType === 'negotiated_payment_adjustment' ||
+                    transaction.description?.toLowerCase().includes('negotiated'));
+
+            if (isNegotiatedAdjustment) {
+                const accrualMonthKey = this.resolveLedgerMonthKey(transaction, transaction.date);
+                const isIncrease =
+                    transaction.metadata?.adjustmentDirection === 'increase' ||
+                    (totalDebit > 0 && totalCredit === 0);
+
+                if (isIncrease && totalDebit > 0) {
                     return {
                         entryId: transaction._id,
                         transactionId: transaction.transactionId,
                         date: transaction.date,
                         monthKey: accrualMonthKey,
-                        type: 'payment', // Treat as payment to reduce amount owing
-                        category: 'rent', // Default to rent, can be adjusted based on metadata
+                        type: 'accrual',
+                        category: 'rent',
+                        amount: totalDebit,
+                        description: transaction.description || 'Negotiated rent increase',
+                        source: transaction.source,
+                        metadata: {
+                            ...transaction.metadata,
+                            isNegotiatedPayment: true,
+                            adjustmentType: 'negotiated_increase'
+                        },
+                        arEntry: {
+                            accountCode: arEntries[0]?.accountCode || primaryArCode,
+                            accountName: arEntries.find((e) => e.debit > 0)?.accountName || `Accounts Receivable`,
+                            debit: totalDebit,
+                            credit: 0
+                        }
+                    };
+                }
+
+                if (totalCredit > 0) {
+                    return {
+                        entryId: transaction._id,
+                        transactionId: transaction.transactionId,
+                        date: transaction.date,
+                        monthKey: accrualMonthKey,
+                        type: 'payment',
+                        category: 'rent',
                         amount: totalCredit,
                         description: transaction.description || 'Negotiated payment discount',
                         source: transaction.source,
@@ -629,12 +666,13 @@ class DebtorLedgerService {
                         },
                         arEntry: {
                             accountCode: arEntries[0]?.accountCode || primaryArCode,
-                            accountName: arEntries.find(e => e.credit > 0)?.accountName || `Accounts Receivable`,
+                            accountName: arEntries.find((e) => e.credit > 0)?.accountName || `Accounts Receivable`,
                             debit: 0,
                             credit: totalCredit
                         }
                     };
                 }
+
                 return null;
             }
             

@@ -60,9 +60,18 @@ class DebtorTransactionSyncService {
                             console.log(`   💳 Advance payment application: $${entry.credit || 0} applied to accrual (already counted in advance_payment)`);
                         } else if (transaction.source === 'manual') {
                             // Handle manual transactions (negotiations, reversals, etc.)
-                            if (transaction.metadata?.type === 'negotiated_payment_adjustment') {
-                                // Negotiated payment reduces total owed
-                                totalOwed -= entry.credit || 0; // Credit to AR reduces what's owed
+                            const isNegotiated =
+                                transaction.metadata?.type === 'negotiated_payment_adjustment' ||
+                                transaction.metadata?.transactionType === 'negotiated_payment_adjustment';
+                            if (isNegotiated) {
+                                const isIncrease =
+                                    transaction.metadata?.adjustmentDirection === 'increase' ||
+                                    (entry.debit > 0 && !(entry.credit > 0));
+                                if (isIncrease) {
+                                    totalOwed += entry.debit || 0;
+                                } else {
+                                    totalOwed -= entry.credit || 0;
+                                }
                             } else if (transaction.metadata?.type === 'security_deposit_reversal') {
                                 // Security deposit reversal reduces total owed
                                 totalOwed -= entry.credit || 0; // Credit to AR reduces what's owed
@@ -184,9 +193,18 @@ class DebtorTransactionSyncService {
                             monthlyData[monthKey].amount += entry.debit || 0;
                         } else if (transaction.source === 'manual') {
                             // Handle manual transactions (negotiations, reversals, etc.)
-                            if (transaction.metadata?.type === 'negotiated_payment_adjustment') {
-                                // Negotiated payment reduces amount
-                                monthlyData[monthKey].amount -= entry.credit || 0;
+                            const isNegotiated =
+                                transaction.metadata?.type === 'negotiated_payment_adjustment' ||
+                                transaction.metadata?.transactionType === 'negotiated_payment_adjustment';
+                            if (isNegotiated) {
+                                const isIncrease =
+                                    transaction.metadata?.adjustmentDirection === 'increase' ||
+                                    (entry.debit > 0 && !(entry.credit > 0));
+                                if (isIncrease) {
+                                    monthlyData[monthKey].amount += entry.debit || 0;
+                                } else {
+                                    monthlyData[monthKey].amount -= entry.credit || 0;
+                                }
                             } else if (transaction.metadata?.type === 'security_deposit_reversal') {
                                 // Security deposit reversal reduces amount
                                 monthlyData[monthKey].amount -= entry.credit || 0;
