@@ -207,6 +207,17 @@ class EnhancedCashFlowService {
         const desc = String(description || '').toLowerCase();
         const paymentType = String(metadata?.paymentType || '').toLowerCase();
 
+        // Posted settlement (DR cash / CR AR) — never treat as advance even if description mentions advance
+        if (
+            metadata?.allocationType === 'payment_allocation' &&
+            metadata?.isAdvancePayment === false
+        ) {
+            if (paymentType === 'levies') return 'levies';
+            if (paymentType === 'admin') return 'admin_fees';
+            if (paymentType === 'deposit') return 'deposits';
+            return 'rental_income';
+        }
+
         if (
             paymentType === 'levies' ||
             desc.includes('payment allocation: levies') ||
@@ -443,7 +454,7 @@ class EnhancedCashFlowService {
                     .sort({ date: 1 })
                     .lean(),
                 Payment.find(paymentQuery)
-                    .select('paymentId date amount totalAmount rentAmount adminFee deposit levies method status residence student payments paymentMonth')
+                    .select('paymentId date amount totalAmount rentAmount adminFee deposit levies method status residence student payments paymentMonth allocation metadata')
                     .populate('student', 'firstName lastName')
                     .populate('residence', 'name')
                     .sort({ date: 1 })
@@ -892,6 +903,13 @@ class EnhancedCashFlowService {
 
         // Skip cash receipts whose Payment document was deleted (orphaned allocations)
         const existingPaymentIds = await this.getExistingPaymentIdSet(transactionEntries);
+
+        // Smart FIFO stores breakdown on payment.allocation — normalize for downstream checks
+        (payments || []).forEach((p) => {
+            if (p?.allocation?.monthlyBreakdown?.length && !p.monthlyBreakdown?.length) {
+                p.monthlyBreakdown = p.allocation.monthlyBreakdown;
+            }
+        });
         
         // Create a map of transaction entries to their corresponding payments for accurate date handling
         const transactionToPaymentMap = new Map();
@@ -1455,6 +1473,24 @@ class EnhancedCashFlowService {
                         }
                     }
                     
+                    // GL source advance but FIFO allocated as rent settlement (legacy mis-post)
+                    if (
+                        (entry.source === 'advance_payment' || entry.metadata?.isAdvancePayment) &&
+                        correspondingPayment?.allocation?.monthlyBreakdown?.length
+                    ) {
+                        const rentSettlement = correspondingPayment.allocation.monthlyBreakdown.find(
+                            (a) => a.allocationType === 'rent_settlement' && a.paymentType === 'rent'
+                        );
+                        if (rentSettlement) {
+                            const txMonth = entry.metadata?.monthSettled;
+                            if (!txMonth || txMonth === rentSettlement.month) {
+                                category = 'rental_income';
+                                description = 'Rental Income from Students';
+                                isAdvancePayment = false;
+                            }
+                        }
+                    }
+
                     // Check if this is a direct advance payment transaction (only if not already categorized)
                     if ((entry.source === 'advance_payment' || entry.sourceModel === 'AdvancePayment') && category === 'other_income') {
                         category = 'advance_payments';

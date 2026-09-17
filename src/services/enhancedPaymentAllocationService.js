@@ -1732,12 +1732,23 @@ class EnhancedPaymentAllocationService {
                   ...paymentData,
                   paymentType: 'rent',
                   studentName: paymentData.studentName || 'Student',
-                  debtorAccountCode: finalAccountCode || paymentData.debtorAccountCode
+                  debtorAccountCode: finalAccountCode || paymentData.debtorAccountCode,
+                  debtorId: debtorDoc?._id?.toString?.() || paymentData.debtorId,
+                  settlementVerified: true
                 },
                 'rent',
                 month.monthKey,
                 month.transactionId
               );
+
+              const postedAsAdvance =
+                paymentTransaction?.source === 'advance_payment' ||
+                paymentTransaction?.metadata?.isAdvancePayment === true;
+              if (postedAsAdvance) {
+                console.warn(
+                  `⚠️ GL posted as advance for ${month.monthKey} despite FIFO settlement — check accrual linkage`
+                );
+              }
               
               // Update AR transaction status
               await this.updateARTransaction(
@@ -1747,11 +1758,6 @@ class EnhancedPaymentAllocationService {
                 month.rent.outstanding
               );
               
-              // Determine if this is an advance payment (future month) or current settlement
-              const paymentDate = new Date(paymentData.date);
-              const allocationMonth = new Date(month.year, month.month - 1, 1); // month is 1-based
-              const isAdvancePayment = allocationMonth > paymentDate;
-              
               allocationResults.push({
                 month: month.monthKey,
                 monthName: month.monthName,
@@ -1760,8 +1766,9 @@ class EnhancedPaymentAllocationService {
                 amountAllocated: amountToAllocate,
                 originalOutstanding: month.rent.outstanding,
                 newOutstanding: month.rent.outstanding - amountToAllocate,
-                allocationType: isAdvancePayment ? 'advance_payment' : 'rent_settlement',
-                transactionId: month.transactionId
+                allocationType: postedAsAdvance ? 'advance_payment' : 'rent_settlement',
+                transactionId: month.transactionId,
+                glTransactionId: paymentTransaction?._id?.toString?.()
               });
               
               // Update month outstanding balance
@@ -3537,6 +3544,75 @@ class EnhancedPaymentAllocationService {
     }
   }
 
+  static isRentChargeTransaction(tx) {
+    if (!tx) return false;
+    if (tx.source === 'rental_accrual' || tx.source === 'lease_start') return true;
+    if (tx.source === 'manual') {
+      return (
+        tx.metadata?.type === 'negotiated_payment_adjustment' ||
+        tx.metadata?.transactionType === 'negotiated_payment_adjustment'
+      );
+    }
+    return false;
+  }
+
+  /**
+   * Whether a billing month has a rent charge (accrual or negotiated adjustment).
+   */
+  static async resolveRentChargeForSettlement({
+    arTransactionId,
+    monthSettled,
+    userId,
+    paymentData,
+    accountCode,
+    debtorId
+  }) {
+    if (arTransactionId) {
+      const linked = await TransactionEntry.findOne({
+        _id: arTransactionId,
+        status: { $nin: ['reversed', 'deleted'] }
+      }).lean();
+      if (linked && this.isRentChargeTransaction(linked)) {
+        const chargeMonth = this.resolveAccrualMonthKey(linked);
+        if (!monthSettled || chargeMonth === monthSettled) {
+          return { hasAccrual: true, chargeTx: linked };
+        }
+      }
+    }
+
+    if (monthSettled) {
+      const charge = await this.findAccrualForPaymentMonth({
+        paymentMonthKey: monthSettled,
+        accountCode: accountCode || paymentData?.debtorAccountCode,
+        userId,
+        applicationId: paymentData?.applicationId,
+        debtorId: debtorId || paymentData?.debtorId,
+        residence: paymentData?.residence,
+        room: paymentData?.room
+      });
+      if (charge) {
+        return { hasAccrual: true, chargeTx: charge };
+      }
+
+      if (paymentData?.settlementVerified && debtorId && userId) {
+        const ledgerRow = await this.computeMonthOutstandingFromLedger(
+          monthSettled,
+          debtorId,
+          userId,
+          accountCode || paymentData?.debtorAccountCode
+        );
+        if (ledgerRow?.rent?.outstanding > 0) {
+          const chargeTx = ledgerRow.transactionId
+            ? await TransactionEntry.findById(ledgerRow.transactionId).lean()
+            : null;
+          return { hasAccrual: true, chargeTx };
+        }
+      }
+    }
+
+    return { hasAccrual: false, chargeTx: null };
+  }
+
   /**
    * 🆕 NEW: Create payment allocation transaction with proper double-entry accounting
    * @param {string} paymentId - Payment ID
@@ -3616,71 +3692,36 @@ class EnhancedPaymentAllocationService {
         }
       }
 
-      // 🆕 CRITICAL: Check if the month being paid for had an accrual AT THE TIME OF PAYMENT
-      // Use payment date to determine if accrual existed when payment was made
-      // If no accrual existed at payment time, treat as advance payment and route to deferred income
       const paymentDate = paymentData.date ? new Date(paymentData.date) : new Date();
-      
+
+      // True prepayment: cash received before the billing month starts
       let hasAccrual = false;
-      if (arTransactionId) {
-        const existingAR = await TransactionEntry.findOne({
-          _id: arTransactionId,
-          source: 'rental_accrual',
-          status: { $ne: 'reversed' }
-        });
-        if (existingAR) {
-          const accrualMonth = this.resolveAccrualMonthKey(existingAR);
-          hasAccrual = !monthSettled || accrualMonth === monthSettled;
-          if (hasAccrual) {
-            console.log(`✅ Using linked accrual ${arTransactionId} for ${monthSettled}`);
-          } else {
-            console.log(
-              `⚠️ Linked accrual ${arTransactionId} is for ${accrualMonth}, not ${monthSettled} — treating as advance payment`
-            );
-            arTransactionId = null;
-          }
-        }
-      } else if (monthSettled) {
-        // Check if a rent accrual exists for this exact month on or before payment date
+      if (monthSettled && paymentType === 'rent') {
         const [year, month] = monthSettled.split('-').map(Number);
         const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
-        const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
-        
-        if (paymentDate < monthStart) {
-          console.log(`⚠️ Payment date ${paymentDate.toISOString()} is before month start ${monthStart.toISOString()} - treating as advance payment`);
-          hasAccrual = false;
+        if (paymentDate < monthStart && !paymentData.settlementVerified) {
+          console.log(
+            `⚠️ Payment date ${paymentDate.toISOString()} is before ${monthSettled} — advance unless caller verified settlement`
+          );
         } else {
-          const accrualExists = await TransactionEntry.findOne({
-            source: 'rental_accrual',
-            'metadata.studentId': userId,
-            date: {
-              $gte: monthStart,
-              $lte: paymentDate < monthEnd ? paymentDate : monthEnd
-            },
-            status: 'posted',
-            $or: [
-              {
-                'metadata.type': 'monthly_rent_accrual',
-                'metadata.accrualMonth': month,
-                'metadata.accrualYear': year
-              },
-              { 'metadata.type': 'lease_start', 'metadata.month': monthSettled },
-              {
-                'metadata.type': 'lease_start',
-                'metadata.accrualMonth': month,
-                'metadata.accrualYear': year
-              }
-            ]
-          }).sort({ date: -1 });
-          
-          hasAccrual = !!accrualExists;
-          if (accrualExists) {
-            arTransactionId = accrualExists._id;
-            console.log(`✅ Found accrual for ${monthSettled} on ${accrualExists.date.toISOString()}`);
-          } else {
-            console.log(`⚠️ No rent accrual for ${monthSettled} on or before payment date ${paymentDate.toISOString()}`);
+          const resolved = await this.resolveRentChargeForSettlement({
+            arTransactionId,
+            monthSettled,
+            userId,
+            paymentData,
+            accountCode: paymentData.debtorAccountCode,
+            debtorId: paymentData.debtorId
+          });
+          hasAccrual = resolved.hasAccrual;
+          if (resolved.chargeTx?._id) {
+            arTransactionId = resolved.chargeTx._id;
+            console.log(`✅ Rent charge for ${monthSettled}: ${resolved.chargeTx.transactionId} (${resolved.chargeTx.source})`);
+          } else if (!hasAccrual) {
+            console.log(`⚠️ No rent charge found for ${monthSettled}`);
           }
         }
+      } else if (monthSettled && paymentType !== 'rent') {
+        hasAccrual = true;
       }
 
       // Get student name for AR account (User may be missing — use Debtor)
