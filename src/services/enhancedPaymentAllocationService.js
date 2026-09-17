@@ -135,7 +135,8 @@ class EnhancedPaymentAllocationService {
       }
     }
 
-    if (codeFromPayload) {
+    // Never overwrite a payment-month + room match with a stale AR code from the client
+    if (!debtorDoc && codeFromPayload) {
       const debtorIdFromCode = codeFromPayload.replace('1100-', '');
       if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
         debtorDoc = await Debtor.findById(debtorIdFromCode).select(select).lean();
@@ -226,6 +227,45 @@ class EnhancedPaymentAllocationService {
           console.log(
             `⚠️ Multiple debtors for ${room} — using newest: ${debtorDoc.debtorCode || debtorDoc._id}`
           );
+        }
+      }
+    }
+
+    // If client sent an explicit debtor but it has no accrual for paymentMonth,
+    // prefer another debtor in the same room that does (duplicate tenant records).
+    if (paymentMonth && residence && room && debtorDoc) {
+      const roomNorm = String(room).trim();
+      const explicitHasAccrual = await this.findAccrualForPaymentMonth({
+        paymentMonthKey: paymentMonth,
+        accountCode: debtorDoc.accountCode,
+        userId: debtorDoc.user?.toString(),
+        applicationId: debtorDoc.application?.toString(),
+        debtorId: debtorDoc._id.toString(),
+        residence,
+        room: roomNorm
+      });
+      if (!explicitHasAccrual) {
+        const roomCandidates = await Debtor.find({ residence, roomNumber: roomNorm })
+          .select(select)
+          .lean();
+        for (const candidate of roomCandidates) {
+          if (candidate._id.toString() === debtorDoc._id.toString()) continue;
+          const accrual = await this.findAccrualForPaymentMonth({
+            paymentMonthKey: paymentMonth,
+            accountCode: candidate.accountCode,
+            userId: candidate.user?.toString(),
+            applicationId: candidate.application?.toString(),
+            debtorId: candidate._id.toString(),
+            residence,
+            room: roomNorm
+          });
+          if (accrual) {
+            console.log(
+              `⚠️ Client debtor ${debtorDoc.debtorCode} has no ${paymentMonth} accrual — switching to ${candidate.debtorCode}`
+            );
+            debtorDoc = candidate;
+            break;
+          }
         }
       }
     }

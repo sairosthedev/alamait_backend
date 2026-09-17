@@ -792,8 +792,11 @@ exports.processPayment = async (req, res) => {
     try {
         console.log('💰 Finance payment processing - delegating to admin payment system');
 
-        // Handle student data - support both object and ID formats
-        const { student, studentData } = req.body;
+        // Handle student data - support object, studentId, userId, or debtorId from Add Payment UI
+        let { student, studentData, studentId: bodyStudentId, userId: bodyUserId, debtorId: bodyDebtorId } = req.body;
+        if (!student && (bodyStudentId || bodyUserId || bodyDebtorId)) {
+            student = bodyStudentId || bodyUserId || bodyDebtorId;
+        }
         if (student) {
             const User = require('../../models/User');
             const Application = require('../../models/Application');
@@ -875,7 +878,23 @@ exports.processPayment = async (req, res) => {
         }
 
         // Ensure student has proper debtor setup before delegating to admin system
-        const { student: studentIdForDebtor, residence, room, date, totalAmount } = req.body;
+        const {
+            student: studentField,
+            studentId: reqStudentId,
+            userId: reqUserId,
+            debtorId: reqDebtorId,
+            residence,
+            room,
+            date,
+            totalAmount
+        } = req.body;
+        const studentIdForDebtor =
+            studentField ||
+            reqStudentId ||
+            reqUserId ||
+            reqDebtorId ||
+            (typeof student === 'object' && student?._id) ||
+            student;
         
         // 🆕 CRITICAL FIX: Declare debtor outside if block to prevent "debtor is not defined" error
         let debtor = null;
