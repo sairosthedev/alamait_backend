@@ -154,11 +154,10 @@ receiptSchema.index({ receiptDate: 1 });
 receiptSchema.index({ createdBy: 1 });
 
 // Pre-save middleware to generate receipt number
-receiptSchema.pre('save', async function(next) {
+receiptSchema.pre('save', async function() {
     if (this.isNew && !this.receiptNumber) {
         this.receiptNumber = await this.generateReceiptNumber();
     }
-    next();
 });
 
 // Static method to generate receipt number

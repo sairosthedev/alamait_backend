@@ -236,31 +236,25 @@ vendorSchema.index({ status: 1 });
 vendorSchema.index({ chartOfAccountsCode: 1 });
 
 // Pre-save middleware to generate vendor code if not provided
-vendorSchema.pre('save', async function(next) {
-    try {
-        if (!this.vendorCode) {
-            this.vendorCode = await generateVendorCode();
-        }
-        
-        // Generate vendorId if not provided (required for unique constraint)
-        if (!this.vendorId) {
-            this.vendorId = this.vendorCode; // Use vendorCode as vendorId
-        }
-        
-        // Also generate chart of accounts code if not provided
-        if (!this.chartOfAccountsCode) {
-            const vendorCount = await mongoose.model('Vendor').countDocuments();
-            this.chartOfAccountsCode = `200${(vendorCount + 1).toString().padStart(3, '0')}`;
-        }
-        
-        // Mark this as a new document for post-save middleware
-        this._isNewDocument = this.isNew;
-        
-        next();
-    } catch (error) {
-        console.error('Error in vendor pre-save middleware:', error);
-        next(error);
+// Mongoose 9+: async hooks must not use next() — return or throw instead
+vendorSchema.pre('save', async function() {
+    if (!this.vendorCode) {
+        this.vendorCode = await generateVendorCode();
     }
+
+    // Generate vendorId if not provided (required for unique constraint)
+    if (!this.vendorId) {
+        this.vendorId = this.vendorCode; // Use vendorCode as vendorId
+    }
+
+    // Also generate chart of accounts code if not provided
+    if (!this.chartOfAccountsCode) {
+        const vendorCount = await mongoose.model('Vendor').countDocuments();
+        this.chartOfAccountsCode = `200${(vendorCount + 1).toString().padStart(3, '0')}`;
+    }
+
+    // Mark this as a new document for post-save middleware
+    this._isNewDocument = this.isNew;
 });
 
 // Post-save middleware to create vendor accounts payable account

@@ -53,7 +53,7 @@ const TenantAccountSchema = new mongoose.Schema({
 });
 
 // Pre-save middleware to generate account code
-TenantAccountSchema.pre('save', async function(next) {
+TenantAccountSchema.pre('save', async function() {
     if (this.isNew) {
         // Generate unique account code: TEN + 6 digits
         const count = await mongoose.model('TenantAccount').countDocuments();
@@ -61,7 +61,6 @@ TenantAccountSchema.pre('save', async function(next) {
         this.accountName = `Tenant Account - ${this.accountCode}`;
     }
     this.updatedAt = new Date();
-    next();
 });
 
 // Index for efficient queries

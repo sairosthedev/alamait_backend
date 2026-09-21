@@ -223,17 +223,15 @@ enhancedQuotationSchema.index({ isFinanceSelected: 1 });
 enhancedQuotationSchema.index({ validUntil: 1 });
 
 // Pre-save middleware to generate quotation number if not provided
-enhancedQuotationSchema.pre('save', async function(next) {
+enhancedQuotationSchema.pre('save', async function() {
     if (!this.quotationNumber) {
         this.quotationNumber = await generateQuotationNumber();
     }
-    
+
     // Calculate total amount if not provided
     if (!this.totalAmount) {
         this.totalAmount = this.amount + (this.vatAmount || 0);
     }
-    
-    next();
 });
 
 // Generate unique quotation number

@@ -53,7 +53,7 @@ const StudentAccountSchema = new mongoose.Schema({
 });
 
 // Pre-save middleware to generate account code
-StudentAccountSchema.pre('save', async function(next) {
+StudentAccountSchema.pre('save', async function() {
   if (this.isNew) {
     // Generate unique account code: STU + 6 digits
     const count = await mongoose.model('StudentAccount').countDocuments();
@@ -61,7 +61,6 @@ StudentAccountSchema.pre('save', async function(next) {
     this.accountName = `Student Account - ${this.accountCode}`;
   }
   this.updatedAt = new Date();
-  next();
 });
 
 // Index for efficient queries

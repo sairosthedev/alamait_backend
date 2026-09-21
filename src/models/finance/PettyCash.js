@@ -180,11 +180,10 @@ pettyCashSchema.statics.generateFundCode = async function() {
 };
 
 // Pre-save middleware to generate fund code if not provided
-pettyCashSchema.pre('save', async function(next) {
+pettyCashSchema.pre('save', async function() {
     if (!this.fundCode) {
         this.fundCode = await this.constructor.generateFundCode();
     }
-    next();
 });
 
 // Method to get balance summary
