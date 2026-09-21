@@ -50,10 +50,9 @@ const pettyCashSchema = new mongoose.Schema({
 });
 
 // Calculate remaining amount before saving
-pettyCashSchema.pre('save', function(next) {
+pettyCashSchema.pre('save', function() {
   this.remainingAmount = this.allocatedAmount - this.usedAmount;
   this.lastUpdated = new Date();
-  next();
 });
 
 module.exports = mongoose.model('PettyCash', pettyCashSchema); 

@@ -244,7 +244,7 @@ maintenanceSchema.index({
 });
 
 // Pre-save middleware to ensure dates are valid and normalize values
-maintenanceSchema.pre('save', function(next) {
+maintenanceSchema.pre('save', function() {
     if (this.isModified('status')) {
         this.status = this.status.toLowerCase().replace(/[\s_]+/g, '-');
     }
@@ -270,7 +270,6 @@ maintenanceSchema.pre('save', function(next) {
     if (this.isModified('completedDate') && this.completedDate) {
         this.completedDate = new Date(this.completedDate);
     }
-    next();
 });
 
 // Static method to check for duplicate maintenance requests

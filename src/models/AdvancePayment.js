@@ -68,9 +68,8 @@ advancePaymentSchema.index({ status: 1, paymentMonth: 1 });
 advancePaymentSchema.index({ createdAt: -1 });
 
 // Pre-save middleware to update the updatedAt field
-advancePaymentSchema.pre('save', function(next) {
+advancePaymentSchema.pre('save', function() {
   this.updatedAt = new Date();
-  next();
 });
 
 // Static method to get total advance payments for a student and month

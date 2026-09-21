@@ -390,7 +390,7 @@ monthlyRequestSchema.index({ isTemplate: 1, month: 1, year: 1, status: 1 });
 monthlyRequestSchema.index({ status: 1, isTemplate: 1, createdAt: -1 });
 
 // Pre-save middleware to calculate total cost and format description
-monthlyRequestSchema.pre('save', function(next) {
+monthlyRequestSchema.pre('save', function() {
     // Calculate total cost
     if (this.items && this.items.length > 0) {
         console.log(`🔍 Pre-save: Calculating totalEstimatedCost for ${this.items.length} items`);
@@ -408,8 +408,6 @@ monthlyRequestSchema.pre('save', function(next) {
     if (!this.isTemplate && this.description && this.month && this.year) {
         this.description = formatDescriptionWithMonth(this.description, this.month, this.year);
     }
-    
-    next();
 });
 
 // Static method to get monthly requests for a residence and month/year

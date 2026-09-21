@@ -158,9 +158,8 @@ eventSchema.methods.getAverageRating = function() {
 };
 
 // Update the updatedAt field before saving
-eventSchema.pre('save', function(next) {
+eventSchema.pre('save', function() {
     this.updatedAt = Date.now();
-    next();
 });
 
 const Event = mongoose.model('Event', eventSchema);

@@ -747,7 +747,7 @@ requestSchema.index({
 });
 
 // Custom validation for conditional field requirements
-requestSchema.pre('validate', function(next) {
+requestSchema.pre('validate', function() {
     const errors = [];
     
     // Determine if this is a student request or admin request
@@ -858,7 +858,7 @@ requestSchema.pre('validate', function(next) {
     if (errors.length > 0) {
         const error = new Error('Request validation failed: ' + errors.join(', '));
         error.name = 'ValidationError';
-        return next(error);
+        throw error;
     }
     
     // Auto-categorize salaries for financial type based on title/description keywords
@@ -873,12 +873,10 @@ requestSchema.pre('validate', function(next) {
     } catch (e) {
         // swallow auto-categorization errors; validation continues
     }
-
-    next();
 });
 
 // Pre-save middleware to update request history and calculate total cost
-requestSchema.pre('save', function(next) {
+requestSchema.pre('save', function() {
     // If amount was edited directly, keep totals and item costs in sync.
     if (this.isModified('amount')) {
         const parsedAmount = Number(this.amount);
@@ -974,7 +972,6 @@ requestSchema.pre('save', function(next) {
             });
         }
     }
-    next();
 });
 
 // Virtual for checking if request is fully approved
