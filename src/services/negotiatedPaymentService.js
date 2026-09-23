@@ -9,6 +9,55 @@ function escapeRegex(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function parseMoneyAmount(value) {
+    if (value == null || value === '') return NaN;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const cleaned = String(value).replace(/[^0-9.-]/g, '');
+    if (!cleaned || cleaned === '-' || cleaned === '.') return NaN;
+    return parseFloat(cleaned);
+}
+
+function extractAccrualGrossAmount(accrual, debtorAccountCode) {
+    if (!accrual?.entries?.length) {
+        const fallback = Number(accrual?.totalDebit || accrual?.totalCredit || 0);
+        return fallback > 0 ? fallback : null;
+    }
+    const arLine = accrual.entries.find(
+        (e) => Number(e.debit) > 0
+            && (
+                String(e.accountCode || '').startsWith('1100')
+                || (debtorAccountCode && e.accountCode === debtorAccountCode)
+            )
+    );
+    const rentLine = accrual.entries.find(
+        (e) => Number(e.credit) > 0 && /^400[01]$/.test(String(e.accountCode || ''))
+    );
+    const amount = Number(arLine?.debit || rentLine?.credit || 0);
+    return amount > 0 ? amount : null;
+}
+
+/**
+ * Current ledger rent before this negotiation.
+ * Effective/net amount is authoritative — including 0 when tenant had no rent that month.
+ * Gross accrual is only used when effective was not computed.
+ */
+function resolveNegotiationOriginalAmount(dbEffectiveAmount, dbAccrualAmount) {
+    if (dbEffectiveAmount != null && Number.isFinite(Number(dbEffectiveAmount))) {
+        return Number(dbEffectiveAmount);
+    }
+    if (dbAccrualAmount != null && Number.isFinite(Number(dbAccrualAmount))) {
+        return Number(dbAccrualAmount);
+    }
+    return 0;
+}
+
+function isExplicitZeroAmount(value) {
+    if (value === 0) return true;
+    if (value == null || value === '') return false;
+    const parsed = parseMoneyAmount(value);
+    return Number.isFinite(parsed) && Math.abs(parsed) < 0.01;
+}
+
 /**
  * Resolve debtor for negotiation — mirrors finance transactionController fallbacks.
  */
@@ -281,39 +330,46 @@ async function createRentNegotiationAdjustment({
     description,
     user
 }) {
-    const original = parseFloat(originalAmount);
-    const negotiated = parseFloat(negotiatedAmount);
+    let original = parseMoneyAmount(originalAmount);
+    const negotiated = parseMoneyAmount(negotiatedAmount);
+    const monthNum = parseInt(accrualMonth, 10);
+    const yearNum = parseInt(accrualYear, 10);
 
     if (
         !studentId
         || !studentName
-        || originalAmount == null
-        || originalAmount === ''
-        || negotiatedAmount == null
-        || negotiatedAmount === ''
+        || (originalAmount == null || originalAmount === '')
+        || (negotiatedAmount == null || negotiatedAmount === '')
     ) {
         return {
             success: false,
             error: 'studentId, studentName, originalAmount, and negotiatedAmount are required'
         };
     }
-    if (!Number.isFinite(original) || !Number.isFinite(negotiated)) {
-        return { success: false, error: 'originalAmount and negotiatedAmount must be valid numbers' };
+    if (!Number.isFinite(original)) {
+        return { success: false, error: 'originalAmount must be a valid number (0 is allowed)' };
     }
-    if (original <= 0) {
-        return { success: false, error: 'originalAmount must be greater than zero' };
+    if (original < 0) {
+        return { success: false, error: 'originalAmount cannot be negative' };
+    }
+    if (!Number.isFinite(negotiated)) {
+        return { success: false, error: 'negotiatedAmount must be a valid number' };
     }
     if (negotiated < 0) {
         return { success: false, error: 'negotiatedAmount cannot be negative (use 0 when tenant was not present)' };
     }
-    if (Math.abs(negotiated - original) < 0.01) {
-        return { success: false, error: 'Negotiated amount must differ from the current ledger amount' };
-    }
 
-    const isIncrease = negotiated > original;
-    const adjustmentAmount = Math.round(Math.abs(original - negotiated) * 100) / 100;
-    const monthNum = parseInt(accrualMonth, 10);
-    const yearNum = parseInt(accrualYear, 10);
+    // Already aligned — e.g. $0 ledger and tenant absent ($0 actual)
+    if (Math.abs(negotiated - original) < 0.01) {
+        return {
+            success: true,
+            skipped: true,
+            message: 'No adjustment needed — ledger already matches the negotiated amount',
+            originalAmount: original,
+            negotiatedAmount: negotiated,
+            adjustmentAmount: 0
+        };
+    }
 
     const originalAccrual = await findRentAccrualForNegotiation({
         studentId,
@@ -332,6 +388,29 @@ async function createRentNegotiationAdjustment({
         debtorId,
         originalAccrual
     });
+
+    // Only infer original from accrual when caller did not supply a number (not when they explicitly pass 0)
+    if (!Number.isFinite(original) && !isExplicitZeroAmount(originalAmount)) {
+        const grossFromAccrual = extractAccrualGrossAmount(
+            originalAccrual,
+            debtor?.accountCode
+        );
+        if (grossFromAccrual && grossFromAccrual > 0) {
+            original = grossFromAccrual;
+        } else {
+            original = 0;
+        }
+    }
+
+    const isIncrease = negotiated > original + 0.01;
+    if (!isIncrease && original <= 0) {
+        return {
+            success: false,
+            error: 'Cannot reduce rent below zero when the ledger amount is already zero'
+        };
+    }
+
+    const adjustmentAmount = Math.round(Math.abs(original - negotiated) * 100) / 100;
 
     if (!debtor) {
         return {
@@ -503,5 +582,8 @@ async function createRentNegotiationAdjustment({
 module.exports = {
     createRentNegotiationAdjustment,
     findRentAccrualForNegotiation,
-    resolveDebtorForNegotiation
+    resolveDebtorForNegotiation,
+    parseMoneyAmount,
+    resolveNegotiationOriginalAmount,
+    extractAccrualGrossAmount
 };

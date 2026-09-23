@@ -3020,7 +3020,10 @@ class BillingDiscrepancyService {
                 negotiateParams: fixAction === 'negotiate' && row.actualAmount != null
                     && (systemAmount != null || dbAccrualAmount != null)
                     ? {
-                        originalAmount: systemAmount ?? dbAccrualAmount,
+                        originalAmount: (() => {
+                            const { resolveNegotiationOriginalAmount } = require('./negotiatedPaymentService');
+                            return resolveNegotiationOriginalAmount(systemAmount, dbAccrualAmount);
+                        })(),
                         negotiatedAmount: row.actualAmount,
                         accrualMonth: scanMonth,
                         accrualYear: scanYear,

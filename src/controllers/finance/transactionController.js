@@ -2785,15 +2785,13 @@ class TransactionController {
                 paymentType
             });
 
-            // Validate required fields (negotiatedAmount may be 0 — tenant absent that month)
+            // Validate required fields (originalAmount and negotiatedAmount may be 0)
             const missingRequired =
                 !description
                 || !studentName
                 || !studentId
-                || originalAmount == null
-                || originalAmount === ''
-                || negotiatedAmount == null
-                || negotiatedAmount === '';
+                || (originalAmount == null || originalAmount === '')
+                || (negotiatedAmount == null || negotiatedAmount === '');
             if (missingRequired) {
                 return res.status(400).json({
                     success: false,
@@ -2810,31 +2808,23 @@ class TransactionController {
                 });
             }
 
-            // Validate amounts
-            const original = parseFloat(originalAmount);
-            const negotiated = parseFloat(negotiatedAmount);
+            const { parseMoneyAmount } = require('../../services/negotiatedPaymentService');
+            const negotiated = parseMoneyAmount(negotiatedAmount);
 
-            if (isNaN(original) || isNaN(negotiated) || original <= 0 || negotiated < 0) {
+            if (!Number.isFinite(negotiated) || negotiated < 0) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Original amount must be greater than zero; negotiated amount must be zero or greater (use 0 when tenant was not present that month)'
+                    message: 'Negotiated amount must be zero or greater (use 0 when tenant was not present that month)'
                 });
             }
 
-            if (Math.abs(negotiated - original) < 0.01) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Negotiated amount must differ from the current ledger amount'
-                });
-            }
-
-            // Rent negotiations use the shared service (robust accrual + debtor lookup)
+            // Rent negotiations use the shared service (resolves original from accrual when needed)
             if (paymentType === 'rent') {
                 const { createRentNegotiationAdjustment } = require('../../services/negotiatedPaymentService');
                 const result = await createRentNegotiationAdjustment({
                     studentId,
                     studentName,
-                    originalAmount: original,
+                    originalAmount,
                     negotiatedAmount: negotiated,
                     accrualMonth,
                     accrualYear,
@@ -2859,6 +2849,27 @@ class TransactionController {
                     success: true,
                     message: result.skipped ? result.message : 'Negotiated rent adjustment created successfully',
                     data: result
+                });
+            }
+
+            const original = parseMoneyAmount(originalAmount);
+            const isNonRentIncrease = negotiated > original;
+            if (!Number.isFinite(original) || original < 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Original amount must be a valid number (zero or greater)'
+                });
+            }
+            if (!isNonRentIncrease && original <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Original amount must be greater than zero when reducing the negotiated amount'
+                });
+            }
+            if (Math.abs(negotiated - original) < 0.01) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Negotiated amount must differ from the current ledger amount'
                 });
             }
 
