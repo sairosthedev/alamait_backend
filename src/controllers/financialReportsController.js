@@ -1358,6 +1358,11 @@ class FinancialReportsController {
                             description: 'Total Utilities Income',
                             transactions: detailedCashFlow.detailed_breakdown.income.by_source.utilities.transactions.length
                         },
+                        levies: {
+                            amount: detailedCashFlow.detailed_breakdown.income.by_source.levies?.total || 0,
+                            description: 'Total Levies Income',
+                            transactions: detailedCashFlow.detailed_breakdown.income.by_source.levies?.transactions?.length || 0
+                        },
                         // Expense breakdown - Updated to use expenses_by_category
                         maintenance_expenses: { 
                             amount: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.maintenance.total, 

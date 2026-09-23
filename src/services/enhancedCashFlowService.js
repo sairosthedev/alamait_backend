@@ -13,6 +13,18 @@ try {
     CashFlowValidator = null;
 }
 
+/** Keys in operating_activities.breakdown that represent student/operating income, not expenses */
+const CASHFLOW_INCOME_BREAKDOWN_KEYS = new Set([
+    'rental_income',
+    'admin_fees',
+    'deposits',
+    'utilities',
+    'utilities_income',
+    'levies',
+    'advance_payments',
+    'other_income'
+]);
+
 /**
  * Enhanced Cash Flow Service
  * 
@@ -6853,6 +6865,10 @@ class EnhancedCashFlowService {
                     if (key === 'total' || key === 'transactions' || key === 'accountNames') {
                         return;
                     }
+                    // Income categories must never inflate expense totals (e.g. levies)
+                    if (CASHFLOW_INCOME_BREAKDOWN_KEYS.has(key)) {
+                        return;
+                    }
                     
                     // Sum ALL numeric values (including zero values for now, we'll filter later if needed)
                     if (typeof month.expenses[key] === 'number') {
@@ -6870,8 +6886,7 @@ class EnhancedCashFlowService {
                 if (month.operating_activities && month.operating_activities.breakdown) {
                     Object.keys(month.operating_activities.breakdown).forEach(key => {
                         // Only include expense-related keys (exclude income keys)
-                        const incomeKeys = ['rental_income', 'admin_fees', 'deposits', 'utilities', 'advance_payments', 'other_income'];
-                        if (!incomeKeys.includes(key) && !processedKeys.has(key) && typeof month.operating_activities.breakdown[key] === 'number') {
+                        if (!CASHFLOW_INCOME_BREAKDOWN_KEYS.has(key) && !processedKeys.has(key) && typeof month.operating_activities.breakdown[key] === 'number') {
                             const value = month.operating_activities.breakdown[key];
                             if (value !== 0) {
                                 sumFromBreakdown += value;
@@ -7006,7 +7021,9 @@ class EnhancedCashFlowService {
                 
                 // METHOD 1: Sum ALL non-zero expense items from month.expenses object (line items)
                 Object.keys(month.expenses).forEach(key => {
-                    if (key !== 'total' && key !== 'transactions' && typeof month.expenses[key] === 'number') {
+                    if (key !== 'total' && key !== 'transactions' && key !== 'accountNames' &&
+                        !CASHFLOW_INCOME_BREAKDOWN_KEYS.has(key) &&
+                        typeof month.expenses[key] === 'number') {
                         const value = month.expenses[key];
                         if (value !== 0) {
                             sumFromLineItems += value;
@@ -7055,7 +7072,7 @@ class EnhancedCashFlowService {
                         // Check if it's an expense (not income) and not already counted
                         if (typeof value === 'number' && value > 0 && 
                             !expenseKeys.includes(key.toLowerCase()) &&
-                            !['rental_income', 'admin_fees', 'deposits', 'utilities', 'advance_payments', 'other_income'].includes(key.toLowerCase())) {
+                            !CASHFLOW_INCOME_BREAKDOWN_KEYS.has(key.toLowerCase())) {
                             // This is likely an expense item (like "Security deposit Marula", "Alamait management fee", etc.)
                             const alreadyInExpenses = month.expenses[key];
                             if (!alreadyInExpenses || alreadyInExpenses === 0) {
@@ -8611,6 +8628,7 @@ class EnhancedCashFlowService {
                 admin_fees: 0,
                 deposits: 0,
                 utilities: 0,
+                levies: 0,
                 advance_payments: 0,
                 other_income: 0
             }
@@ -8645,6 +8663,7 @@ class EnhancedCashFlowService {
                 yearlyTotals.income.admin_fees += monthData.income.admin_fees || 0;
                 yearlyTotals.income.deposits += monthData.income.deposits || 0;
                 yearlyTotals.income.utilities += monthData.income.utilities || 0;
+                yearlyTotals.income.levies += monthData.income.levies || 0;
                 yearlyTotals.income.advance_payments += monthData.income.advance_payments || 0;
                 yearlyTotals.income.other_income += monthData.income.other_income || 0;
             }

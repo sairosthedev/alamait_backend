@@ -1492,6 +1492,10 @@ class FinancialReportingService {
                                 } else if (desc.includes('utilities') || desc.includes('electricity') || desc.includes('water')) {
                                     categoryAccountCode = '4004'; // Utilities Income
                                     categoryAccountName = 'Utilities Income';
+                                } else if (desc.includes('levies') || desc.includes('levy') ||
+                                           (entry.metadata && String(entry.metadata.paymentType || '').toLowerCase() === 'levies')) {
+                                    categoryAccountCode = '4010'; // Levies Income
+                                    categoryAccountName = 'Levies Income';
                                 } else if (desc.includes('forfeit') || desc.includes('no-show')) {
                                     categoryAccountCode = '4003'; // Forfeited Deposits Income
                                     categoryAccountName = 'Forfeited Deposits Income';
