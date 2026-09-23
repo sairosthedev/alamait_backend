@@ -15,9 +15,23 @@ function isReportDebugMode() {
 
 const DEPOSIT_LIABILITY_CODES = ['2201', '2020', '20002', '2002', '2028', '20020', '21001'];
 const INCOME_SECURITY_DEPOSIT_ALIASES = new Set(['deposits', 'security_deposits', 'securitydeposits']);
+const LEVIES_INCOME_ACCOUNT_CODES = new Set(['4010', 'levies']);
 
 function normalizeReportAccountCode(code) {
     return String(code ?? '').trim();
+}
+
+function isLeviesIncomeAccount(accountCode) {
+    return LEVIES_INCOME_ACCOUNT_CODES.has(normalizeReportAccountCode(accountCode).toLowerCase());
+}
+
+function getLeviesIncomeFromMonthData(monthData) {
+    if (!monthData) return 0;
+    const fromIncome = monthData.income?.levies;
+    if (typeof fromIncome === 'number') return fromIncome;
+    const fromBreakdown = monthData.operating_activities?.breakdown?.levies;
+    if (typeof fromBreakdown === 'number') return fromBreakdown;
+    return fromBreakdown?.amount || 0;
 }
 
 function getEntryAccountCode(entry) {
@@ -2656,6 +2670,16 @@ class FinancialReportsController {
                         category: 'Income',
                         isVirtual: true
                     };
+                } else if (isLeviesIncomeAccount(accountCode)) {
+                    // Levies are student income (GL 4010), not operating expenses
+                    account = {
+                        code: normalizeReportAccountCode(accountCode).toLowerCase() === '4010' ? '4010' : 'levies',
+                        name: 'Levies',
+                        type: 'Income',
+                        category: 'Operating Revenue',
+                        glAccountCode: '4010',
+                        isVirtual: true
+                    };
                 } else if (accountCode && accountCode.includes('refund')) {
                     // 🆕 CRITICAL: Handle refund virtual account codes
                     // Refunds use associated accounts: 2200 (Advance Payments Liability) for advance refunds,
@@ -2707,15 +2731,26 @@ class FinancialReportsController {
                             // Expense names like "counches", "outside_benches_and_umbrella" won't be in Account collection
                             const isNumericAccountCode = /^\d+$/.test(accountCode);
                             if (!isNumericAccountCode) {
-                                // This might be an expense name - create virtual account
-                                // We'll verify it exists in cashFlowData.expenses later
-                                account = {
-                                    code: accountCode,
-                                    name: accountCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-                                    type: 'Expense',
-                                    category: 'Operating Expenses',
-                                    isVirtual: true
-                                };
+                                if (isLeviesIncomeAccount(accountCode)) {
+                                    account = {
+                                        code: 'levies',
+                                        name: 'Levies',
+                                        type: 'Income',
+                                        category: 'Operating Revenue',
+                                        glAccountCode: '4010',
+                                        isVirtual: true
+                                    };
+                                } else {
+                                    // This might be an expense name - create virtual account
+                                    // We'll verify it exists in cashFlowData.expenses later
+                                    account = {
+                                        code: accountCode,
+                                        name: accountCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                                        type: 'Expense',
+                                        category: 'Operating Expenses',
+                                        isVirtual: true
+                                    };
+                                }
                             } else {
                         return res.status(404).json({
                             success: false,
@@ -2775,7 +2810,7 @@ class FinancialReportsController {
                                 totalAdminFees += incomeData.admin_fees || 0;
                             } else if (accountCode === '4003' && incomeData.deposits) {
                                 totalDeposits += incomeData.deposits || 0;
-                            } else if (accountCode === '4010' && incomeData.levies) {
+                            } else if (isLeviesIncomeAccount(accountCode)) {
                                 totalOtherIncome += incomeData.levies || 0;
                             } else if ((accountCode === '4006' || accountCode === 'other_income') && incomeData.other_income) {
                                 // Support for other income (account code 4006 or virtual 'other_income')
@@ -2812,7 +2847,7 @@ class FinancialReportsController {
                                     type: 'income',
                             category: 'income'
                         };
-                    } else if (accountCode === '4010') {
+                    } else if (isLeviesIncomeAccount(accountCode)) {
                         accountData = {
                             totalCredit: totalOtherIncome,
                             totalDebit: 0,
@@ -2834,7 +2869,7 @@ class FinancialReportsController {
                 }
                 
                 // Search in expenses section - check monthly breakdown for expense categories
-                if (!accountData && account.type === 'Expense' && cashFlowData.monthly_breakdown) {
+                if (!accountData && account.type === 'Expense' && !isLeviesIncomeAccount(accountCode) && cashFlowData.monthly_breakdown) {
                     const monthlyBreakdown = cashFlowData.monthly_breakdown;
                     
                     // If month is specified, get data for that specific month
@@ -2967,7 +3002,9 @@ class FinancialReportsController {
                                 key === 'gas' || key === 'insurance' || key === 'internet' ||
                                 key === 'maintenance' || key === 'management' || key === 'other_expenses' ||
                                 key === 'plumbing' || key === 'sanitary' || key === 'security' ||
-                                key === 'solar' || key === 'utilities' || key === 'water') {
+                                key === 'solar' || key === 'utilities' || key === 'water' ||
+                                key === 'levies' || key === 'rental_income' || key === 'admin_fees' ||
+                                key === 'deposits' || key === 'advance_payments' || key === 'other_income') {
                                 return false;
                             }
                             const keyLower = key.toLowerCase();
@@ -3651,7 +3688,7 @@ class FinancialReportsController {
                         if (accountCode === '4001') {
                             // Rental income only — never levies / generic payment allocation
                             return incomeCategory === 'rental_income';
-                        } else if (accountCode === '4010') {
+                        } else if (isLeviesIncomeAccount(accountCode)) {
                             return incomeCategory === 'levies';
                         } else if (accountCode === '4002') {
                             // Admin fees - match cash flow service logic
@@ -4193,8 +4230,8 @@ class FinancialReportsController {
                                 monthTotalCredit = monthData.income.admin_fees || 0;
                             } else if (accountCode === '4003' && monthData.income?.deposits) {
                                 monthTotalCredit = monthData.income.deposits || 0;
-                            } else if (accountCode === '4010' && monthData.income?.levies) {
-                                monthTotalCredit = monthData.income.levies || 0;
+                            } else if (isLeviesIncomeAccount(accountCode)) {
+                                monthTotalCredit = getLeviesIncomeFromMonthData(monthData);
                             } else if ((accountCode === '4006' || accountCode === 'other_income') && monthData.income?.other_income) {
                                 monthTotalCredit = monthData.income.other_income || 0;
                             }
@@ -4249,7 +4286,8 @@ class FinancialReportsController {
                                     const metadataKeys = ['total', 'transactions', 'accountNames', 'cleaning', 'council_rates', 
                                                          'electricity', 'gas', 'insurance', 'internet', 'maintenance', 
                                                          'management', 'other_expenses', 'plumbing', 'sanitary', 'security', 
-                                                         'solar', 'utilities', 'water'];
+                                                         'solar', 'utilities', 'water', 'levies', 'rental_income', 
+                                                         'admin_fees', 'deposits', 'advance_payments', 'other_income'];
                                     if (metadataKeys.includes(key)) return false;
                                     const keyLower = key.toLowerCase();
                                     return keyLower === accountCodeLower || 
