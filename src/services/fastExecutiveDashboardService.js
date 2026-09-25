@@ -342,53 +342,57 @@ class FastExecutiveDashboardService {
     }
 
     /**
-     * Net A/R balance from the GL (1100-* debtor sub-accounts), not Debtor.currentBalance
-     * which often reflects full contract value rather than amounts actually owing.
+     * Outstanding rent/charges from tenant ledgers (accruals − payments − reversals, advance FIFO).
+     * More accurate than summing raw GL 1100-* balances, which can include stale/duplicate accounts
+     * and miss payments that did not credit A/R lines.
      */
-    static async getTotalArrearsFromLedger() {
-        const [agg] = await TransactionEntry.aggregate([
-            { $match: { status: { $nin: ['reversed', 'draft', 'deleted'] } } },
-            { $unwind: '$entries' },
-            {
-                $match: {
-                    'entries.accountCode': { $regex: /^1100-/ }
+    static async getPortfolioRentOwing() {
+        const DebtorLedgerService = require('./debtorLedgerService');
+
+        const debtors = await Debtor.find({
+            status: { $in: ['active', 'overdue', 'defaulted'] },
+            user: { $exists: true, $ne: null },
+            isExpired: { $ne: true }
+        })
+            .select('_id user')
+            .lean();
+
+        let totalOwing = 0;
+        let debtorCount = 0;
+        const batchSize = 25;
+
+        for (let i = 0; i < debtors.length; i += batchSize) {
+            const batch = debtors.slice(i, i + batchSize);
+            const results = await Promise.allSettled(
+                batch.map((d) => DebtorLedgerService.getDebtorLedger(d._id, d.user))
+            );
+
+            results.forEach((result) => {
+                if (result.status !== 'fulfilled') return;
+                const owing = Math.max(0, result.value.totalOwing || 0);
+                if (owing > 0.01) {
+                    totalOwing += owing;
+                    debtorCount += 1;
                 }
-            },
-            {
-                $group: {
-                    _id: '$entries.accountCode',
-                    balance: {
-                        $sum: {
-                            $subtract: [
-                                { $ifNull: ['$entries.debit', 0] },
-                                { $ifNull: ['$entries.credit', 0] }
-                            ]
-                        }
-                    }
-                }
-            },
-            { $match: { balance: { $gt: 0.01 } } },
-            {
-                $group: {
-                    _id: null,
-                    totalArrears: { $sum: '$balance' },
-                    debtorCount: { $sum: 1 }
-                }
-            }
-        ]);
+            });
+        }
 
         return {
-            totalArrears: agg?.totalArrears || 0,
-            debtorCount: agg?.debtorCount || 0
+            totalArrears: Math.round(totalOwing * 100) / 100,
+            debtorCount,
+            activeDebtorCount: debtors.length,
+            source: 'debtor_ledger'
         };
     }
 
     static async getDebtorSummary() {
-        const { totalArrears, debtorCount } = await this.getTotalArrearsFromLedger();
+        const portfolio = await this.getPortfolioRentOwing();
         return {
-            outstandingCount: debtorCount,
-            totalOutstanding: totalArrears,
-            totalBalance: totalArrears
+            outstandingCount: portfolio.debtorCount,
+            totalOutstanding: portfolio.totalArrears,
+            totalBalance: portfolio.totalArrears,
+            activeDebtorCount: portfolio.activeDebtorCount,
+            source: portfolio.source
         };
     }
 
