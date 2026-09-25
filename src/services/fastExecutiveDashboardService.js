@@ -341,43 +341,81 @@ class FastExecutiveDashboardService {
         };
     }
 
-    static async getDebtorSummary() {
-        const [agg] = await Debtor.aggregate([
-            { $match: { status: { $ne: 'paid' }, currentBalance: { $gt: 0 } } },
+    /**
+     * Net A/R balance from the GL (1100-* debtor sub-accounts), not Debtor.currentBalance
+     * which often reflects full contract value rather than amounts actually owing.
+     */
+    static async getTotalArrearsFromLedger() {
+        const [agg] = await TransactionEntry.aggregate([
+            { $match: { status: { $nin: ['reversed', 'draft', 'deleted'] } } },
+            { $unwind: '$entries' },
+            {
+                $match: {
+                    'entries.accountCode': { $regex: /^1100-/ }
+                }
+            },
+            {
+                $group: {
+                    _id: '$entries.accountCode',
+                    balance: {
+                        $sum: {
+                            $subtract: [
+                                { $ifNull: ['$entries.debit', 0] },
+                                { $ifNull: ['$entries.credit', 0] }
+                            ]
+                        }
+                    }
+                }
+            },
+            { $match: { balance: { $gt: 0.01 } } },
             {
                 $group: {
                     _id: null,
-                    outstandingCount: { $sum: 1 },
-                    totalOutstanding: { $sum: '$currentBalance' }
+                    totalArrears: { $sum: '$balance' },
+                    debtorCount: { $sum: 1 }
                 }
             }
         ]);
-        const totalOutstanding = agg?.totalOutstanding || 0;
+
         return {
-            outstandingCount: agg?.outstandingCount || 0,
-            totalOutstanding,
-            totalBalance: totalOutstanding
+            totalArrears: agg?.totalArrears || 0,
+            debtorCount: agg?.debtorCount || 0
+        };
+    }
+
+    static async getDebtorSummary() {
+        const { totalArrears, debtorCount } = await this.getTotalArrearsFromLedger();
+        return {
+            outstandingCount: debtorCount,
+            totalOutstanding: totalArrears,
+            totalBalance: totalArrears
         };
     }
 
     static async getOccupancyByResidence(residences) {
         const now = new Date();
         const apps = await Application.find({
-            status: { $in: ['approved', 'allocated', 'active', 'enrolled'] },
-            $and: [
-                { $or: [{ endDate: null }, { endDate: { $gte: now } }] },
-                { $or: [{ startDate: null }, { startDate: { $lte: now } }] }
-            ]
+            status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
+            startDate: { $exists: true, $ne: null, $lte: now },
+            endDate: { $exists: true, $ne: null, $gte: now },
+            paymentStatus: { $ne: 'cancelled' }
         })
-            .select('residence residenceId allocatedRoomDetails allocatedRoom')
+            .select('residence residenceId allocatedRoomDetails allocatedRoom student email')
             .lean();
 
         const byRes = {};
         residences.forEach((r) => {
+            const rooms = Array.isArray(r.rooms) ? r.rooms : [];
+            const rentableRooms = rooms.filter((room) => room.status !== 'maintenance');
             byRes[r._id.toString()] = {
                 occupiedRooms: new Set(),
+                occupantKeys: new Set(),
                 totalOccupants: 0,
-                totalRooms: Array.isArray(r.rooms) ? r.rooms.length : 0
+                totalRooms: rentableRooms.length,
+                totalCapacity: rentableRooms.reduce(
+                    (sum, room) => sum + (Number(room.capacity) > 0 ? Number(room.capacity) : 1),
+                    0
+                )
             };
         });
 
@@ -387,9 +425,25 @@ class FastExecutiveDashboardService {
                 app.allocatedRoomDetails?.residenceId?.toString() ||
                 app.residence?.toString();
             if (!resId || !byRes[resId]) return;
+
+            const occupantKey = app.student?.toString()
+                || (app.email && String(app.email).toLowerCase())
+                || String(app._id);
+            if (byRes[resId].occupantKeys.has(occupantKey)) return;
+
+            byRes[resId].occupantKeys.add(occupantKey);
             byRes[resId].totalOccupants += 1;
+
             const room = app.allocatedRoom || app.allocatedRoomDetails?.roomNumber;
-            if (room) byRes[resId].occupiedRooms.add(room);
+            if (room) byRes[resId].occupiedRooms.add(String(room));
+        });
+
+        Object.values(byRes).forEach((row) => {
+            const denominator = row.totalCapacity > 0 ? row.totalCapacity : row.totalRooms;
+            row.occupancy = denominator > 0
+                ? Math.min(100, Math.round((row.totalOccupants / denominator) * 100))
+                : null;
+            delete row.occupantKeys;
         });
 
         return byRes;
