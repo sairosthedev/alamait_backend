@@ -342,6 +342,59 @@ class FastExecutiveDashboardService {
     }
 
     /**
+     * Collection gap for a month: income-statement revenue minus cash-flow receipts.
+     * Same basis as operationalOverview (accrual income vs tenant payment inflows).
+     */
+    static buildCollectionSummary(year, month, residencePnL = {}, cashByResidence = {}) {
+        const resIds = new Set([
+            ...Object.keys(residencePnL || {}),
+            ...Object.keys(cashByResidence || {})
+        ]);
+
+        let accruedRevenue = 0;
+        let cashReceived = 0;
+        let residencesWithGap = 0;
+
+        resIds.forEach((resId) => {
+            const revenue = residencePnL[resId]?.revenue || 0;
+            const cash = cashByResidence[resId] || 0;
+            accruedRevenue += revenue;
+            cashReceived += cash;
+            if (Math.max(0, revenue - cash) > 0.01) {
+                residencesWithGap += 1;
+            }
+        });
+
+        const collectionGap = Math.max(
+            0,
+            Math.round((accruedRevenue - cashReceived) * 100) / 100
+        );
+        const collectionRate = accruedRevenue > 0
+            ? Math.round((cashReceived / accruedRevenue) * 100)
+            : null;
+
+        return {
+            accruedRevenue: Math.round(accruedRevenue * 100) / 100,
+            cashReceived: Math.round(cashReceived * 100) / 100,
+            collectionGap,
+            collectionRate,
+            residencesWithGap,
+            source: 'income_statement_and_cashflow',
+            period: { year, month }
+        };
+    }
+
+    static getDebtorSummaryFromReports(year, month, residencePnL, cashByResidence) {
+        const summary = this.buildCollectionSummary(year, month, residencePnL, cashByResidence);
+        return {
+            ...summary,
+            totalOutstanding: summary.collectionGap,
+            outstandingCount: summary.residencesWithGap,
+            totalBalance: summary.collectionGap
+        };
+    }
+
+    /**
      * Outstanding rent/charges from tenant ledgers (accruals − payments − reversals, advance FIFO).
      * More accurate than summing raw GL 1100-* balances, which can include stale/duplicate accounts
      * and miss payments that did not credit A/R lines.
@@ -385,6 +438,7 @@ class FastExecutiveDashboardService {
         };
     }
 
+    /** @deprecated Use getDebtorSummaryFromReports with month P&L + cash-by-residence maps. */
     static async getDebtorSummary() {
         const portfolio = await this.getPortfolioRentOwing();
         return {
