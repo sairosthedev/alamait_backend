@@ -10,6 +10,8 @@ const Application = require('../models/Application');
 const { cashAccountCodeMatch } = require('../utils/accountQueryHelpers');
 
 const MONTH_NAMES_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** Same rent/admin accounts as accrual income statement (4001 + 4002, processed). */
+const INCOME_STATEMENT_REVENUE_CODES = ['4001', '4002'];
 
 function monthBounds(year, month) {
     return {
@@ -38,67 +40,61 @@ function residenceIdExpr() {
 
 class FastExecutiveDashboardService {
     /**
-     * Accrual / income P&L by calendar month for a year (12 rows).
+     * Accrual P&L by calendar month — revenue matches income statement (4001/4002, processed).
      */
     static async getYearMonthlyPnL(year) {
+        const { loadYearMonthlyRentRevenue } = require('../utils/incomeStatementRentUtils');
         const { start, end } = yearBounds(year);
-        const rows = await TransactionEntry.aggregate([
-            {
-                $match: {
-                    date: { $gte: start, $lte: end },
-                    status: { $nin: ['reversed', 'draft'] }
-                }
-            },
-            { $unwind: '$entries' },
-            {
-                $group: {
-                    _id: { $month: '$date' },
-                    revenue: {
-                        $sum: {
-                            $cond: [
-                                {
-                                    $and: [
-                                        { $eq: ['$entries.accountType', 'Income'] },
-                                        { $gt: ['$entries.credit', 0] }
-                                    ]
-                                },
-                                '$entries.credit',
-                                0
-                            ]
-                        }
-                    },
-                    expenses: {
-                        $sum: {
-                            $cond: [
-                                {
-                                    $and: [
-                                        { $eq: ['$entries.accountType', 'Expense'] },
-                                        { $gt: ['$entries.debit', 0] }
-                                    ]
-                                },
-                                '$entries.debit',
-                                0
-                            ]
+
+        const [yearRent, expenseRows] = await Promise.all([
+            loadYearMonthlyRentRevenue({
+                year,
+                accountCodes: INCOME_STATEMENT_REVENUE_CODES
+            }),
+            TransactionEntry.aggregate([
+                {
+                    $match: {
+                        date: { $gte: start, $lte: end },
+                        status: { $nin: ['reversed', 'draft'] }
+                    }
+                },
+                { $unwind: '$entries' },
+                {
+                    $group: {
+                        _id: { $month: '$date' },
+                        expenses: {
+                            $sum: {
+                                $cond: [
+                                    {
+                                        $and: [
+                                            { $eq: ['$entries.accountType', 'Expense'] },
+                                            { $gt: ['$entries.debit', 0] }
+                                        ]
+                                    },
+                                    '$entries.debit',
+                                    0
+                                ]
+                            }
                         }
                     }
                 }
-            }
+            ])
         ]);
 
         const byMonth = {};
         for (let m = 1; m <= 12; m++) {
+            const revenue = yearRent[m]?.total || 0;
             byMonth[m] = {
                 month: m,
                 monthName: MONTH_NAMES_SHORT[m - 1],
-                revenue: 0,
+                revenue,
                 expenses: 0,
-                netIncome: 0
+                netIncome: revenue
             };
         }
-        rows.forEach((r) => {
+        expenseRows.forEach((r) => {
             const m = r._id;
             if (!byMonth[m]) return;
-            byMonth[m].revenue = r.revenue || 0;
             byMonth[m].expenses = r.expenses || 0;
             byMonth[m].netIncome = byMonth[m].revenue - byMonth[m].expenses;
         });
@@ -155,60 +151,58 @@ class FastExecutiveDashboardService {
     }
 
     /**
-     * Per-residence P&L for one month.
+     * Per-residence P&L for one month — revenue matches income statement drill-down.
      */
-    static async getResidenceMonthPnL(year, month) {
+    static async getResidenceMonthPnL(year, month, residences = []) {
+        const { loadMonthlyRentRevenue } = require('../utils/incomeStatementRentUtils');
         const { start, end } = monthBounds(year, month);
-        const rows = await TransactionEntry.aggregate([
-            {
-                $match: {
-                    date: { $gte: start, $lte: end },
-                    status: { $nin: ['reversed', 'draft'] }
-                }
-            },
-            { $unwind: '$entries' },
-            {
-                $group: {
-                    _id: residenceIdExpr(),
-                    revenue: {
-                        $sum: {
-                            $cond: [
-                                {
-                                    $and: [
-                                        { $eq: ['$entries.accountType', 'Income'] },
-                                        { $gt: ['$entries.credit', 0] }
-                                    ]
-                                },
-                                '$entries.credit',
-                                0
-                            ]
-                        }
-                    },
-                    expenses: {
-                        $sum: {
-                            $cond: [
-                                {
-                                    $and: [
-                                        { $eq: ['$entries.accountType', 'Expense'] },
-                                        { $gt: ['$entries.debit', 0] }
-                                    ]
-                                },
-                                '$entries.debit',
-                                0
-                            ]
-                        }
+
+        const [expenseRows, ...revenueResults] = await Promise.all([
+            TransactionEntry.aggregate([
+                {
+                    $match: {
+                        date: { $gte: start, $lte: end },
+                        status: { $nin: ['reversed', 'draft'] }
+                    }
+                },
+                { $unwind: '$entries' },
+                {
+                    $match: {
+                        'entries.accountType': 'Expense',
+                        'entries.debit': { $gt: 0 }
+                    }
+                },
+                {
+                    $group: {
+                        _id: residenceIdExpr(),
+                        expenses: { $sum: '$entries.debit' }
                     }
                 }
-            }
+            ]),
+            ...residences.map((residence) => {
+                const resId = residence._id.toString();
+                return loadMonthlyRentRevenue({
+                    month,
+                    year,
+                    residenceId: resId,
+                    accountCodes: INCOME_STATEMENT_REVENUE_CODES
+                }).then((rent) => ({ resId, revenue: rent.total || 0 }));
+            })
         ]);
 
-        const map = {};
-        rows.forEach((r) => {
+        const expenseByRes = {};
+        expenseRows.forEach((r) => {
             if (!r._id || r._id === 'null') return;
-            map[String(r._id)] = {
-                revenue: r.revenue || 0,
-                expenses: r.expenses || 0,
-                net: (r.revenue || 0) - (r.expenses || 0)
+            expenseByRes[String(r._id)] = r.expenses || 0;
+        });
+
+        const map = {};
+        revenueResults.forEach(({ resId, revenue }) => {
+            const expenses = expenseByRes[resId] || 0;
+            map[resId] = {
+                revenue,
+                expenses,
+                net: revenue - expenses
             };
         });
         return map;
