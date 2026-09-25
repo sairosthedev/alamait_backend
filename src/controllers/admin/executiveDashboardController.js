@@ -13,7 +13,7 @@ const FastExecutiveDashboardService = require('../../services/fastExecutiveDashb
 const cacheService = require('../../services/cacheService');
 
 function getCacheKey(year, month) {
-    return `executive-dashboard:${year}:${month}`;
+    return `executive-dashboard:v4:${year}:${month}`;
 }
 
 /**
@@ -37,7 +37,7 @@ exports.getExecutiveDashboard = async (req, res) => {
 
         // Slim residence list for dashboard (rooms count only)
         const residences = await Residence.find()
-            .select('name rooms.roomNumber rooms.status')
+            .select('name rooms.roomNumber rooms.status rooms.capacity')
             .lean();
 
         const [
@@ -49,19 +49,17 @@ exports.getExecutiveDashboard = async (req, res) => {
             occupancyByResidence,
             maintenancesByResidence,
             recentMaintenances,
-            applications,
-            debtorSummary
+            applications
         ] = await Promise.all([
             FastExecutiveDashboardService.getYearMonthlyPnL(yearNum),
             FastExecutiveDashboardService.getYearMonthlyCashFlow(yearNum),
-            FastExecutiveDashboardService.getResidenceMonthPnL(yearNum, monthNum),
+            FastExecutiveDashboardService.getResidenceMonthPnL(yearNum, monthNum, residences),
             FastExecutiveDashboardService.getCashReceivedByResidence(yearNum, monthNum),
             FastExecutiveDashboardService.getExpenseBreakdown(yearNum, monthNum, residences),
             FastExecutiveDashboardService.getOccupancyByResidence(residences),
             FastExecutiveDashboardService.getMaintenancesByResidence(yearNum, monthNum, residences),
             FastExecutiveDashboardService.getRecentMaintenances(10),
-            FastExecutiveDashboardService.getApplications(yearNum, monthNum),
-            FastExecutiveDashboardService.getDebtorSummary()
+            FastExecutiveDashboardService.getApplications(yearNum, monthNum)
         ]);
 
         const monthlyBreakdown = {};
@@ -86,42 +84,70 @@ exports.getExecutiveDashboard = async (req, res) => {
             const occ = occupancyByResidence[resId] || {
                 occupiedRooms: new Set(),
                 totalOccupants: 0,
-                totalRooms: 0
+                totalRooms: 0,
+                totalCapacity: 0,
+                occupancy: null
             };
             const totalRooms = occ.totalRooms || (residence.rooms || []).length;
+            const totalCapacity = occ.totalCapacity || totalRooms;
             const occupiedRooms = occ.occupiedRooms?.size || 0;
-            const occupancyRate = totalRooms > 0 ? (occupiedRooms / totalRooms) * 100 : 0;
+            const occupancyRate = typeof occ.occupancy === 'number'
+                ? occ.occupancy
+                : (totalCapacity > 0
+                    ? Math.min(100, Math.round(((occ.totalOccupants || 0) / totalCapacity) * 100))
+                    : null);
             return {
                 residenceId: residence._id,
                 name: residence.name,
                 revenue: pnl.revenue,
                 expenses: pnl.expenses,
                 net: pnl.net,
-                occupancy: Math.round(occupancyRate),
+                occupancy: occupancyRate,
                 rooms: totalRooms,
-                occupants: occ.totalOccupants || 0
+                capacity: totalCapacity,
+                occupants: occ.totalOccupants || 0,
+                occupiedRooms
             };
         });
 
-        const operationalOverview = residences
-            .map((residence) => {
-                const resId = residence._id.toString();
-                const revenue = residencePnL[resId]?.revenue || 0;
-                const cashReceived = cashByResidence[resId] || 0;
-                const owing = Math.max(0, revenue - cashReceived);
-                const collectionRate = revenue > 0 ? (cashReceived / revenue) * 100 : 0;
-                return {
-                    residenceId: residence._id,
-                    name: residence.name,
-                    revenue,
-                    cashReceived,
-                    owing,
-                    collectionRate: Math.round(collectionRate)
-                };
-            })
-            .filter((o) => o.revenue > 0 || o.cashReceived > 0);
+        const operationalOverview = residences.map((residence) => {
+            const resId = residence._id.toString();
+            const revenue = residencePnL[resId]?.revenue || 0;
+            const cashReceived = cashByResidence[resId] || 0;
+            const owing = Math.max(0, revenue - cashReceived);
+            const collectionRate = revenue > 0 ? (cashReceived / revenue) * 100 : 0;
+            return {
+                residenceId: residence._id,
+                name: residence.name,
+                revenue,
+                cashReceived,
+                owing,
+                collectionRate: Math.round(collectionRate)
+            };
+        });
 
-        const alerts = await getAlertsAndNotifications(residences, propertyPerformance);
+        const monthCashInflows = cashFlowMonthlyData[monthNum - 1]?.revenue ?? 0;
+        const debtorSummary = FastExecutiveDashboardService.getDebtorSummaryFromReports(
+            yearNum,
+            monthNum,
+            residencePnL,
+            cashByResidence,
+            {
+                accruedRevenue: revenueExpenseSummary.revenue,
+                cashReceived: monthCashInflows
+            }
+        );
+
+        const periodLabel = new Date(yearNum, monthNum - 1, 1).toLocaleString('en-US', {
+            month: 'long',
+            year: 'numeric'
+        });
+        const alerts = getAlertsAndNotifications(
+            propertyPerformance,
+            debtorSummary,
+            operationalOverview,
+            periodLabel
+        );
         const netProfitMargin = calculateNetProfitMargin(revenueExpenseSummary);
         const financialHealth = calculateFinancialHealth(
             revenueExpenseSummary,
@@ -684,42 +710,63 @@ async function getCashReceivedForResidence(residenceId, startDate, endDate) {
  * Get Alerts and Notifications
  * OPTIMIZED: Accept propertyPerformance to avoid duplicate room occupancy queries
  */
-async function getAlertsAndNotifications(residences, propertyPerformance = null) {
+function getAlertsAndNotifications(
+    propertyPerformance = null,
+    collectionSummary = null,
+    operationalOverview = [],
+    periodLabel = 'this period'
+) {
     const alerts = [];
 
     try {
-        // 1. Rent arrears above threshold (aggregation — no full debtor load)
-        const [arrearsAgg] = await Debtor.aggregate([
-            { $match: { status: { $ne: 'paid' }, currentBalance: { $gt: 0 } } },
-            { $group: { _id: null, totalArrears: { $sum: '$currentBalance' } } }
-        ]);
-        const totalArrears = arrearsAgg?.totalArrears || 0;
+        // 1. Uncollected revenue — same figures as revenueExpenseSummary vs cashFlowMonthlyData
+        const accruedRevenue = collectionSummary?.accruedRevenue ?? 0;
+        const cashReceived = collectionSummary?.cashReceived ?? 0;
+        const collectionGap = collectionSummary?.collectionGap
+            ?? Math.max(0, accruedRevenue - cashReceived);
+        const residencesWithGap = operationalOverview.filter((row) => row.owing > 0.01).length
+            || collectionSummary?.residencesWithGap
+            || 0;
 
-        const arrearsThreshold = 5000; // $5K threshold
-        if (totalArrears > arrearsThreshold) {
+        const collectionThreshold = 5000;
+        if (collectionGap > collectionThreshold) {
             alerts.push({
                 type: 'rent_arrears',
                 severity: 'high',
-                message: `Rent arrears above threshold: ${formatCurrency(totalArrears)}`,
-                value: totalArrears,
-                threshold: arrearsThreshold
+                message: `Uncollected revenue for ${periodLabel}: ${formatCurrency(collectionGap)} (accrued ${formatCurrency(accruedRevenue)} − cash collected ${formatCurrency(cashReceived)}) across ${residencesWithGap} propert${residencesWithGap === 1 ? 'y' : 'ies'}`,
+                value: collectionGap,
+                threshold: collectionThreshold,
+                accruedRevenue,
+                cashReceived,
+                collectionRate: collectionSummary?.collectionRate ?? null,
+                residencesWithGap,
+                source: 'income_statement_and_cashflow'
             });
         }
 
-        // 2. Low occupancy alerts from propertyPerformance
+        // 2. Low occupancy — active leases with rentable capacity; skip vacant / unconfigured sites
         if (propertyPerformance && propertyPerformance.length > 0) {
-            propertyPerformance.forEach(property => {
-                const occupancyRate = property.occupancy || 0;
-                const lowOccupancyThreshold = 50;
+            const lowOccupancyThreshold = 50;
+
+            propertyPerformance.forEach((property) => {
+                const occupancyRate = property.occupancy;
+                const hasCapacityData = (property.capacity || property.rooms || 0) > 0;
+                const isOperating = (property.revenue || 0) > 0 || (property.occupants || 0) > 0;
+
+                if (!hasCapacityData || occupancyRate == null || !isOperating) {
+                    return;
+                }
 
                 if (occupancyRate < lowOccupancyThreshold) {
                     alerts.push({
                         type: 'low_occupancy',
                         severity: 'medium',
-                        message: `Low occupancy alert at ${property.name}`,
+                        message: `Low occupancy at ${property.name} (${occupancyRate}% — ${property.occupants || 0}/${property.capacity || property.rooms} beds)`,
                         residenceId: property.residenceId,
                         residenceName: property.name,
-                        occupancyRate: occupancyRate,
+                        occupancyRate,
+                        occupants: property.occupants || 0,
+                        capacity: property.capacity || property.rooms || 0,
                         threshold: lowOccupancyThreshold
                     });
                 }
@@ -745,8 +792,11 @@ function calculateFinancialHealth(revenueExpenseSummary, propertyPerformance, al
     }
 
     // Deduct points for low occupancy (from propertyPerformance)
-    const avgOccupancy = propertyPerformance.length > 0
-        ? propertyPerformance.reduce((sum, p) => sum + (p.occupancy || 0), 0) / propertyPerformance.length
+    const occupancyValues = propertyPerformance
+        .map((p) => p.occupancy)
+        .filter((rate) => typeof rate === 'number');
+    const avgOccupancy = occupancyValues.length > 0
+        ? occupancyValues.reduce((sum, rate) => sum + rate, 0) / occupancyValues.length
         : 0;
     
     if (avgOccupancy < 50) {
@@ -1355,9 +1405,6 @@ function calculatePortfolioValue(roomPrices) {
  * Format currency
  */
 function formatCurrency(amount) {
-    if (amount >= 1000) {
-        return `$${(amount / 1000).toFixed(1)}K`;
-    }
-    return `$${amount.toFixed(2)}`;
+    return `$${Math.round(amount).toLocaleString('en-US')}`;
 }
 
