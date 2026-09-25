@@ -345,25 +345,40 @@ class FastExecutiveDashboardService {
      * Collection gap for a month: income-statement revenue minus cash-flow receipts.
      * Same basis as operationalOverview (accrual income vs tenant payment inflows).
      */
-    static buildCollectionSummary(year, month, residencePnL = {}, cashByResidence = {}) {
+    static buildCollectionSummary(
+        year,
+        month,
+        residencePnL = {},
+        cashByResidence = {},
+        portfolioTotals = null
+    ) {
         const resIds = new Set([
             ...Object.keys(residencePnL || {}),
             ...Object.keys(cashByResidence || {})
         ]);
 
-        let accruedRevenue = 0;
-        let cashReceived = 0;
         let residencesWithGap = 0;
 
         resIds.forEach((resId) => {
             const revenue = residencePnL[resId]?.revenue || 0;
             const cash = cashByResidence[resId] || 0;
-            accruedRevenue += revenue;
-            cashReceived += cash;
             if (Math.max(0, revenue - cash) > 0.01) {
                 residencesWithGap += 1;
             }
         });
+
+        const accruedRevenue = portfolioTotals?.accruedRevenue != null
+            ? portfolioTotals.accruedRevenue
+            : [...resIds].reduce(
+                (sum, resId) => sum + (residencePnL[resId]?.revenue || 0),
+                0
+            );
+        const cashReceived = portfolioTotals?.cashReceived != null
+            ? portfolioTotals.cashReceived
+            : [...resIds].reduce(
+                (sum, resId) => sum + (cashByResidence[resId] || 0),
+                0
+            );
 
         const collectionGap = Math.max(
             0,
@@ -384,8 +399,20 @@ class FastExecutiveDashboardService {
         };
     }
 
-    static getDebtorSummaryFromReports(year, month, residencePnL, cashByResidence) {
-        const summary = this.buildCollectionSummary(year, month, residencePnL, cashByResidence);
+    static getDebtorSummaryFromReports(
+        year,
+        month,
+        residencePnL,
+        cashByResidence,
+        portfolioTotals = null
+    ) {
+        const summary = this.buildCollectionSummary(
+            year,
+            month,
+            residencePnL,
+            cashByResidence,
+            portfolioTotals
+        );
         return {
             ...summary,
             totalOutstanding: summary.collectionGap,
