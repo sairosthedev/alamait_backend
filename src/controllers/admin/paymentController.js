@@ -2364,6 +2364,65 @@ const getAvailablePaymentMonths = async (req, res) => {
 };
 
 /**
+ * Recalculate debtor totals after a payment is removed (AR transactions already deleted when applicable).
+ */
+async function syncDebtorAfterPaymentDeletion(
+    debtor,
+    studentId,
+    payment,
+    session = null,
+    { hadTransactionEntries = true } = {}
+) {
+    const DebtorTransactionSyncService = require('../../services/debtorTransactionSyncService');
+    const paymentId = payment.paymentId || payment._id?.toString();
+    const paymentAmount = Number(payment.totalAmount || payment.amount || 0);
+
+    await DebtorTransactionSyncService.recalculateDebtorTotalsFromTransactionEntries(
+        debtor,
+        studentId.toString()
+    );
+
+    // No linked journals — totalPaid only lives on the debtor document
+    if (!hadTransactionEntries && paymentAmount > 0) {
+        debtor.totalPaid = Math.max(0, (debtor.totalPaid || 0) - paymentAmount);
+    }
+
+    if (paymentId && Array.isArray(debtor.paymentHistory)) {
+        debtor.paymentHistory = debtor.paymentHistory.filter(
+            (p) => p.paymentId !== paymentId && String(p.paymentId) !== String(paymentId)
+        );
+    }
+
+    if (paymentId && Array.isArray(debtor.monthlyPayments)) {
+        for (const monthRow of debtor.monthlyPayments) {
+            if (!monthRow?.paymentIds?.length) continue;
+            const hadPayment = monthRow.paymentIds.some(
+                (id) => id === paymentId || String(id) === String(paymentId)
+            );
+            if (!hadPayment) continue;
+
+            monthRow.paymentIds = monthRow.paymentIds.filter(
+                (id) => id !== paymentId && String(id) !== String(paymentId)
+            );
+            monthRow.paymentCount = monthRow.paymentIds.length;
+            monthRow.paidAmount = Math.max(0, (monthRow.paidAmount || 0) - paymentAmount);
+            monthRow.outstandingAmount = Math.max(
+                0,
+                (monthRow.expectedAmount || 0) - (monthRow.paidAmount || 0)
+            );
+            monthRow.status = monthRow.paidAmount <= 0
+                ? 'unpaid'
+                : monthRow.paidAmount >= (monthRow.expectedAmount || 0)
+                  ? 'paid'
+                  : 'partial';
+        }
+    }
+
+    debtor.calculateBalance();
+    await debtor.save(session ? { session } : undefined);
+}
+
+/**
  * Delete payment and all associated transaction entries
  */
 const deletePayment = async (req, res) => {
@@ -2437,6 +2496,17 @@ const deletePayment = async (req, res) => {
             // Delete the payment
             await Payment.findByIdAndDelete(id);
             console.log(`✅ Deleted payment: ${payment.paymentId} (no transactions found)`);
+
+            if (payment.student || payment.user) {
+                const studentId = payment.student || payment.user;
+                const debtor = await Debtor.findOne({ user: studentId });
+                if (debtor) {
+                    await syncDebtorAfterPaymentDeletion(debtor, studentId, payment, null, {
+                        hadTransactionEntries: false
+                    });
+                    console.log(`✅ Updated debtor after payment deletion for student ${studentId}`);
+                }
+            }
             
             // Log the deletion
             await AuditLog.create({
@@ -2531,23 +2601,22 @@ const deletePayment = async (req, res) => {
                     console.log(`✅ Deleted ${receipts.length} receipts`);
                 }
                 
-                // Update debtor accounts if they exist
-                if (payment.student || payment.user) {
-                    const studentId = payment.student || payment.user;
-                    const debtor = await Debtor.findOne({ user: studentId }).session(session);
-                    if (debtor) {
-                        // Reduce debtor balance by payment amount
-                        const paymentAmount = payment.totalAmount || payment.amount || 0;
-                        debtor.balance = Math.max(0, debtor.balance - paymentAmount);
-                        await debtor.save({ session });
-                        console.log(`✅ Updated debtor balance for student ${studentId}`);
-                    }
-                }
             }
             
             // Finally, delete the payment itself
             await Payment.findByIdAndDelete(id).session(session);
             console.log(`✅ Deleted payment: ${payment.paymentId}`);
+
+            if (payment.student || payment.user) {
+                const studentId = payment.student || payment.user;
+                const debtor = await Debtor.findOne({ user: studentId }).session(session);
+                if (debtor) {
+                    await syncDebtorAfterPaymentDeletion(debtor, studentId, payment, session, {
+                        hadTransactionEntries: true
+                    });
+                    console.log(`✅ Recalculated debtor after payment deletion for student ${studentId}`);
+                }
+            }
             
             // Log the deletion for audit purposes
             await AuditLog.create([{

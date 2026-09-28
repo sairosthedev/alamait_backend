@@ -1162,7 +1162,7 @@ debtorSchema.statics.generateAccountCode = async function() {
 
 // Instance method to calculate balance
 debtorSchema.methods.calculateBalance = function() {
-  this.currentBalance = this.totalOwed - this.totalPaid;
+  this.currentBalance = Math.max(0, this.totalOwed - this.totalPaid);
   this.overdueAmount = this.currentBalance > 0 ? this.currentBalance : 0;
   return this.currentBalance;
 };
