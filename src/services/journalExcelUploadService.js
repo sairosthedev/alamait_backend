@@ -433,48 +433,100 @@ function parseExpenseJournalSheet(sheet, headerInfo, defaultDate) {
 /**
  * Resolve chart-of-accounts row from a spreadsheet label (Electricity, Cash, etc.).
  */
-const EXPENSE_LABEL_KEYWORDS = [
-    { test: /electric/, keywords: ['electricity', 'electric', 'power'] },
-    { test: /council|rates|levy/, keywords: ['council', 'rates', 'levy', 'tax'] },
-    { test: /bulk water|^water/, keywords: ['water', 'bulk'] },
-    { test: /internet|wifi|wi fi/, keywords: ['internet', 'wifi', 'wi fi'] },
-    { test: /gas/, keywords: ['gas', 'lpg', 'fuel'] },
-    { test: /maintenance|repair/, keywords: ['maintenance', 'repair'] },
-    { test: /insurance/, keywords: ['insurance'] },
-    { test: /salary|salaries|wage|payroll/, keywords: ['salary', 'salaries', 'wage', 'payroll'] }
+const EXPENSE_LABEL_CODE_HINTS = [
+    { test: /council|rates|levy|property tax|municipal/, codes: ['5022', '5099'] },
+    { test: /electric/, codes: ['5003'] },
+    { test: /bulk water|water|sewer/, codes: ['5004', '5001'] },
+    { test: /internet|wifi|wi fi|telephone|phone/, codes: ['5006'] },
+    { test: /gas refill|^gas|lpg|petrol|diesel|fuel/, codes: ['5005'] },
+    { test: /maintenance|repair|plumbing|electrical|hvac|roof|paint/, codes: ['5007', '5005'] },
+    { test: /clean|janitor|housekeep/, codes: ['5009', '5012'] },
+    { test: /security|guard/, codes: ['5014', '5013'] },
+    { test: /insurance/, codes: ['5020', '5099'] },
+    { test: /salary|salaries|wage|payroll/, codes: ['5012', '5027', '5099'] },
+    { test: /supplies|materials|tools/, codes: ['5011', '5017'] }
 ];
+
+/** Longest keyword first so "bulk water" wins over "water". */
+const EXPENSE_LABEL_KEYWORD_CODES = [
+    ['bulk water', '5004'],
+    ['council fees', '5022'],
+    ['council', '5022'],
+    ['property tax', '5022'],
+    ['electricity', '5003'],
+    ['electric', '5003'],
+    ['internet', '5006'],
+    ['wifi', '5006'],
+    ['water', '5004'],
+    ['gas', '5005'],
+    ['maintenance', '5007'],
+    ['cleaning', '5009'],
+    ['insurance', '5020'],
+    ['supplies', '5011']
+];
+
+function accountSearchText(account) {
+    return normalizeAccountLabel(`${account.name || ''} ${account.description || ''}`);
+}
+
+function isExpenseAccount(account) {
+    const type = String(account?.type || '').toLowerCase();
+    if (type === 'expense') return true;
+    return /^5/.test(String(account?.code || ''));
+}
+
+function resolveAccountByCodes(codes, accounts = []) {
+    for (const code of codes) {
+        const hit = accounts.find((a) => String(a.code).trim() === String(code).trim());
+        if (hit) return hit;
+    }
+    return null;
+}
 
 function resolveAccountFromLabel(label, accounts = []) {
     const norm = normalizeAccountLabel(label);
     if (!norm) return null;
 
+    const expenseAccounts = accounts.filter(isExpenseAccount);
+
     if (/^(cash|bank|cbz|vault|petty)/.test(norm)) {
-        return accounts.find((a) => /^100/.test(String(a.code))) || null;
+        return (
+            accounts.find((a) => String(a.code).trim() === '1000') ||
+            accounts.find((a) => /^100/.test(String(a.code))) ||
+            null
+        );
     }
 
     const byCode = accounts.find((a) => String(a.code).trim() === String(label).trim());
     if (byCode) return byCode;
 
-    const byExactName = accounts.find(
-        (a) => normalizeAccountLabel(a.name) === norm
-    );
+    const byExactName = accounts.find((a) => accountSearchText(a) === norm);
     if (byExactName) return byExactName;
 
-    const byPartial = accounts.find((a) => {
-        const nameNorm = normalizeAccountLabel(a.name);
-        return nameNorm.includes(norm) || norm.includes(nameNorm);
+    const byPartial = expenseAccounts.find((a) => {
+        const text = accountSearchText(a);
+        return text.includes(norm) || norm.includes(text);
     });
     if (byPartial) return byPartial;
 
-    const alias = EXPENSE_LABEL_KEYWORDS.find((row) => row.test.test(norm));
-    if (alias) {
-        for (const kw of alias.keywords) {
-            const hit = accounts.find((a) => normalizeAccountLabel(a.name).includes(kw));
+    for (const [keyword, code] of EXPENSE_LABEL_KEYWORD_CODES) {
+        if (norm.includes(keyword)) {
+            const hit = resolveAccountByCodes([code, '5099'], expenseAccounts);
             if (hit) return hit;
         }
     }
 
-    return null;
+    const hint = EXPENSE_LABEL_CODE_HINTS.find((row) => row.test.test(norm));
+    if (hint) {
+        const hit = resolveAccountByCodes([...hint.codes, '5099'], expenseAccounts);
+        if (hit) return hit;
+    }
+
+    return (
+        resolveAccountByCodes(['5099', '5000'], expenseAccounts) ||
+        expenseAccounts.find((a) => /other|operating|general/.test(accountSearchText(a))) ||
+        null
+    );
 }
 
 /**
