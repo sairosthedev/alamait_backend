@@ -3609,13 +3609,10 @@ class FinancialReportsController {
                         const requestedMonthKey = `${requestedYear}-${String(requestedMonth).padStart(2, '0')}`; // e.g., "2025-11"
                         
                 transactions = transactions.filter(tx => {
-                            // For cash flow, use ONLY transaction date (when cash was received)
-                            // Do NOT use monthSettled or description parsing - cash flow is about when cash moved
+                            // Match cash flow service: UTC month from transaction date
                             const txDate = new Date(tx.date);
-                            const txYear = txDate.getFullYear();
-                            const txMonth = txDate.getMonth() + 1;
-                            
-                            // Only include if transaction date matches requested month
+                            const txYear = txDate.getUTCFullYear();
+                            const txMonth = txDate.getUTCMonth() + 1;
                             return txYear === requestedYear && txMonth === requestedMonth;
                         });
                         
@@ -3699,87 +3696,43 @@ class FinancialReportsController {
                             // Admin fees - match cash flow service logic
                             return incomeCategory === 'admin_fees';
                         } else if (accountCode === '4006' || accountCode === 'other_income') {
-                            // Other income - ONLY transactions that debited cash (1000) and credited debtors (1100 series)
-                            // Must be DR Cash CR Debtor pattern - NOT account code 4003 or deposit liability accounts
-                            
-                            // EXCLUDE: Check if transaction has account code 4003 (deposits) in any entry
-                            const hasDepositAccountCode = tx.entries?.some(e => {
-                                const code = String(e.accountCode || '').trim();
-                                return code === '4003';
-                            });
-                            if (hasDepositAccountCode) {
-                                return false; // This is a deposit transaction - exclude from other_income
+                            // Match EnhancedCashFlowService other_income bucket (not only DR Cash CR 1100)
+                            if (EnhancedCashFlowService.isBalanceSheetAdjustment(tx)) {
+                                return false;
                             }
-                            
-                            // EXCLUDE: Check if transaction has deposit liability account codes (2028, 20002, 2020, etc.) credited
+                            if (EnhancedCashFlowService.isInternalCashTransfer(tx)) {
+                                return false;
+                            }
+                            if (tx.source === 'advance_payment') {
+                                return false;
+                            }
+
+                            const hasDepositAccountCode = tx.entries?.some(e =>
+                                String(e.accountCode || '').trim() === '4003'
+                            );
+                            if (hasDepositAccountCode) return false;
+
                             const depositAccountCodes = ['2028', '20002', '2020', '2002', '20020', '2201'];
                             const hasDepositLiabilityAccount = tx.entries?.some(e => {
                                 const code = String(e.accountCode || '').trim();
                                 return depositAccountCodes.includes(code) && (e.credit || 0) > 0;
                             });
-                            if (hasDepositLiabilityAccount) {
-                                return false; // This is a deposit transaction - exclude from other_income
-                            }
-                            
-                            // REQUIRE: Must have debtor/AR account credited (1100 series) - DR Cash CR Debtor pattern
-                            const hasDebtorCredit = tx.entries?.some(e => {
-                                const code = String(e.accountCode || '').trim();
-                                return code.match(/^1100/) && (e.credit || 0) > 0;
-                            });
-                            if (!hasDebtorCredit) {
-                                return false; // Must credit a debtor account - exclude if not
-                            }
-                            
-                            // Exclude rent, admin, deposits, utilities, levies, advance payments by description
-                            // 🆕 BUT ALLOW council rates and similar transactions even if they have expense accounts
+                            if (hasDepositLiabilityAccount) return false;
+
                             const incomeCategory = EnhancedCashFlowService.classifyStudentCashIncome(
                                 description,
                                 tx.metadata || {}
                             );
-                            const isRent = incomeCategory === 'rental_income';
-                            const isAdmin = incomeCategory === 'admin_fees';
-                            const isDeposit = incomeCategory === 'deposits';
-                            const isUtilities = incomeCategory === 'utilities';
-                            const isAdvance = incomeCategory === 'advance_payments';
-                            const isLevies = incomeCategory === 'levies';
-                            
-                            // 🆕 ALLOW: Council rates and similar transactions - these are other income
-                            // Even if they have expense accounts (DR Cash CR AR DR Expense CR Cash pattern)
-                            const isCouncilRates = description.includes('council') || 
-                                                  description.includes('rates');
-                            
-                            if ((isRent || isAdmin || isDeposit || isUtilities || isAdvance || isLevies) && !isCouncilRates) {
-                                return false;
+                            if (incomeCategory === 'levies') return false;
+
+                            const isCouncilRates = description.includes('council') || description.includes('rates');
+                            if (isCouncilRates || incomeCategory === 'other_income') {
+                                return true;
                             }
-                            
-                            // Check if this is an internal cash transfer (cash to cash) - exclude
-                            // BUT allow if it has AR credit (DR Cash CR AR DR Expense CR Cash is valid other income)
-                            const hasCashCredit = tx.entries?.some(e => {
-                                const code = String(e.accountCode || '').trim();
-                                return code.match(/^100/) && (e.credit || 0) > 0;
-                            });
-                            if (hasCashCredit && cashEntry) {
-                                // Check if there's a non-cash entry (debtor, income, expense, etc.) - if not, it's an internal transfer
-                                const hasNonCashEntry = tx.entries?.some(e => {
-                                    const code = String(e.accountCode || '').trim();
-                                    const accountType = (e.accountType || '').toLowerCase();
-                                    return !code.match(/^100/) && 
-                                           (accountType === 'expense' || 
-                                            accountType === 'income' || 
-                                            accountType === 'liability' || 
-                                            accountType === 'asset' ||
-                                            code.match(/^1100/)); // Debtor/AR accounts
-                                });
-                                if (!hasNonCashEntry) {
-                                    return false; // Internal cash transfer - exclude
-                                }
-                                // 🆕 If it has AR credit, it's valid other income even if it has expense accounts
-                                // This handles: DR Cash CR AR DR Expense CR Cash pattern (council rates, etc.)
-                            }
-                            
-                            // Include if it's other income (council, DR Cash CR Debtor, etc.) and not any of the excluded categories
-                            // OR if it's council rates (which may have expense accounts but is still income)
-                            return isCouncilRates || (!isRent && !isAdmin && !isDeposit && !isUtilities && !isAdvance && !isLevies);
+
+                            return !['rental_income', 'admin_fees', 'deposits', 'utilities', 'advance_payments'].includes(
+                                incomeCategory
+                            );
                         }
                         // For other income accounts, include all payment transactions
                         return true;
@@ -4172,14 +4125,23 @@ class FinancialReportsController {
                 };
                 finalMonthlyBreakdown = scopedMonthlyBreakdown;
             } else if (accountData && !depositAccountCodes.includes(accountCode) && (accountData.totalCredit !== undefined || accountData.totalDebit !== undefined || accountData.netAmount !== undefined)) {
-                // Use the data from cash flow service (ensures it matches the cash flow statement)
-                // This works for both income (totalCredit) and expenses (totalDebit)
+                // Prefer drill-down totals from filtered transactions so list and summary agree
+                const txCredit = transactions.reduce((sum, tx) => {
+                    const cashLine = tx.entries?.find((e) => String(e.accountCode || '').match(/^100/) && (e.debit || 0) > 0);
+                    return sum + (cashLine?.debit || tx.totalDebit || 0);
+                }, 0);
+                const useTxTotals = transactions.length > 0;
                 finalCashFlowData = {
-                    totalCredit: accountData.totalCredit || 0,
+                    totalCredit: useTxTotals ? txCredit : (accountData.totalCredit || 0),
                     totalDebit: accountData.totalDebit || 0,
-                    netAmount: accountData.netAmount !== undefined ? accountData.netAmount : (accountData.totalCredit || 0) - (accountData.totalDebit || 0),
+                    netAmount: useTxTotals
+                        ? txCredit - (accountData.totalDebit || 0)
+                        : (accountData.netAmount !== undefined
+                            ? accountData.netAmount
+                            : (accountData.totalCredit || 0) - (accountData.totalDebit || 0)),
                     transactionCount: transactions.length,
-                    type: cashFlowType
+                    type: cashFlowType,
+                    ...(useTxTotals ? {} : { summarySource: 'cash_flow_statement' })
                 };
                 
                 // Also use cash flow service's monthly breakdown if available
