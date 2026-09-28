@@ -434,7 +434,6 @@ function parseExpenseJournalSheet(sheet, headerInfo, defaultDate) {
  * Resolve chart-of-accounts row from a spreadsheet label (Electricity, Cash, etc.).
  */
 const EXPENSE_LABEL_CODE_HINTS = [
-    { test: /council|rates|levy|property tax|municipal/, codes: ['5022', '5099'] },
     { test: /electric/, codes: ['5003'] },
     { test: /bulk water|water|sewer/, codes: ['5004', '5001'] },
     { test: /internet|wifi|wi fi|telephone|phone/, codes: ['5006'] },
@@ -450,9 +449,6 @@ const EXPENSE_LABEL_CODE_HINTS = [
 /** Longest keyword first so "bulk water" wins over "water". */
 const EXPENSE_LABEL_KEYWORD_CODES = [
     ['bulk water', '5004'],
-    ['council fees', '5022'],
-    ['council', '5022'],
-    ['property tax', '5022'],
     ['electricity', '5003'],
     ['electric', '5003'],
     ['internet', '5006'],
@@ -483,6 +479,77 @@ function resolveAccountByCodes(codes, accounts = []) {
     return null;
 }
 
+function isCouncilRatesLabel(norm) {
+    return /council|rates|levy|municipal/.test(norm);
+}
+
+function findCouncilRatesAccount(expenseAccounts = []) {
+    const matchers = [
+        (a) => {
+            const text = accountSearchText(a);
+            return /council/.test(text) && /rates|fees|levy|municipal/.test(text);
+        },
+        (a) => /council/.test(accountSearchText(a)),
+        (a) => {
+            const text = accountSearchText(a);
+            return /\brates\b/.test(text) && /council|municipal|property|local/.test(text);
+        },
+        (a) => {
+            const text = accountSearchText(a);
+            return /council fees|council rates|municipal rates|local authority/.test(text);
+        }
+    ];
+
+    for (const matcher of matchers) {
+        const hit = expenseAccounts.find(matcher);
+        if (hit) return hit;
+    }
+    return null;
+}
+
+async function ensureCouncilRatesAccount(existingAccounts = []) {
+    const expenseAccounts = existingAccounts.filter(isExpenseAccount);
+    const existing = findCouncilRatesAccount(expenseAccounts);
+    if (existing) return existing;
+
+    const Account = require('../models/Account');
+    const dbHit = await Account.findOne({
+        type: 'Expense',
+        isActive: { $ne: false },
+        name: { $regex: /council|rates|levy|municipal/i }
+    })
+        .sort({ code: 1 })
+        .lean();
+    if (dbHit) return dbHit;
+
+    const AccountCodeService = require('./accountCodeService');
+    const code = await AccountCodeService.generateAccountCode(
+        'Expense',
+        'Operating Expenses',
+        'Council Rates'
+    );
+    const created = await Account.create({
+        code,
+        name: 'Council Rates',
+        type: 'Expense',
+        category: 'Operating Expenses',
+        isActive: true,
+        description: 'Council fees and municipal rates'
+    });
+    return created.toObject();
+}
+
+async function resolveExpenseAccountFromLabel(label, accounts = []) {
+    const account = resolveAccountFromLabel(label, accounts);
+    if (account) return account;
+
+    const norm = normalizeAccountLabel(label);
+    if (isCouncilRatesLabel(norm)) {
+        return ensureCouncilRatesAccount(accounts);
+    }
+    return null;
+}
+
 function resolveAccountFromLabel(label, accounts = []) {
     const norm = normalizeAccountLabel(label);
     if (!norm) return null;
@@ -495,6 +562,19 @@ function resolveAccountFromLabel(label, accounts = []) {
             accounts.find((a) => /^100/.test(String(a.code))) ||
             null
         );
+    }
+
+    if (isCouncilRatesLabel(norm)) {
+        const council = findCouncilRatesAccount(expenseAccounts);
+        if (council) return council;
+        if (norm.includes('council') || norm.includes('rates') || norm.includes('levy')) {
+            const byLabel = expenseAccounts.find((a) => {
+                const text = accountSearchText(a);
+                return text.includes(norm) || norm.includes(text);
+            });
+            if (byLabel) return byLabel;
+        }
+        return null;
     }
 
     const byCode = accounts.find((a) => String(a.code).trim() === String(label).trim());
@@ -1798,6 +1878,10 @@ module.exports = {
     isExpenseJournalHeaders,
     parseExpenseJournalSheet,
     resolveAccountFromLabel,
+    resolveExpenseAccountFromLabel,
+    ensureCouncilRatesAccount,
+    findCouncilRatesAccount,
+    isCouncilRatesLabel,
     normalizeAccountLabel,
     buildEntriesFromInvoiceRow,
     buildExcelPaymentDedupKey,

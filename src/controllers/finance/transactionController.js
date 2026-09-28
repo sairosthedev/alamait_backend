@@ -4205,7 +4205,7 @@ class TransactionController {
                 resolveInvoiceForPaymentRow,
                 applySystemInvoiceToRow,
                 transactionSourceForInvoiceRow,
-                resolveAccountFromLabel
+                resolveExpenseAccountFromLabel
             } = require('../../services/journalExcelUploadService');
             const { createPaymentRecordForJournal, tryBackfillPaymentForExistingJournal } = require('../../services/journalPaymentRecordService');
 
@@ -5156,7 +5156,13 @@ class TransactionController {
                             for (const line of groupLines) {
                                 let account;
                                 if (isExpenseJournal) {
-                                    account = resolveAccountFromLabel(line.accountLabel, allAccounts);
+                                    account = await resolveExpenseAccountFromLabel(
+                                        line.accountLabel,
+                                        allAccounts
+                                    );
+                                    if (account) {
+                                        accountByCode[String(account.code)] = account;
+                                    }
                                     if (!account) {
                                         throw new Error(
                                             `Row ${line.rowNumber}: no chart account matches "${line.accountLabel}"`
