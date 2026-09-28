@@ -4204,7 +4204,8 @@ class TransactionController {
                 resolveDebtorForCustomer,
                 resolveInvoiceForPaymentRow,
                 applySystemInvoiceToRow,
-                transactionSourceForInvoiceRow
+                transactionSourceForInvoiceRow,
+                resolveAccountFromLabel
             } = require('../../services/journalExcelUploadService');
             const { createPaymentRecordForJournal, tryBackfillPaymentForExistingJournal } = require('../../services/journalPaymentRecordService');
 
@@ -4224,11 +4225,19 @@ class TransactionController {
             }
 
             const defaultDate = req.body.defaultDate ? new Date(req.body.defaultDate) : new Date();
-            const mode = String(req.body.mode || 'payments').toLowerCase();
+            const modeRaw = String(req.body.mode || 'payments').toLowerCase().trim();
+            const modeAliases = {
+                classic: 'both',
+                journal: 'both',
+                journals: 'both',
+                expense: 'both',
+                expenses: 'both'
+            };
+            const mode = modeAliases[modeRaw] || modeRaw;
             if (!['payments', 'charges', 'both'].includes(mode)) {
                 return res.status(400).json({
                     success: false,
-                    message: 'mode must be one of: payments, charges, both'
+                    message: 'mode must be one of: payments, charges, both (or classic/expenses for expense journals)'
                 });
             }
 
@@ -5110,38 +5119,59 @@ class TransactionController {
                     missingInvoiceNumber: 0
                 };
 
-                if (parsed.format === 'classic') {
+                if (parsed.format === 'classic' || parsed.format === 'expense_journal') {
                     results.summary.totalJournals += parsed.groups.size;
                     sheetResult.journals = parsed.groups.size;
 
-                    const codes = [...new Set(parsed.lines.map((l) => l.accountCode).filter(Boolean))];
-                    const accounts = await Account.find({
-                        code: { $in: codes },
-                        isActive: { $ne: false }
-                    }).lean();
-                    const accountByCode = {};
-                    accounts.forEach((a) => {
-                        accountByCode[String(a.code)] = a;
-                    });
+                    let accountByCode = {};
+                    if (parsed.format === 'classic') {
+                        const codes = [...new Set(parsed.lines.map((l) => l.accountCode).filter(Boolean))];
+                        const accounts = await Account.find({
+                            code: { $in: codes },
+                            isActive: { $ne: false }
+                        }).lean();
+                        accounts.forEach((a) => {
+                            accountByCode[String(a.code)] = a;
+                        });
+                    } else {
+                        const accounts = await Account.find({ isActive: { $ne: false } }).lean();
+                        accounts.forEach((a) => {
+                            accountByCode[String(a.code)] = a;
+                        });
+                    }
 
                     for (const [journalKey, groupLines] of parsed.groups.entries()) {
                         try {
-                            if (!groupLines[0].journalKey || journalKey.startsWith('__row_')) {
+                            const isExpenseJournal = parsed.format === 'expense_journal';
+                            if (!isExpenseJournal && (!groupLines[0].journalKey || journalKey.startsWith('__row_'))) {
                                 throw new Error('Missing journal_key');
                             }
-                            const description = groupLines.find((l) => l.description)?.description;
+                            const description = isExpenseJournal
+                                ? (parsed.description || 'Expense journal')
+                                : groupLines.find((l) => l.description)?.description;
                             if (!description) throw new Error('Missing description');
 
                             const entries = [];
+                            const allAccounts = Object.values(accountByCode);
                             for (const line of groupLines) {
-                                if (!line.accountCode) {
-                                    throw new Error(`Row ${line.rowNumber}: missing account_code`);
-                                }
-                                const account = accountByCode[line.accountCode];
-                                if (!account) {
-                                    throw new Error(
-                                        `Row ${line.rowNumber}: account code not found: ${line.accountCode}`
-                                    );
+                                let account;
+                                if (isExpenseJournal) {
+                                    account = resolveAccountFromLabel(line.accountLabel, allAccounts);
+                                    if (!account) {
+                                        throw new Error(
+                                            `Row ${line.rowNumber}: no chart account matches "${line.accountLabel}"`
+                                        );
+                                    }
+                                } else {
+                                    if (!line.accountCode) {
+                                        throw new Error(`Row ${line.rowNumber}: missing account_code`);
+                                    }
+                                    account = accountByCode[line.accountCode];
+                                    if (!account) {
+                                        throw new Error(
+                                            `Row ${line.rowNumber}: account code not found: ${line.accountCode}`
+                                        );
+                                    }
                                 }
                                 if (line.debit > 0 && line.credit > 0) {
                                     throw new Error(
@@ -5159,7 +5189,9 @@ class TransactionController {
                                     accountType: account.type,
                                     debit: line.debit,
                                     credit: line.credit,
-                                    description: line.lineDescription || description
+                                    description: isExpenseJournal
+                                        ? `${line.accountLabel} — ${description}`
+                                        : (line.lineDescription || description)
                                 });
                             }
 
@@ -5169,10 +5201,11 @@ class TransactionController {
                                 reference: groupLines.find((l) => l.reference)?.reference,
                                 date: groupLines.find((l) => l.date)?.date || defaultDate,
                                 entries,
-                                format: 'classic',
+                                format: isExpenseJournal ? 'expense_journal' : 'classic',
                                 extraMeta: {
                                     sheetName: sheet.name,
-                                    excelRows: groupLines.map((l) => l.rowNumber)
+                                    excelRows: groupLines.map((l) => l.rowNumber),
+                                    excelFormat: isExpenseJournal ? 'expense_journal' : 'classic'
                                 }
                             });
                             sheetResult.successful++;

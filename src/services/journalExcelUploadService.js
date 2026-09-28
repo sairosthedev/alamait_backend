@@ -179,6 +179,7 @@ function detectHeaderRow(sheet, maxScan = 25) {
         let format = null;
         if (isClassicJournalHeaders(headers)) format = 'classic';
         else if (isInvoicePaymentHeaders(headers)) format = 'invoice_payment';
+        else if (isExpenseJournalHeaders(headers)) format = 'expense_journal';
         else if (isCashReceiptHeaders(headers)) format = 'cash_receipt';
         else if (isLedgerDateHeaders(headers)) format = 'ledger_date';
 
@@ -249,6 +250,27 @@ function isCashReceiptHeaders(headers) {
     const hasDr = matchCol(headers, ['dr', 'debit', 'debit_amount']);
     const hasCr = matchCol(headers, ['cr', 'credit', 'credit_amount']);
     return Boolean(hasDate && hasName && (hasDr || hasCr));
+}
+
+/** Date + expense/account label + Dr/Cr columns (one balanced journal per date). */
+function isExpenseJournalHeaders(headers) {
+    const hasDate = matchCol(headers, ['date', 'transaction_date', 'txn_date']);
+    const hasLabel = matchCol(headers, [
+        'expense_name', 'expense', 'account_name', 'account', 'name',
+        'particulars', 'description', 'narration'
+    ]);
+    const hasDr = matchCol(headers, ['dr', 'debit', 'debit_amount', 'dr_amount']);
+    const hasCr = matchCol(headers, ['cr', 'credit', 'credit_amount', 'cr_amount']);
+    return Boolean(hasDate && hasLabel && (hasDr || hasCr));
+}
+
+function normalizeAccountLabel(value) {
+    return String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 function isClassicJournalHeaders(headers) {
@@ -343,6 +365,116 @@ function parseClassicJournalSheet(sheet, headerInfo, defaultDate) {
         groups.get(key).push(line);
     }
     return { format: 'classic', lines, groups };
+}
+
+/**
+ * Expense payment journal: Date | Expense name | Dr | Cr — one journal per date.
+ * Account labels (e.g. Electricity, Cash) are resolved to GL codes at upload time.
+ */
+function parseExpenseJournalSheet(sheet, headerInfo, defaultDate) {
+    const headers = headerInfo.headers;
+    const col = {
+        date: matchCol(headers, ['date', 'transaction_date', 'txn_date']),
+        accountLabel: matchCol(headers, [
+            'expense_name', 'expense', 'account_name', 'account', 'name',
+            'particulars', 'description', 'narration'
+        ]),
+        debit: matchCol(headers, ['dr', 'debit', 'debit_amount', 'dr_amount']),
+        credit: matchCol(headers, ['cr', 'credit', 'credit_amount', 'cr_amount'])
+    };
+
+    if (!col.date || !col.accountLabel) {
+        throw new Error(
+            'Expense journal Excel needs columns: Date, Expense name (or Account), Dr Amount, Cr Amount'
+        );
+    }
+
+    const get = (row, field) => (col[field] ? cellRaw(row.getCell(col[field])) : null);
+    const lines = [];
+
+    sheet.eachRow((row, rowNumber) => {
+        if (rowNumber <= headerInfo.rowNumber) return;
+        const accountLabel = String(get(row, 'accountLabel') ?? '').trim();
+        const debit = toNumber(get(row, 'debit'));
+        const credit = toNumber(get(row, 'credit'));
+        if (!accountLabel && debit <= 0 && credit <= 0) return;
+        if (!accountLabel) {
+            throw new Error(`Row ${rowNumber}: missing expense/account name`);
+        }
+
+        lines.push({
+            rowNumber,
+            accountLabel,
+            date: toDate(get(row, 'date')) || defaultDate,
+            debit,
+            credit
+        });
+    });
+
+    const groups = new Map();
+    for (const line of lines) {
+        const d = line.date instanceof Date ? line.date : new Date(line.date);
+        const dateKey = Number.isNaN(d.getTime())
+            ? 'undated'
+            : d.toISOString().slice(0, 10);
+        const journalKey = `EXP-${dateKey}`;
+        if (!groups.has(journalKey)) groups.set(journalKey, []);
+        groups.get(journalKey).push(line);
+    }
+
+    return {
+        format: 'expense_journal',
+        lines,
+        groups,
+        description: 'Expense journal'
+    };
+}
+
+/**
+ * Resolve chart-of-accounts row from a spreadsheet label (Electricity, Cash, etc.).
+ */
+const EXPENSE_LABEL_KEYWORDS = [
+    { test: /electric/, keywords: ['electricity', 'electric', 'power'] },
+    { test: /council|rates|levy/, keywords: ['council', 'rates', 'levy', 'tax'] },
+    { test: /bulk water|^water/, keywords: ['water', 'bulk'] },
+    { test: /internet|wifi|wi fi/, keywords: ['internet', 'wifi', 'wi fi'] },
+    { test: /gas/, keywords: ['gas', 'lpg', 'fuel'] },
+    { test: /maintenance|repair/, keywords: ['maintenance', 'repair'] },
+    { test: /insurance/, keywords: ['insurance'] },
+    { test: /salary|salaries|wage|payroll/, keywords: ['salary', 'salaries', 'wage', 'payroll'] }
+];
+
+function resolveAccountFromLabel(label, accounts = []) {
+    const norm = normalizeAccountLabel(label);
+    if (!norm) return null;
+
+    if (/^(cash|bank|cbz|vault|petty)/.test(norm)) {
+        return accounts.find((a) => /^100/.test(String(a.code))) || null;
+    }
+
+    const byCode = accounts.find((a) => String(a.code).trim() === String(label).trim());
+    if (byCode) return byCode;
+
+    const byExactName = accounts.find(
+        (a) => normalizeAccountLabel(a.name) === norm
+    );
+    if (byExactName) return byExactName;
+
+    const byPartial = accounts.find((a) => {
+        const nameNorm = normalizeAccountLabel(a.name);
+        return nameNorm.includes(norm) || norm.includes(nameNorm);
+    });
+    if (byPartial) return byPartial;
+
+    const alias = EXPENSE_LABEL_KEYWORDS.find((row) => row.test.test(norm));
+    if (alias) {
+        for (const kw of alias.keywords) {
+            const hit = accounts.find((a) => normalizeAccountLabel(a.name).includes(kw));
+            if (hit) return hit;
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -1560,6 +1692,15 @@ function detectAndParseSheet(sheet, options = {}) {
         };
     }
 
+    if (isExpenseJournalHeaders(headerInfo.headers)) {
+        return {
+            ...parseExpenseJournalSheet(sheet, headerInfo, defaultDate),
+            sheetName,
+            headerRow: headerInfo.rowNumber,
+            reportingDate
+        };
+    }
+
     if (isInvoicePaymentHeaders(headerInfo.headers) || isLedgerDateHeaders(headerInfo.headers)) {
         return {
             ...parseInvoicePaymentSheet(sheet, headerInfo, {
@@ -1588,8 +1729,8 @@ function detectAndParseSheet(sheet, options = {}) {
     const seenCols = Object.keys(headerInfo.headers).join(', ') || '(none)';
     throw new Error(
         `Sheet "${sheetName}": unrecognized format (header row ${headerInfo.rowNumber}: ${seenCols}). ` +
-        `Supported: Customer/Invoice/Payment columns, Date/Name/Narration/Dr/Cr cash receipt, ` +
-        `or classic journal_key, account_code, debit, credit.`
+        `Supported: Customer/Invoice/Payment columns, Date/Expense name/Dr/Cr expense journal, ` +
+        `Date/Name/Narration/Dr/Cr cash receipt, or classic journal_key, account_code, debit, credit.`
     );
 }
 
@@ -1602,6 +1743,10 @@ module.exports = {
     listWorkbookSheets,
     resolveSheetsToProcess,
     detectAndParseSheet,
+    isExpenseJournalHeaders,
+    parseExpenseJournalSheet,
+    resolveAccountFromLabel,
+    normalizeAccountLabel,
     buildEntriesFromInvoiceRow,
     buildExcelPaymentDedupKey,
     buildExcelRowDedupKey,
