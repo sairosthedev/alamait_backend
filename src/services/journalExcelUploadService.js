@@ -29,8 +29,49 @@ function cellRaw(cell) {
 function toNumber(v) {
     if (v == null || v === '') return 0;
     if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
-    const n = parseFloat(String(v).replace(/[$,\s]/g, '').trim());
-    return Number.isFinite(n) ? n : 0;
+    let s = String(v).trim();
+    const parenNegative = /^\([\d,.\s]+\)$/.test(s);
+    if (parenNegative) s = s.slice(1, -1);
+    const n = parseFloat(s.replace(/[$,\s]/g, '').trim());
+    if (!Number.isFinite(n)) return 0;
+    return parenNegative ? -n : n;
+}
+
+function roundMoney(n) {
+    return Math.round(Number(n) * 100) / 100;
+}
+
+function isCashSideLabel(label) {
+    const norm = normalizeAccountLabel(label);
+    return (
+        /^(cash|bank|cbz|vault|petty|total|payment|paid|amount paid|sum)/.test(norm) ||
+        /\bcash\b/.test(norm) ||
+        /^total\b/.test(norm)
+    );
+}
+
+/**
+ * Expense rows often put the cash payout in the Dr column, or only list debits with no Cr line.
+ */
+function normalizeExpenseJournalLine(line) {
+    let debit = roundMoney(line.debit);
+    let credit = roundMoney(line.credit);
+
+    if (debit < 0) {
+        credit = roundMoney(credit + Math.abs(debit));
+        debit = 0;
+    }
+    if (credit < 0) {
+        debit = roundMoney(debit + Math.abs(credit));
+        credit = 0;
+    }
+
+    if (isCashSideLabel(line.accountLabel) && debit > 0 && credit <= 0) {
+        credit = debit;
+        debit = 0;
+    }
+
+    return { ...line, debit, credit };
 }
 
 function toDate(v) {
@@ -373,14 +414,20 @@ function parseClassicJournalSheet(sheet, headerInfo, defaultDate) {
  */
 function parseExpenseJournalSheet(sheet, headerInfo, defaultDate) {
     const headers = headerInfo.headers;
+    let debitCol = matchCol(headers, ['dr', 'debit', 'debit_amount', 'dr_amount']);
+    let creditCol = matchCol(headers, ['cr', 'credit', 'credit_amount', 'cr_amount']);
+    const amountCol = matchCol(headers, ['amount', 'value', 'line_amount']);
+    if (!debitCol && amountCol) debitCol = amountCol;
+    if (!creditCol && amountCol && amountCol !== debitCol) creditCol = amountCol;
+
     const col = {
         date: matchCol(headers, ['date', 'transaction_date', 'txn_date']),
         accountLabel: matchCol(headers, [
             'expense_name', 'expense', 'account_name', 'account', 'name',
             'particulars', 'description', 'narration'
         ]),
-        debit: matchCol(headers, ['dr', 'debit', 'debit_amount', 'dr_amount']),
-        credit: matchCol(headers, ['cr', 'credit', 'credit_amount', 'cr_amount'])
+        debit: debitCol,
+        credit: creditCol
     };
 
     if (!col.date || !col.accountLabel) {
@@ -391,24 +438,41 @@ function parseExpenseJournalSheet(sheet, headerInfo, defaultDate) {
 
     const get = (row, field) => (col[field] ? cellRaw(row.getCell(col[field])) : null);
     const lines = [];
+    let lastDate = defaultDate;
 
     sheet.eachRow((row, rowNumber) => {
         if (rowNumber <= headerInfo.rowNumber) return;
         const accountLabel = String(get(row, 'accountLabel') ?? '').trim();
-        const debit = toNumber(get(row, 'debit'));
-        const credit = toNumber(get(row, 'credit'));
+        const parsedDate = toDate(get(row, 'date'));
+        if (parsedDate) lastDate = parsedDate;
+
+        let debit = toNumber(get(row, 'debit'));
+        let credit = col.credit ? toNumber(get(row, 'credit')) : 0;
+        if (col.debit && col.credit && col.debit === col.credit) {
+            const amt = toNumber(get(row, 'debit'));
+            if (isCashSideLabel(accountLabel)) {
+                credit = Math.abs(amt);
+                debit = 0;
+            } else {
+                debit = Math.abs(amt);
+                credit = 0;
+            }
+        }
+
         if (!accountLabel && debit <= 0 && credit <= 0) return;
         if (!accountLabel) {
             throw new Error(`Row ${rowNumber}: missing expense/account name`);
         }
 
-        lines.push({
-            rowNumber,
-            accountLabel,
-            date: toDate(get(row, 'date')) || defaultDate,
-            debit,
-            credit
-        });
+        lines.push(
+            normalizeExpenseJournalLine({
+                rowNumber,
+                accountLabel,
+                date: parsedDate || lastDate || defaultDate,
+                debit,
+                credit
+            })
+        );
     });
 
     const groups = new Map();
@@ -537,6 +601,52 @@ async function ensureCouncilRatesAccount(existingAccounts = []) {
         description: 'Council fees and municipal rates'
     });
     return created.toObject();
+}
+
+function appendExpenseJournalBalancingEntry(entries, accounts, options = {}) {
+    const { cashAccountCode = '1000', description = 'Expense journal' } = options;
+    const { normalizeAccountName } = require('../utils/accountNameNormalizer');
+
+    let totalDebit = 0;
+    let totalCredit = 0;
+    for (const e of entries) {
+        totalDebit += Number(e.debit) || 0;
+        totalCredit += Number(e.credit) || 0;
+    }
+    totalDebit = roundMoney(totalDebit);
+    totalCredit = roundMoney(totalCredit);
+    if (Math.abs(totalDebit - totalCredit) <= 0.01) return entries;
+
+    const cashAccount =
+        accounts.find((a) => String(a.code).trim() === String(cashAccountCode).trim()) ||
+        accounts.find((a) => String(a.code).trim() === '1000') ||
+        accounts.find((a) => /^100/.test(String(a.code))) ||
+        null;
+    if (!cashAccount) return entries;
+
+    const diff = roundMoney(totalDebit - totalCredit);
+    if (Math.abs(diff) <= 0.01) return entries;
+
+    if (diff > 0) {
+        entries.push({
+            accountCode: cashAccount.code,
+            accountName: normalizeAccountName(cashAccount.code, cashAccount.name),
+            accountType: cashAccount.type,
+            debit: 0,
+            credit: diff,
+            description: `Cash payment — ${description}`
+        });
+    } else {
+        entries.push({
+            accountCode: cashAccount.code,
+            accountName: normalizeAccountName(cashAccount.code, cashAccount.name),
+            accountType: cashAccount.type,
+            debit: Math.abs(diff),
+            credit: 0,
+            description: `Cash receipt — ${description}`
+        });
+    }
+    return entries;
 }
 
 async function resolveExpenseAccountFromLabel(label, accounts = []) {
@@ -1879,6 +1989,8 @@ module.exports = {
     parseExpenseJournalSheet,
     resolveAccountFromLabel,
     resolveExpenseAccountFromLabel,
+    appendExpenseJournalBalancingEntry,
+    normalizeExpenseJournalLine,
     ensureCouncilRatesAccount,
     findCouncilRatesAccount,
     isCouncilRatesLabel,

@@ -4205,7 +4205,8 @@ class TransactionController {
                 resolveInvoiceForPaymentRow,
                 applySystemInvoiceToRow,
                 transactionSourceForInvoiceRow,
-                resolveExpenseAccountFromLabel
+                resolveExpenseAccountFromLabel,
+                appendExpenseJournalBalancingEntry
             } = require('../../services/journalExcelUploadService');
             const { createPaymentRecordForJournal, tryBackfillPaymentForExistingJournal } = require('../../services/journalPaymentRecordService');
 
@@ -5198,6 +5199,13 @@ class TransactionController {
                                     description: isExpenseJournal
                                         ? `${line.accountLabel} — ${description}`
                                         : (line.lineDescription || description)
+                                });
+                            }
+
+                            if (isExpenseJournal) {
+                                appendExpenseJournalBalancingEntry(entries, allAccounts, {
+                                    cashAccountCode: cashCode,
+                                    description
                                 });
                             }
 
