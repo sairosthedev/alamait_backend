@@ -23,10 +23,45 @@ const CashFlowController = require('../../controllers/finance/cashFlowController
 const Lease = require('../../models/Lease');
 const Payment = require('../../models/Payment');
 const FinanceController = require('../../controllers/financeController');
+const leaseController = require('../../controllers/admin/leaseController');
+const {
+    resolveReconciliationIdentifier,
+    validateApplicationId,
+    validateDebtorId,
+    handleLeaseValidation
+} = require('../../middleware/leaseValidation');
 
 // Finance middleware - allow both admin and finance roles
 router.use(auth);
 router.use(checkAdminOrFinance);
+
+// Lease vs accrual status (fallback when /api/finance/leases sub-router does not match, e.g. students/N/A)
+router.get('/leases/reconciliation', resolveReconciliationIdentifier, leaseController.getLeaseReconciliationStatus);
+router.get(
+    '/leases/students/N/A/reconciliation',
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get(
+    '/leases/debtors/:debtorId/reconciliation',
+    validateDebtorId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get(
+    '/leases/applications/:applicationId/reconciliation',
+    validateApplicationId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get(
+    '/leases/students/:studentId/reconciliation',
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
+
 router.use('/audit-log', auditLogRoutes);
 // router.use('/petty-cash', pettyCashRoutes);
 router.use('/vendors', vendorRoutes);
