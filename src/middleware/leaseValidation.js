@@ -1,4 +1,62 @@
-const { body, param } = require('express-validator');
+const mongoose = require('mongoose');
+const { body, param, validationResult } = require('express-validator');
+
+function isPlaceholderTenantId(value) {
+    const s = String(value ?? '').trim();
+    return !s || s === 'N/A' || s === 'null' || s === 'undefined';
+}
+
+exports.handleLeaseValidation = (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            success: false,
+            message: errors.array()[0]?.msg || 'Validation failed',
+            errors: errors.array()
+        });
+    }
+    next();
+};
+
+/**
+ * Resolve application / debtor / student id for lease reconciliation (query or path).
+ * Rejects placeholders like "N/A" when tenant has no User account.
+ */
+exports.resolveReconciliationIdentifier = (req, res, next) => {
+    let id =
+        req.params.applicationId ||
+        req.params.debtorId ||
+        req.params.studentId ||
+        req.query.applicationId ||
+        req.query.debtorId ||
+        req.query.studentId;
+
+    if (isPlaceholderTenantId(id)) {
+        return res.status(400).json({
+            success: false,
+            message:
+                'This tenant has no student login (studentId is N/A). Use debtor or application reconciliation instead.',
+            data: {
+                financeExamples: [
+                    '/api/finance/leases/debtors/{debtorId}/reconciliation',
+                    '/api/finance/leases/applications/{applicationId}/reconciliation',
+                    '/api/finance/leases/reconciliation?debtorId={debtorId}',
+                    '/api/finance/leases/reconciliation?applicationId={applicationId}'
+                ]
+            }
+        });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(String(id))) {
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid tenant identifier for lease reconciliation'
+        });
+    }
+
+    req.reconciliationIdentifier = String(id);
+    next();
+};
 
 /**
  * Validation middleware for lease update endpoints

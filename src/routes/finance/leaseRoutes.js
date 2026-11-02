@@ -4,14 +4,14 @@ const { auth, checkRole, financeAccess } = require('../../middleware/auth');
 const {
     getAllLeases,
     getLease,
-    getLeaseStats,
     getLeasesByStudent
 } = require('../../controllers/finance/leaseController');
 const leaseController = require('../../controllers/admin/leaseController');
 const {
-    validateStudentId,
     validateApplicationId,
-    validateDebtorId
+    validateDebtorId,
+    resolveReconciliationIdentifier,
+    handleLeaseValidation
 } = require('../../middleware/leaseValidation');
 
 const financeRoles = checkRole('admin', 'finance_admin', 'finance_user', 'ceo');
@@ -21,25 +21,35 @@ router.use(financeAccess);
 
 router.get('/', financeRoles, getAllLeases);
 
-// Specific paths before /:id
+router.get(
+    '/reconciliation',
+    financeRoles,
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
+
 router.get('/students/:studentId', financeRoles, getLeasesByStudent);
 
 router.get(
     '/applications/:applicationId/reconciliation',
     financeRoles,
     validateApplicationId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
     leaseController.getLeaseReconciliationStatus
 );
 router.get(
     '/debtors/:debtorId/reconciliation',
     financeRoles,
     validateDebtorId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
     leaseController.getLeaseReconciliationStatus
 );
 router.get(
     '/students/:studentId/reconciliation',
     financeRoles,
-    validateStudentId,
+    resolveReconciliationIdentifier,
     leaseController.getLeaseReconciliationStatus
 );
 

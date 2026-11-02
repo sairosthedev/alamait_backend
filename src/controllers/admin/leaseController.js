@@ -247,6 +247,7 @@ exports.updateDebtorLeaseDates = async (req, res) => {
 exports.getLeaseReconciliationStatus = async (req, res) => {
     try {
         const identifier =
+            req.reconciliationIdentifier ||
             req.params.applicationId ||
             req.params.debtorId ||
             req.params.studentId;

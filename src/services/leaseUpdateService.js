@@ -295,6 +295,18 @@ class LeaseUpdateService {
                         applicationId: ctx.applicationId,
                         studentId: ctx.studentId || undefined
                     }
+                },
+                getReconciliationStatus: {
+                    method: 'GET',
+                    finance: ctx.debtorId
+                        ? `/api/finance/leases/debtors/${ctx.debtorId}/reconciliation`
+                        : `/api/finance/leases/applications/${ctx.applicationId}/reconciliation`,
+                    financeQuery: `/api/finance/leases/reconciliation?applicationId=${ctx.applicationId}${
+                        ctx.debtorId ? `&debtorId=${ctx.debtorId}` : ''
+                    }`,
+                    admin: ctx.debtorId
+                        ? `/api/admin/leases/debtors/${ctx.debtorId}/reconciliation`
+                        : `/api/admin/leases/applications/${ctx.applicationId}/reconciliation`
                 }
             }
         };
