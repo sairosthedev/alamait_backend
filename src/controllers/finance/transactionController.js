@@ -115,7 +115,7 @@ class TransactionController {
             const { page = 1, type, startDate, endDate, residence, source, userId, studentId } = req.query;
             // Small pages keep list fast; clients must use pagination.pages / hasNext
             const DEFAULT_LIMIT = 50;
-            const MAX_LIMIT = 100;
+            const MAX_LIMIT = studentId ? 500 : 100;
             const limit = Math.min(
                 MAX_LIMIT,
                 Math.max(1, parseInt(req.query.limit, 10) || DEFAULT_LIMIT)

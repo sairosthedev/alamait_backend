@@ -10,6 +10,7 @@ const auditLogRoutes = require('./auditLogRoutes');
 const vendorRoutes = require('./vendorRoutes');
 const employeeRoutes = require('./employeeRoutes');
 const transactionRoutes = require('./transactionRoutes');
+const TransactionController = require('../../controllers/finance/transactionController');
 const accountRoutes = require('./accountRoutes');
 const studentARBalancesRoutes = require('./studentARBalancesRoutes');
 const transactionAccountsRoutes = require('./transactionAccountsRoutes');
@@ -31,6 +32,8 @@ router.use('/audit-log', auditLogRoutes);
 router.use('/vendors', vendorRoutes);
 router.use('/employees', employeeRoutes);
 router.use('/transactions', transactionRoutes);
+/** Frontend student ledger: same handler as GET /api/finance/transactions (studentId, search, includeEntries) */
+router.get('/transaction-entries', TransactionController.getAllTransactions);
 router.use('/accounts', accountRoutes);
 router.use('/students', studentARBalancesRoutes);
 router.use('/transaction-accounts', transactionAccountsRoutes);

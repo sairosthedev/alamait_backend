@@ -7,19 +7,42 @@ const {
     getLeaseStats,
     getLeasesByStudent
 } = require('../../controllers/finance/leaseController');
+const leaseController = require('../../controllers/admin/leaseController');
+const {
+    validateStudentId,
+    validateApplicationId,
+    validateDebtorId
+} = require('../../middleware/leaseValidation');
 
-// Apply auth middleware to all routes
+const financeRoles = checkRole('admin', 'finance_admin', 'finance_user', 'ceo');
+
 router.use(auth);
-// Apply finance access middleware to all routes
 router.use(financeAccess);
 
-// Get all leases (finance admin, admin, and CEO)
-router.get('/', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getAllLeases);
+router.get('/', financeRoles, getAllLeases);
 
-// Get single lease (finance admin, admin, and CEO)
-router.get('/:id', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getLease);
+// Specific paths before /:id
+router.get('/students/:studentId', financeRoles, getLeasesByStudent);
 
-// Get leases for a specific student
-router.get('/students/:studentId', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getLeasesByStudent);
+router.get(
+    '/applications/:applicationId/reconciliation',
+    financeRoles,
+    validateApplicationId,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get(
+    '/debtors/:debtorId/reconciliation',
+    financeRoles,
+    validateDebtorId,
+    leaseController.getLeaseReconciliationStatus
+);
+router.get(
+    '/students/:studentId/reconciliation',
+    financeRoles,
+    validateStudentId,
+    leaseController.getLeaseReconciliationStatus
+);
 
-module.exports = router; 
+router.get('/:id', financeRoles, getLease);
+
+module.exports = router;
