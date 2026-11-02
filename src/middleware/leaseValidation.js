@@ -22,39 +22,55 @@ exports.handleLeaseValidation = (req, res, next) => {
  * Resolve application / debtor / student id for lease reconciliation (query or path).
  * Rejects placeholders like "N/A" when tenant has no User account.
  */
-exports.resolveReconciliationIdentifier = (req, res, next) => {
-    let id =
-        req.params.applicationId ||
-        req.params.debtorId ||
-        req.params.studentId ||
-        req.query.applicationId ||
-        req.query.debtorId ||
-        req.query.studentId;
+function pickReconciliationIdentifier(req) {
+    const candidates = [
+        req.params.applicationId,
+        req.params.debtorId,
+        req.params.studentId,
+        req.params.id,
+        req.query.applicationId,
+        req.query.application,
+        req.query.debtorId,
+        req.query.debtor,
+        req.query.id,
+        req.query.tenantId,
+        req.query.studentId
+    ];
 
-    if (isPlaceholderTenantId(id)) {
+    for (const raw of candidates) {
+        if (isPlaceholderTenantId(raw)) continue;
+        const s = String(raw).trim();
+        if (mongoose.Types.ObjectId.isValid(s)) return s;
+    }
+    return null;
+}
+
+exports.resolveReconciliationIdentifier = (req, res, next) => {
+    const id = pickReconciliationIdentifier(req);
+
+    if (!id) {
+        const hadPlaceholderStudent =
+            isPlaceholderTenantId(req.params.studentId) ||
+            isPlaceholderTenantId(req.query.studentId);
+
         return res.status(400).json({
             success: false,
-            message:
-                'This tenant has no student login (studentId is N/A). Use debtor or application reconciliation instead.',
+            message: hadPlaceholderStudent
+                ? 'This tenant has no student login (studentId is N/A). Pass debtorId or applicationId on the request.'
+                : 'Missing tenant identifier for lease reconciliation (debtorId or applicationId).',
             data: {
                 financeExamples: [
                     '/api/finance/leases/debtors/{debtorId}/reconciliation',
                     '/api/finance/leases/applications/{applicationId}/reconciliation',
                     '/api/finance/leases/reconciliation?debtorId={debtorId}',
-                    '/api/finance/leases/reconciliation?applicationId={applicationId}'
+                    '/api/finance/leases/reconciliation?applicationId={applicationId}',
+                    '/api/finance/debtors/{debtorId}/reconciliation'
                 ]
             }
         });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(String(id))) {
-        return res.status(400).json({
-            success: false,
-            message: 'Invalid tenant identifier for lease reconciliation'
-        });
-    }
-
-    req.reconciliationIdentifier = String(id);
+    req.reconciliationIdentifier = id;
     next();
 };
 

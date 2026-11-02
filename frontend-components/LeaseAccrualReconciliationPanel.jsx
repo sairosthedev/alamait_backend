@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 
+const isPlaceholderStudentId = (id) => {
+  if (id == null || id === '') return true;
+  const s = String(id).trim().toLowerCase();
+  return s === 'n/a' || s === 'na' || s === 'null' || s === 'undefined' || s === 'none';
+};
+
 /**
  * Inline lease + accrual reconciliation for tenant / debtor detail pages.
  *
@@ -32,9 +38,12 @@ const LeaseAccrualReconciliationPanel = ({
     []
   );
 
+  const effectiveStudentId = isPlaceholderStudentId(studentId) ? null : studentId;
+
   const statusUrls = useMemo(() => {
     if (applicationId) {
       return [
+        `${apiBase}/api/finance/leases/applications/${applicationId}/reconciliation`,
         `${apiBase}/api/admin/leases/applications/${applicationId}/reconciliation`,
         `${apiBase}/api/admin/rent-accrual-reconciliation/applications/${applicationId}/reconciliation`,
         `${apiBase}/api/finance/rent-accrual-reconciliation/applications/${applicationId}/reconciliation`
@@ -42,20 +51,23 @@ const LeaseAccrualReconciliationPanel = ({
     }
     if (debtorId) {
       return [
+        `${apiBase}/api/finance/debtors/${debtorId}/reconciliation`,
+        `${apiBase}/api/finance/leases/debtors/${debtorId}/reconciliation`,
         `${apiBase}/api/admin/leases/debtors/${debtorId}/reconciliation`,
         `${apiBase}/api/admin/rent-accrual-reconciliation/debtors/${debtorId}/reconciliation`,
         `${apiBase}/api/finance/rent-accrual-reconciliation/debtors/${debtorId}/reconciliation`
       ];
     }
-    if (studentId) {
+    if (effectiveStudentId) {
       return [
-        `${apiBase}/api/admin/leases/students/${studentId}/reconciliation`,
-        `${apiBase}/api/admin/rent-accrual-reconciliation/students/${studentId}/reconciliation`,
-        `${apiBase}/api/finance/rent-accrual-reconciliation/students/${studentId}/reconciliation`
+        `${apiBase}/api/finance/leases/students/${effectiveStudentId}/reconciliation`,
+        `${apiBase}/api/admin/leases/students/${effectiveStudentId}/reconciliation`,
+        `${apiBase}/api/admin/rent-accrual-reconciliation/students/${effectiveStudentId}/reconciliation`,
+        `${apiBase}/api/finance/rent-accrual-reconciliation/students/${effectiveStudentId}/reconciliation`
       ];
     }
     return [];
-  }, [apiBase, applicationId, debtorId, studentId]);
+  }, [apiBase, applicationId, debtorId, effectiveStudentId]);
 
   const buildFallbackStatus = (application) => {
     const start = application.startDate?.split?.('T')?.[0] || application.startDate || '';
@@ -104,7 +116,11 @@ const LeaseAccrualReconciliationPanel = ({
 
   const loadStatus = useCallback(async () => {
     if (statusUrls.length === 0) {
-      setError('Pass applicationId, debtorId, or studentId');
+      setError(
+        isPlaceholderStudentId(studentId)
+          ? 'This tenant has no student login (studentId is N/A). Pass debtorId or applicationId to load reconciliation.'
+          : 'Pass applicationId, debtorId, or studentId'
+      );
       setLoading(false);
       return;
     }

@@ -1,7 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const debtorController = require('../../controllers/finance/debtorController');
+const leaseController = require('../../controllers/admin/leaseController');
 const { auth, checkRole } = require('../../middleware/auth');
+const {
+    resolveReconciliationIdentifier,
+    handleLeaseValidation,
+    validateDebtorId
+} = require('../../middleware/leaseValidation');
 
 // All routes require authentication
 router.use(auth);
@@ -14,6 +20,19 @@ router.post('/', debtorController.createDebtor);
 
 // Get all debtors with filtering and pagination
 router.get('/', debtorController.getAllDebtors);
+
+// Lease vs accrual status (debtor detail pages — use when studentId is N/A)
+router.get(
+    '/:id/reconciliation',
+    (req, res, next) => {
+        req.params.debtorId = req.params.id;
+        next();
+    },
+    validateDebtorId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
 
 // Get debtor by ID
 router.get('/:id', debtorController.getDebtorById);
