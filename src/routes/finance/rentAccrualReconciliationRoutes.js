@@ -21,6 +21,7 @@ router.use(checkRole(...financeRoles));
  */
 
 router.get('/scan', BillingDiscrepancyController.scanPeriod);
+router.get('/property-scan', BillingDiscrepancyController.scanPropertyAccruals);
 router.post('/compare', BillingDiscrepancyController.compareList);
 router.get('/student/:studentId/diagnose', BillingDiscrepancyController.diagnoseStudent);
 

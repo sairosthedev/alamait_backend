@@ -1,5 +1,6 @@
 const TransactionEntry = require('../models/TransactionEntry');
 const mongoose = require('mongoose');
+const BillingDiscrepancyService = require('./billingDiscrepancyService');
 
 /**
  * Debtor Ledger Service
@@ -10,6 +11,41 @@ const mongoose = require('mongoose');
  * - Provides accurate financial position based on actual accounting entries
  */
 class DebtorLedgerService {
+
+    static rentEntryKindFor(transaction) {
+        if (!transaction) return null;
+        if (BillingDiscrepancyService.isNegotiatedRentAdjustment(transaction)) {
+            return 'negotiated_adjustment';
+        }
+        if (transaction.source === 'rental_accrual_reversal') {
+            return 'accrual_reversal';
+        }
+        if (transaction.metadata?.type === 'lease_start') {
+            return 'lease_start';
+        }
+        if (BillingDiscrepancyService.isMonthlyRentAccrualTransaction(transaction)) {
+            return 'monthly_rent_accrual';
+        }
+        return null;
+    }
+
+    static summarizeRentMonthsForScan(monthlyBreakdown = {}) {
+        const summary = {};
+        for (const [monthKey, bucket] of Object.entries(monthlyBreakdown)) {
+            if (!/^\d{4}-\d{2}$/.test(monthKey)) continue;
+            const txs = bucket.transactions || [];
+            const monthlyAccruals = txs.filter((t) => t.rentEntryKind === 'monthly_rent_accrual');
+            const negotiations = txs.filter((t) => t.rentEntryKind === 'negotiated_adjustment');
+            summary[monthKey] = {
+                monthlyAccrualCount: monthlyAccruals.length,
+                negotiationCount: negotiations.length,
+                isDuplicateAccrual: monthlyAccruals.length >= 2,
+                isHealthyAccrualWithNegotiation:
+                    monthlyAccruals.length === 1 && negotiations.length >= 1
+            };
+        }
+        return summary;
+    }
     
     /**
      * Get comprehensive ledger data for a specific debtor
@@ -292,6 +328,10 @@ class DebtorLedgerService {
                 transactionCount: advanceBucket?.transactions?.length || (unallocatedAdvance > 0 ? 1 : 0)
             };
             
+            ledgerData.accrualMonthSummary = DebtorLedgerService.summarizeRentMonthsForScan(
+                ledgerData.monthlyBreakdown
+            );
+
             console.log(`📊 Ledger computed: Expected=$${ledgerData.totalExpected}, Paid=$${ledgerData.totalPaid}, Owing=$${ledgerData.totalOwing}`);
             
             return ledgerData;
@@ -441,6 +481,7 @@ class DebtorLedgerService {
             const totalDebit = arEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
             const totalCredit = arEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
             const netAmount = totalDebit - totalCredit;
+            const rentEntryKind = DebtorLedgerService.rentEntryKindFor(transaction);
             
             // 🆕 CRITICAL FIX: Handle reversal transactions specially
             // Reversal transactions reverse an accrual, so they should reduce expected amount
@@ -465,6 +506,7 @@ class DebtorLedgerService {
                         date: transaction.date,
                         monthKey: accrualMonthKey, // Use original accrual month for proper grouping
                         type: 'accrual_reversal',
+                        rentEntryKind: rentEntryKind || 'accrual_reversal',
                         category: 'rent',
                         amount: totalCredit,
                         description: transaction.description || 'Accrual reversal',
@@ -510,6 +552,7 @@ class DebtorLedgerService {
                         date: transaction.date,
                         monthKey,
                         type: 'payment',
+                        rentEntryKind,
                         category: 'rent',
                         amount: totalCredit,
                         description: transaction.description || 'Advance rent payment for future periods',
@@ -583,6 +626,7 @@ class DebtorLedgerService {
                         date: transaction.date,
                         monthKey,
                         type: 'accrual',
+                        rentEntryKind,
                         category: 'rent',
                         amount: totalDebit,
                         description: description,
@@ -601,6 +645,7 @@ class DebtorLedgerService {
                         date: advancePaymentDate, // Use original payment date, not accrual date
                         monthKey: advancePaymentMonthKey, // Use payment month for proper sorting
                         type: 'payment',
+                        rentEntryKind,
                         category: 'rent',
                         amount: totalCredit,
                         description: description + ' (advance payment applied)',
@@ -640,6 +685,7 @@ class DebtorLedgerService {
                         date: transaction.date,
                         monthKey: accrualMonthKey,
                         type: 'accrual',
+                        rentEntryKind: 'negotiated_adjustment',
                         category: 'rent',
                         amount: totalDebit,
                         description: transaction.description || 'Negotiated rent increase',
@@ -665,6 +711,7 @@ class DebtorLedgerService {
                         date: transaction.date,
                         monthKey: accrualMonthKey,
                         type: 'payment',
+                        rentEntryKind: 'negotiated_adjustment',
                         category: 'rent',
                         amount: totalCredit,
                         description: transaction.description || 'Negotiated payment discount',
@@ -736,6 +783,7 @@ class DebtorLedgerService {
                 date: transaction.date,
                 monthKey: paymentMonthKey,
                 type,
+                rentEntryKind,
                 category,
                 amount,
                 description,

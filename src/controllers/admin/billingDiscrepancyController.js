@@ -84,6 +84,48 @@ class BillingDiscrepancyController {
     }
 
     /**
+     * GET .../property-scan?residenceId=&limit=30
+     * Multi-month property accrual issues (missing + true duplicate accruals only).
+     */
+    static async scanPropertyAccruals(req, res) {
+        try {
+            const residenceInput = extractResidenceInput(req);
+            if (!residenceInput) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'residenceId is required for property accrual scan'
+                });
+            }
+
+            const limit = req.query.limit ? parseInt(req.query.limit, 10) : 30;
+            const monthsBack = req.query.monthsBack ? parseInt(req.query.monthsBack, 10) : 12;
+
+            const result = await BillingDiscrepancyService.scanPropertyAccrualIssues({
+                residenceId: residenceInput,
+                limit,
+                monthsBack
+            });
+
+            if (!result.success) {
+                return res.status(400).json(result);
+            }
+
+            res.status(200).json({
+                success: true,
+                message: `${result.summary.issueCount} issue(s) — showing ${result.summary.returned}`,
+                data: result
+            });
+        } catch (error) {
+            console.error('Property accrual scan error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to scan property accruals',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * POST /api/admin/billing-discrepancies/compare
      * Body: { entries: [{ name, amount }], month, year, residenceId, tolerance }
      */

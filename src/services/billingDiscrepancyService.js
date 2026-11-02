@@ -74,6 +74,203 @@ class BillingDiscrepancyService {
         return { keep: sorted[0], extras: sorted.slice(1), all: sorted };
     }
 
+    static formatMonthYearLabel(month, year) {
+        const names = [
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'
+        ];
+        const m = Number(month);
+        return `${names[m - 1] || month} ${year}`;
+    }
+
+    /**
+     * Lease months from (start+1) through current calendar month, capped to last N months.
+     */
+    static enumerateLeaseMonthsForPropertyScan(application, { monthsBack = 12, asOf = new Date() } = {}) {
+        const RentalAccrualService = require('./rentalAccrualService');
+        const leaseStartDate = new Date(application.startDate);
+        const leaseEndDate = new Date(application.endDate);
+        const currentMonth = asOf.getMonth() + 1;
+        const currentYear = asOf.getFullYear();
+
+        const windowStart = new Date(asOf.getFullYear(), asOf.getMonth() - (monthsBack - 1), 1);
+
+        let checkMonth = leaseStartDate.getMonth() + 1;
+        let checkYear = leaseStartDate.getFullYear();
+        checkMonth += 1;
+        if (checkMonth > 12) {
+            checkMonth = 1;
+            checkYear += 1;
+        }
+
+        let endCheckMonth;
+        let endCheckYear;
+        if (currentYear < leaseEndDate.getFullYear()) {
+            endCheckMonth = currentMonth;
+            endCheckYear = currentYear;
+        } else if (currentYear > leaseEndDate.getFullYear()) {
+            endCheckMonth = leaseEndDate.getMonth() + 1;
+            endCheckYear = leaseEndDate.getFullYear();
+        } else {
+            endCheckMonth = Math.min(leaseEndDate.getMonth() + 1, currentMonth);
+            endCheckYear = currentYear;
+        }
+
+        const months = [];
+        while (checkYear < endCheckYear || (checkYear === endCheckYear && checkMonth <= endCheckMonth)) {
+            const monthStart = new Date(checkYear, checkMonth - 1, 1);
+            if (
+                monthStart >= windowStart
+                && RentalAccrualService.shouldAccrueMonthForLease(
+                    application.startDate,
+                    application.endDate,
+                    checkMonth,
+                    checkYear
+                )
+            ) {
+                months.push({ month: checkMonth, year: checkYear });
+            }
+            checkMonth += 1;
+            if (checkMonth > 12) {
+                checkMonth = 1;
+                checkYear += 1;
+            }
+        }
+        return months;
+    }
+
+    /**
+     * Property page scan: missing monthly accruals + true duplicate accruals only.
+     * Accrual + NEG-RENT negotiation for the same month is healthy (not duplicate).
+     */
+    static async scanPropertyAccrualIssues({
+        residenceId,
+        limit = 30,
+        monthsBack = 12,
+        asOf = new Date()
+    } = {}) {
+        const resolved = await BillingDiscrepancyService.resolveResidenceFilter(residenceId);
+        if (!resolved) {
+            return { success: false, message: 'Residence not found' };
+        }
+
+        const applications = await BillingDiscrepancyService.getActiveApplications({
+            residenceId: resolved.id
+        });
+
+        const issues = [];
+
+        for (const application of applications) {
+            const debtor = await BillingDiscrepancyService.getDebtorForApplication(application);
+            if (!debtor) continue;
+
+            const studentId = application.student?._id?.toString() || application.student?.toString();
+            const tenantName = BillingDiscrepancyService.getStudentName(application);
+            const monthTargets = BillingDiscrepancyService.enumerateLeaseMonthsForPropertyScan(
+                application,
+                { monthsBack, asOf }
+            );
+
+            for (const { month, year } of monthTargets) {
+                const allMonthly = await BillingDiscrepancyService.findAllMonthlyAccrualTransactions(
+                    application,
+                    debtor,
+                    studentId,
+                    month,
+                    year
+                );
+                const dupeGroup = BillingDiscrepancyService.pickDuplicateMonthlyAccrualGroup(allMonthly);
+
+                if (dupeGroup) {
+                    const { keep, extras, all } = dupeGroup;
+                    issues.push({
+                        tenantName,
+                        applicationId: application._id.toString(),
+                        studentId: studentId || null,
+                        debtorId: debtor._id.toString(),
+                        issue: 'duplicate',
+                        issueType: 'duplicate_accrual',
+                        month,
+                        year,
+                        monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
+                        detail:
+                            'Two or more monthly rent accruals for this month. Keep one accrual and any NEG-RENT negotiation; reverse only the extra monthly_rent_accrual.',
+                        fixAction: 'reverse_duplicate_accrual',
+                        fixLabel: 'Fix',
+                        duplicateCount: all.length,
+                        keepTransactionId: keep._id.toString(),
+                        duplicateTransactionIds: extras.map((t) => t._id.toString()),
+                        negotiationAllowed: true
+                    });
+                    continue;
+                }
+
+                const existing = await RentalAccrualService.checkExistingMonthlyAccrual(
+                    studentId,
+                    month,
+                    year,
+                    application._id,
+                    debtor._id.toString()
+                );
+
+                if (!existing) {
+                    issues.push({
+                        tenantName,
+                        applicationId: application._id.toString(),
+                        studentId: studentId || null,
+                        debtorId: debtor._id.toString(),
+                        issue: 'missing',
+                        issueType: 'missing_monthly_accrual',
+                        month,
+                        year,
+                        monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
+                        detail: 'No rent accrual on debtor ledger for this lease month',
+                        fixAction: 'sync_accrual',
+                        fixLabel: 'Sync'
+                    });
+                }
+            }
+        }
+
+        const rank = (row) => {
+            if (row.issueType === 'duplicate_accrual') return 0;
+            if (row.issueType === 'missing_monthly_accrual') return 1;
+            return 2;
+        };
+
+        issues.sort((a, b) => {
+            const r = rank(a) - rank(b);
+            if (r !== 0) return r;
+            if (a.year !== b.year) return b.year - a.year;
+            if (a.month !== b.month) return b.month - a.month;
+            return String(a.tenantName).localeCompare(String(b.tenantName));
+        });
+
+        const capped = issues.slice(0, Math.max(1, limit));
+
+        return {
+            success: true,
+            residence: resolved,
+            scanMode: 'property_accrual_issues',
+            notes: {
+                scope:
+                    'Checks lease months from start through the current month only (not future months).',
+                window: `Property scans cover the last ${monthsBack} months through today.`,
+                duplicateRule:
+                    'Accrual plus negotiated rent adjustment (NEG-RENT) is not a duplicate.',
+                sync: 'Sync posts missing accruals; fix duplicates via reverse_duplicate_accrual only when two+ monthly accruals exist.'
+            },
+            summary: {
+                tenantsScanned: applications.length,
+                issueCount: issues.length,
+                returned: capped.length,
+                duplicateCount: issues.filter((i) => i.issueType === 'duplicate_accrual').length,
+                missingCount: issues.filter((i) => i.issueType === 'missing_monthly_accrual').length
+            },
+            issues: capped
+        };
+    }
+
     static async getNegotiationDiscountForMonth(studentId, debtorId, month, year) {
         const sid = studentId?.toString();
         const did = debtorId?.toString();
