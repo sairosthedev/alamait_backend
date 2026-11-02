@@ -9,6 +9,7 @@ const path = require('path');
 const { auditMiddleware } = require('./middleware/auditMiddleware');
 const { performanceMonitor } = require('./middleware/performanceMiddleware');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const { auth, financeAccess, checkRole } = require('./middleware/auth');
 
 // Load Swagger document
 const swaggerDocument = YAML.load(path.join(__dirname, '../swagger.yaml'));
@@ -86,6 +87,13 @@ const financeIncomeStatementRoutes = require('./routes/finance/incomeStatementRo
 const financeDashboardRoutes = require('./routes/finance/dashboardRoutes');
 const financePaymentRoutes = require('./routes/finance/paymentRoutes');
 const financeLeaseRoutes = require('./routes/finance/leaseRoutes');
+const financeLeaseController = require('./controllers/admin/leaseController');
+const {
+    resolveReconciliationIdentifier,
+    validateApplicationId,
+    validateDebtorId,
+    handleLeaseValidation
+} = require('./middleware/leaseValidation');
 const financeApplicationRoutes = require('./routes/finance/applicationRoutes');
 const financeRoomPriceRoutes = require('./routes/finance/roomPriceRoutes');
 const financeOtherIncomeRoutes = require('./routes/finance/otherIncomeRoutes');
@@ -474,6 +482,52 @@ app.use('/api/property-manager/maintenance', propertyManagerMaintenanceRoutes);
 app.use('/api/property-manager/events', propertyManagerEventRoutes);
 
 // Finance routes - specific routes first, then index routes
+const financeLeaseRoles = checkRole('admin', 'finance_admin', 'finance_user', 'ceo');
+app.get(
+    '/api/finance/leases/students/N/A/reconciliation',
+    auth,
+    financeAccess,
+    financeLeaseRoles,
+    resolveReconciliationIdentifier,
+    financeLeaseController.getLeaseReconciliationStatus
+);
+app.get(
+    '/api/finance/leases/reconciliation',
+    auth,
+    financeAccess,
+    financeLeaseRoles,
+    resolveReconciliationIdentifier,
+    financeLeaseController.getLeaseReconciliationStatus
+);
+app.get(
+    '/api/finance/leases/debtors/:debtorId/reconciliation',
+    auth,
+    financeAccess,
+    financeLeaseRoles,
+    validateDebtorId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
+    financeLeaseController.getLeaseReconciliationStatus
+);
+app.get(
+    '/api/finance/leases/applications/:applicationId/reconciliation',
+    auth,
+    financeAccess,
+    financeLeaseRoles,
+    validateApplicationId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
+    financeLeaseController.getLeaseReconciliationStatus
+);
+app.get(
+    '/api/finance/leases/students/:studentId/reconciliation',
+    auth,
+    financeAccess,
+    financeLeaseRoles,
+    resolveReconciliationIdentifier,
+    financeLeaseController.getLeaseReconciliationStatus
+);
+
 app.use('/api/finance/expenses', financeExpenseRoutes);
 app.use('/api/finance/balance-sheets', financeBalanceSheetRoutes);
 app.use('/api/finance/income-statements', financeIncomeStatementRoutes);
@@ -545,7 +599,6 @@ app.use('/api/finance/student-accounts', studentAccountRoutes);
 
 // Finance account management routes
 const financeAccountRoutes = require('./routes/finance/accountRoutes');
-const { auth } = require('./middleware/auth');
 app.use('/api/finance/accounts', auth, financeAccountRoutes);
 
 // Petty Cash routes

@@ -30,6 +30,14 @@ router.get(
 
 router.get('/students/:studentId', financeRoles, getLeasesByStudent);
 
+// Literal "N/A" in URLs is two path segments (N + A), not one param — tenants without a User login
+router.get(
+    '/students/N/A/reconciliation',
+    financeRoles,
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
+
 router.get(
     '/applications/:applicationId/reconciliation',
     financeRoles,
