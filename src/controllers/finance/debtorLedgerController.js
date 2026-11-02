@@ -14,18 +14,39 @@ class DebtorLedgerController {
     static getDebtorLedger = async (req, res) => {
         try {
             const { debtorId } = req.params;
-            const { studentId } = req.query;
-            
+            let { studentId } = req.query;
+            const includeAccrualIssues =
+                String(req.query.includeAccrualIssues || '').toLowerCase() === 'true';
+
+            const Debtor = require('../../models/Debtor');
+            const Application = require('../../models/Application');
+            const debtor = await Debtor.findById(debtorId).lean();
+            if (!debtor) {
+                return res.status(404).json({ success: false, message: 'Debtor not found' });
+            }
+
+            if (!studentId && debtor.user) {
+                studentId = debtor.user.toString();
+            }
             if (!studentId) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Student ID is required'
+                    message: 'Student ID is required (or link a user on the debtor record)'
                 });
+            }
+
+            let application = null;
+            if (includeAccrualIssues && debtor.application) {
+                application = await Application.findById(debtor.application).lean();
             }
             
             console.log(`📊 API: Getting ledger for debtor ${debtorId}, student ${studentId}`);
             
-            const ledgerData = await DebtorLedgerService.getDebtorLedger(debtorId, studentId);
+            const ledgerData = await DebtorLedgerService.getDebtorLedger(debtorId, studentId, {
+                includeAccrualIssues,
+                application,
+                monthsBack: req.query.monthsBack ? parseInt(req.query.monthsBack, 10) : 12
+            });
             
             res.json({
                 success: true,

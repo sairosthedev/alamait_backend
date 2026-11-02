@@ -139,6 +139,146 @@ class BillingDiscrepancyService {
         return months;
     }
 
+    static async scanApplicationAccrualMonthIssues(application, debtor, monthTargets) {
+        const issues = [];
+        const studentId = application.student?._id?.toString() || application.student?.toString();
+        const tenantName = BillingDiscrepancyService.getStudentName(application);
+
+        for (const { month, year } of monthTargets) {
+            const allMonthly = await BillingDiscrepancyService.findAllMonthlyAccrualTransactions(
+                application,
+                debtor,
+                studentId,
+                month,
+                year
+            );
+            const dupeGroup = BillingDiscrepancyService.pickDuplicateMonthlyAccrualGroup(allMonthly);
+
+            if (dupeGroup) {
+                const { keep, extras, all } = dupeGroup;
+                issues.push({
+                    tenantName,
+                    applicationId: application._id.toString(),
+                    studentId: studentId || null,
+                    debtorId: debtor._id.toString(),
+                    issue: 'duplicate',
+                    issueType: 'duplicate_accrual',
+                    month,
+                    year,
+                    monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
+                    detail:
+                        'Two or more monthly rent accruals for this month. Keep one accrual and any NEG-RENT negotiation; reverse only the extra monthly_rent_accrual.',
+                    fixAction: 'reverse_duplicate_accrual',
+                    fixLabel: 'Fix',
+                    duplicateCount: all.length,
+                    keepTransactionId: keep._id.toString(),
+                    duplicateTransactionIds: extras.map((t) => t._id.toString()),
+                    negotiationAllowed: true,
+                    isFalseDuplicateFromNegotiation: false
+                });
+                continue;
+            }
+
+            const negotiationCount = await TransactionEntry.countDocuments({
+                status: { $nin: ['deleted', 'reversed'] },
+                $and: [
+                    {
+                        $or: [
+                            { 'metadata.transactionType': 'negotiated_payment_adjustment' },
+                            { 'metadata.type': 'negotiated_payment_adjustment' }
+                        ]
+                    },
+                    {
+                        $or: [
+                            { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+                            { 'metadata.accrualMonth': String(month), 'metadata.accrualYear': String(year) }
+                        ]
+                    },
+                    {
+                        $or: [
+                            ...(studentId ? [{ 'metadata.studentId': studentId }] : []),
+                            { 'metadata.debtorId': debtor._id.toString() }
+                        ]
+                    }
+                ]
+            });
+
+            const existing = await RentalAccrualService.checkExistingMonthlyAccrual(
+                studentId,
+                month,
+                year,
+                application._id,
+                debtor._id.toString()
+            );
+
+            if (existing && negotiationCount > 0) {
+                issues.push({
+                    tenantName,
+                    applicationId: application._id.toString(),
+                    studentId: studentId || null,
+                    debtorId: debtor._id.toString(),
+                    issue: 'healthy',
+                    issueType: 'accrual_with_negotiation',
+                    month,
+                    year,
+                    monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
+                    detail:
+                        'Monthly rent accrual plus negotiated adjustment (NEG-RENT) — not a duplicate.',
+                    isFalseDuplicateFromNegotiation: true,
+                    negotiationCount,
+                    accrualTransactionId: existing._id?.toString?.() || String(existing._id)
+                });
+                continue;
+            }
+
+            if (!existing) {
+                issues.push({
+                    tenantName,
+                    applicationId: application._id.toString(),
+                    studentId: studentId || null,
+                    debtorId: debtor._id.toString(),
+                    issue: 'missing',
+                    issueType: 'missing_monthly_accrual',
+                    month,
+                    year,
+                    monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
+                    detail: 'No rent accrual on debtor ledger for this lease month',
+                    fixAction: 'sync_accrual',
+                    fixLabel: 'Sync'
+                });
+            }
+        }
+
+        return issues;
+    }
+
+    static async scanTenantAccrualIssues(application, debtor, { monthsBack = 12, asOf = new Date() } = {}) {
+        if (!application || !debtor) {
+            return { issues: [], summary: { issueCount: 0 } };
+        }
+        const monthTargets = BillingDiscrepancyService.enumerateLeaseMonthsForPropertyScan(
+            application,
+            { monthsBack, asOf }
+        );
+        const issues = await BillingDiscrepancyService.scanApplicationAccrualMonthIssues(
+            application,
+            debtor,
+            monthTargets
+        );
+        return {
+            issues,
+            summary: {
+                issueCount: issues.filter((i) => i.issue !== 'healthy').length,
+                duplicateCount: issues.filter((i) => i.issueType === 'duplicate_accrual').length,
+                missingCount: issues.filter((i) => i.issueType === 'missing_monthly_accrual').length,
+                healthyNegotiationCount: issues.filter((i) => i.issueType === 'accrual_with_negotiation')
+                    .length
+            },
+            duplicateRule:
+                'Accrual plus NEG-RENT for the same month is healthy — not a duplicate.'
+        };
+    }
+
     /**
      * Property page scan: missing monthly accruals + true duplicate accruals only.
      * Accrual + NEG-RENT negotiation for the same month is healthy (not duplicate).
@@ -164,72 +304,16 @@ class BillingDiscrepancyService {
             const debtor = await BillingDiscrepancyService.getDebtorForApplication(application);
             if (!debtor) continue;
 
-            const studentId = application.student?._id?.toString() || application.student?.toString();
-            const tenantName = BillingDiscrepancyService.getStudentName(application);
             const monthTargets = BillingDiscrepancyService.enumerateLeaseMonthsForPropertyScan(
                 application,
                 { monthsBack, asOf }
             );
-
-            for (const { month, year } of monthTargets) {
-                const allMonthly = await BillingDiscrepancyService.findAllMonthlyAccrualTransactions(
-                    application,
-                    debtor,
-                    studentId,
-                    month,
-                    year
-                );
-                const dupeGroup = BillingDiscrepancyService.pickDuplicateMonthlyAccrualGroup(allMonthly);
-
-                if (dupeGroup) {
-                    const { keep, extras, all } = dupeGroup;
-                    issues.push({
-                        tenantName,
-                        applicationId: application._id.toString(),
-                        studentId: studentId || null,
-                        debtorId: debtor._id.toString(),
-                        issue: 'duplicate',
-                        issueType: 'duplicate_accrual',
-                        month,
-                        year,
-                        monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
-                        detail:
-                            'Two or more monthly rent accruals for this month. Keep one accrual and any NEG-RENT negotiation; reverse only the extra monthly_rent_accrual.',
-                        fixAction: 'reverse_duplicate_accrual',
-                        fixLabel: 'Fix',
-                        duplicateCount: all.length,
-                        keepTransactionId: keep._id.toString(),
-                        duplicateTransactionIds: extras.map((t) => t._id.toString()),
-                        negotiationAllowed: true
-                    });
-                    continue;
-                }
-
-                const existing = await RentalAccrualService.checkExistingMonthlyAccrual(
-                    studentId,
-                    month,
-                    year,
-                    application._id,
-                    debtor._id.toString()
-                );
-
-                if (!existing) {
-                    issues.push({
-                        tenantName,
-                        applicationId: application._id.toString(),
-                        studentId: studentId || null,
-                        debtorId: debtor._id.toString(),
-                        issue: 'missing',
-                        issueType: 'missing_monthly_accrual',
-                        month,
-                        year,
-                        monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
-                        detail: 'No rent accrual on debtor ledger for this lease month',
-                        fixAction: 'sync_accrual',
-                        fixLabel: 'Sync'
-                    });
-                }
-            }
+            const appIssues = await BillingDiscrepancyService.scanApplicationAccrualMonthIssues(
+                application,
+                debtor,
+                monthTargets
+            );
+            issues.push(...appIssues.filter((i) => i.issue !== 'healthy'));
         }
 
         const rank = (row) => {

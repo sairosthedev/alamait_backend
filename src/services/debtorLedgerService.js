@@ -36,15 +36,68 @@ class DebtorLedgerService {
             const txs = bucket.transactions || [];
             const monthlyAccruals = txs.filter((t) => t.rentEntryKind === 'monthly_rent_accrual');
             const negotiations = txs.filter((t) => t.rentEntryKind === 'negotiated_adjustment');
+            const isHealthyAccrualWithNegotiation =
+                monthlyAccruals.length === 1 && negotiations.length >= 1;
             summary[monthKey] = {
                 monthlyAccrualCount: monthlyAccruals.length,
                 negotiationCount: negotiations.length,
                 isDuplicateAccrual: monthlyAccruals.length >= 2,
-                isHealthyAccrualWithNegotiation:
-                    monthlyAccruals.length === 1 && negotiations.length >= 1
+                isHealthyAccrualWithNegotiation,
+                showDuplicateWarning: monthlyAccruals.length >= 2,
+                suppressDuplicateWarning: isHealthyAccrualWithNegotiation,
+                statusMessage: isHealthyAccrualWithNegotiation
+                    ? 'Monthly accrual + NEG-RENT negotiation — not a duplicate.'
+                    : monthlyAccruals.length >= 2
+                      ? 'Two or more monthly rent accruals — reverse extras only.'
+                      : null
             };
         }
         return summary;
+    }
+
+    /**
+     * Net rent expected = accruals − negotiated discounts (+ negotiation increases).
+     * Cash + negotiated credits count toward paid.
+     */
+    static finalizeMonthlyRentTotals(monthlyBreakdown = {}) {
+        let totalExpected = 0;
+        let totalPaid = 0;
+
+        for (const [monthKey, month] of Object.entries(monthlyBreakdown)) {
+            if (!/^\d{4}-\d{2}$/.test(monthKey)) continue;
+
+            let grossAccrual = 0;
+            let negDiscount = 0;
+            let negIncrease = 0;
+            let cashAndOtherPaid = 0;
+
+            for (const t of month.transactions || []) {
+                const amount = Number(t.amount) || 0;
+                if (t.rentEntryKind === 'monthly_rent_accrual' || t.rentEntryKind === 'lease_start') {
+                    if (t.type === 'accrual') grossAccrual += amount;
+                } else if (t.rentEntryKind === 'negotiated_adjustment') {
+                    if (t.type === 'payment') negDiscount += amount;
+                    else if (t.type === 'accrual') negIncrease += amount;
+                } else if (t.type === 'accrual_reversal') {
+                    grossAccrual -= amount;
+                } else if (t.type === 'payment') {
+                    cashAndOtherPaid += amount;
+                }
+            }
+
+            month.rentGrossAccrued = Math.round((grossAccrual + negIncrease) * 100) / 100;
+            month.negotiatedDiscount = Math.round(negDiscount * 100) / 100;
+            month.expected = Math.max(0, Math.round((month.rentGrossAccrued - negDiscount) * 100) / 100);
+            month.paid = Math.round((cashAndOtherPaid + negDiscount) * 100) / 100;
+
+            totalExpected += month.expected;
+            totalPaid += month.paid;
+        }
+
+        return {
+            totalExpected: Math.round(totalExpected * 100) / 100,
+            totalPaid: Math.round(totalPaid * 100) / 100
+        };
     }
     
     /**
@@ -53,7 +106,7 @@ class DebtorLedgerService {
      * @param {string} studentId - Student ID (for AR account lookup)
      * @returns {Promise<Object>} Ledger data with expected/paid breakdown
      */
-    static async getDebtorLedger(debtorId, studentId) {
+    static async getDebtorLedger(debtorId, studentId, options = {}) {
         try {
             console.log(`📊 Computing ledger for debtor ${debtorId}, student ${studentId}`);
             
@@ -301,6 +354,10 @@ class DebtorLedgerService {
                 }
             }
             
+            const rentTotals = DebtorLedgerService.finalizeMonthlyRentTotals(ledgerData.monthlyBreakdown);
+            ledgerData.totalExpected = rentTotals.totalExpected;
+            ledgerData.totalPaid = rentTotals.totalPaid;
+
             // Apply unassigned advance payments FIFO to accrual months (oldest first).
             // Advance payments without monthSettled land in the 'advance' bucket and must not
             // appear as a separate paid month while accrual months still show full owing.
@@ -331,6 +388,15 @@ class DebtorLedgerService {
             ledgerData.accrualMonthSummary = DebtorLedgerService.summarizeRentMonthsForScan(
                 ledgerData.monthlyBreakdown
             );
+
+            if (options.includeAccrualIssues && options.application) {
+                const BillingDiscrepancyService = require('./billingDiscrepancyService');
+                ledgerData.accrualIssues = await BillingDiscrepancyService.scanTenantAccrualIssues(
+                    options.application,
+                    debtor,
+                    { monthsBack: options.monthsBack || 12 }
+                );
+            }
 
             console.log(`📊 Ledger computed: Expected=$${ledgerData.totalExpected}, Paid=$${ledgerData.totalPaid}, Owing=$${ledgerData.totalOwing}`);
             
