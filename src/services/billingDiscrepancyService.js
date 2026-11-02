@@ -237,9 +237,12 @@ class BillingDiscrepancyService {
             const { month, year, billingExpectation = 'monthly_rent_accrual' } = target;
 
             if (billingExpectation === 'lease_start') {
-                const leaseStarts = await BillingDiscrepancyService.findAllLeaseStartAccruals(
+                const leaseStarts = await BillingDiscrepancyService.findLeaseStartAccrualsForMonth(
                     application,
-                    debtor
+                    debtor,
+                    studentId,
+                    month,
+                    year
                 );
                 if (leaseStarts.length > 1) {
                     const keep = leaseStarts[0];
@@ -370,6 +373,17 @@ class BillingDiscrepancyService {
             }
 
             if (!existing) {
+                const leaseInMonth = await BillingDiscrepancyService.findLeaseStartAccrualsForMonth(
+                    application,
+                    debtor,
+                    studentId,
+                    month,
+                    year
+                );
+                if (leaseInMonth.length > 0) {
+                    continue;
+                }
+
                 issues.push({
                     tenantName,
                     applicationId: application._id.toString(),
