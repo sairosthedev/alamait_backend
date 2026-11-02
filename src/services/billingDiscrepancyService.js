@@ -29,6 +29,68 @@ class BillingDiscrepancyService {
         return BillingDiscrepancyService.normalizeName(name).split(' ').filter(Boolean);
     }
 
+    /** Negotiated rent adjustment — not a duplicate monthly accrual. */
+    static isNegotiatedRentAdjustment(tx) {
+        if (!tx) return false;
+        const meta = tx.metadata || {};
+        return (
+            meta.type === 'negotiated_payment_adjustment' ||
+            meta.transactionType === 'negotiated_payment_adjustment' ||
+            meta.isNegotiated === true ||
+            /negotiated rent adjustment/i.test(String(tx.description || ''))
+        );
+    }
+
+    static isMonthlyRentAccrualTransaction(tx) {
+        if (!tx || BillingDiscrepancyService.isNegotiatedRentAdjustment(tx)) return false;
+        if (tx.metadata?.type === 'lease_start' || tx.metadata?.type === 'monthly_levy_accrual') {
+            return false;
+        }
+        return (
+            tx.source === 'rental_accrual' &&
+            (tx.metadata?.type === 'monthly_rent_accrual' ||
+                /monthly.*(rent|accrual)/i.test(String(tx.description || '')))
+        );
+    }
+
+    static async getNegotiationDiscountForMonth(studentId, debtorId, month, year) {
+        const sid = studentId?.toString();
+        const did = debtorId?.toString();
+        if (!sid && !did) return 0;
+
+        const negQuery = {
+            status: { $nin: ['deleted', 'reversed'] },
+            $or: [
+                { 'metadata.transactionType': 'negotiated_payment_adjustment' },
+                { 'metadata.type': 'negotiated_payment_adjustment' }
+            ],
+            $and: [{
+                $or: [
+                    { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+                    { 'metadata.accrualMonth': String(month), 'metadata.accrualYear': String(year) }
+                ]
+            }, {
+                $or: [
+                    ...(sid ? [{ 'metadata.studentId': sid }] : []),
+                    ...(did ? [{ 'metadata.debtorId': did }] : [])
+                ]
+            }]
+        };
+
+        const negotiations = await TransactionEntry.find(negQuery).lean();
+        let discount = 0;
+        for (const n of negotiations) {
+            const meta = n.metadata || {};
+            if (meta.adjustmentDirection === 'increase') continue;
+            discount +=
+                Number(meta.discountAmount) ||
+                Number(meta.negotiatedDiscount) ||
+                (meta.adjustmentDirection === 'decrease' ? Number(meta.adjustmentAmount) : 0) ||
+                0;
+        }
+        return Math.round(discount * 100) / 100;
+    }
+
     static nameMatchScore(a, b) {
         const tokensA = BillingDiscrepancyService.nameTokens(a);
         const tokensB = BillingDiscrepancyService.nameTokens(b);
@@ -583,6 +645,7 @@ class BillingDiscrepancyService {
         if (!txs.length) {
             txs = await TransactionEntry.find({
                 ...baseQuery,
+                'metadata.type': 'monthly_rent_accrual',
                 date: { $gte: monthStart, $lte: monthEnd },
                 $or: identityOr
             })
@@ -590,7 +653,7 @@ class BillingDiscrepancyService {
                 .lean();
         }
 
-        return txs;
+        return txs.filter((tx) => BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx));
     }
 
     static async findAllLeaseStartAccruals(application, debtor) {
@@ -669,6 +732,7 @@ class BillingDiscrepancyService {
         const txns = await TransactionEntry.find({
             residence: residenceId,
             source: 'rental_accrual',
+            'metadata.type': 'monthly_rent_accrual',
             status: { $nin: ['deleted', 'reversed'] },
             $or: [
                 { 'metadata.month': monthKey },
@@ -1034,9 +1098,13 @@ class BillingDiscrepancyService {
             }];
             const negotiations = await TransactionEntry.find(negQuery).lean();
             for (const n of negotiations) {
-                negotiationDiscount += n.metadata?.discountAmount
-                    || n.metadata?.negotiatedDiscount
-                    || 0;
+                const meta = n.metadata || {};
+                if (meta.adjustmentDirection === 'increase') continue;
+                negotiationDiscount +=
+                    Number(meta.discountAmount) ||
+                    Number(meta.negotiatedDiscount) ||
+                    (meta.adjustmentDirection === 'decrease' ? Number(meta.adjustmentAmount) : 0) ||
+                    0;
             }
         }
 
@@ -1216,16 +1284,26 @@ class BillingDiscrepancyService {
                 continue;
             }
 
-            totalExpected += expectedRent;
-            totalActual += accrual.amount;
+            const negotiationDiscount = await BillingDiscrepancyService.getNegotiationDiscountForMonth(
+                studentId,
+                debtor?._id?.toString(),
+                scanMonth,
+                scanYear
+            );
+            const effectiveAccrualAmount = Math.round((accrual.amount - negotiationDiscount) * 100) / 100;
 
-            if (Math.abs(accrual.amount - expectedRent) > tolerance && expectedRent > 0) {
+            totalExpected += expectedRent;
+            totalActual += effectiveAccrualAmount;
+
+            if (Math.abs(effectiveAccrualAmount - expectedRent) > tolerance && expectedRent > 0) {
                 issues.push(BillingDiscrepancyService.buildIssue(application, 'amount_mismatch', {
                     month: scanMonth,
                     year: scanYear,
                     expectedAmount: expectedRent,
                     actualAmount: accrual.amount,
-                    difference: Math.round((accrual.amount - expectedRent) * 100) / 100,
+                    negotiationDiscount,
+                    effectiveAmount: effectiveAccrualAmount,
+                    difference: Math.round((effectiveAccrualAmount - expectedRent) * 100) / 100,
                     transactionId: accrual.transaction?._id?.toString()
                 }));
             } else {
@@ -1235,6 +1313,8 @@ class BillingDiscrepancyService {
                     studentId: application.student?._id?.toString() || application.student?.toString(),
                     expectedAmount: expectedRent,
                     actualAmount: accrual.amount,
+                    negotiationDiscount,
+                    effectiveAmount: effectiveAccrualAmount,
                     month: scanMonth,
                     year: scanYear
                 });
