@@ -103,6 +103,9 @@ class BillingDiscrepancyService {
         if (debtor?.accountCode) {
             identityOr.push({ 'entries.accountCode': debtor.accountCode });
         }
+        if (application.applicationCode) {
+            identityOr.push({ 'metadata.applicationCode': application.applicationCode });
+        }
 
         const nameTokens = BillingDiscrepancyService.nameTokens(studentName).filter((t) => t.length > 2);
         if (nameTokens.length >= 2) {
@@ -1036,44 +1039,11 @@ class BillingDiscrepancyService {
 
     static async findAllMonthlyAccrualTransactions(application, debtor, studentId, month, year) {
         const monthKey = `${year}-${String(month).padStart(2, '0')}`;
-        const applicationId = application._id.toString();
-        const debtorId = debtor?._id?.toString();
-        const sid = studentId?.toString();
-        const studentName = BillingDiscrepancyService.getStudentName(application);
-
-        const identityOr = [
-            { 'metadata.applicationId': applicationId },
-            { 'metadata.applicationId': application._id },
-            ...(sid ? [
-                { 'metadata.studentId': sid },
-                { 'metadata.userId': sid },
-                { sourceId: sid }
-            ] : []),
-            { 'metadata.studentId': applicationId },
-            { sourceId: application._id }
-        ];
-
-        if (debtorId) {
-            identityOr.push(
-                { 'metadata.debtorId': debtorId },
-                { sourceModel: 'Debtor', sourceId: debtorId },
-                { sourceModel: 'Debtor', sourceId: new mongoose.Types.ObjectId(debtorId) },
-                { 'entries.accountCode': `1100-${debtorId}` }
-            );
-        }
-        if (debtor?.accountCode) {
-            identityOr.push({ 'entries.accountCode': debtor.accountCode });
-        }
-
-        const nameTokens = BillingDiscrepancyService.nameTokens(studentName).filter(t => t.length > 2);
-        if (nameTokens.length >= 2) {
-            identityOr.push({
-                description: new RegExp(
-                    `${nameTokens[0]}.*${nameTokens[nameTokens.length - 1]}|${nameTokens[nameTokens.length - 1]}.*${nameTokens[0]}`,
-                    'i'
-                )
-            });
-        }
+        const identityOr = BillingDiscrepancyService.buildAccrualIdentityOr(
+            application,
+            debtor,
+            studentId
+        );
 
         const monthOr = [
             { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
@@ -1120,21 +1090,67 @@ class BillingDiscrepancyService {
         return txs.filter((tx) => BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx));
     }
 
-    static async findAllLeaseStartAccruals(application, debtor) {
-        const debtorId = debtor?._id?.toString();
-        return TransactionEntry.find({
+    static async findLeaseStartAccrualsForMonth(application, debtor, studentId, month, year) {
+        const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+        const identityOr = BillingDiscrepancyService.buildAccrualIdentityOr(
+            application,
+            debtor,
+            studentId
+        );
+        const monthStart = new Date(Date.UTC(year, month - 1, 1));
+        const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+
+        const txs = await TransactionEntry.find({
             source: 'rental_accrual',
-            'metadata.type': 'lease_start',
             status: { $nin: ['deleted', 'reversed'] },
-            $or: [
-                { 'metadata.applicationId': application._id.toString() },
-                { 'metadata.applicationId': application._id },
-                { 'metadata.applicationCode': application.applicationCode },
-                ...(debtorId ? [{ 'metadata.debtorId': debtorId }] : [])
+            $and: [
+                {
+                    $or: [
+                        { 'metadata.type': 'lease_start' },
+                        { description: { $regex: /lease start/i } }
+                    ]
+                },
+                {
+                    $or: [
+                        { date: { $gte: monthStart, $lte: monthEnd } },
+                        { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+                        { 'metadata.accrualMonth': String(month), 'metadata.accrualYear': String(year) },
+                        { 'metadata.month': monthKey }
+                    ]
+                },
+                { $or: identityOr }
             ]
         })
             .sort({ createdAt: 1 })
             .lean();
+
+        return txs.filter((tx) => BillingDiscrepancyService.isLeaseStartAccrualTransaction(tx));
+    }
+
+    static async findAllLeaseStartAccruals(application, debtor, studentId = null) {
+        const sid =
+            studentId?.toString() ||
+            application.student?._id?.toString() ||
+            application.student?.toString();
+        const identityOr = BillingDiscrepancyService.buildAccrualIdentityOr(application, debtor, sid);
+
+        const txs = await TransactionEntry.find({
+            source: 'rental_accrual',
+            status: { $nin: ['deleted', 'reversed'] },
+            $and: [
+                {
+                    $or: [
+                        { 'metadata.type': 'lease_start' },
+                        { description: { $regex: /lease start/i } }
+                    ]
+                },
+                { $or: identityOr }
+            ]
+        })
+            .sort({ createdAt: 1 })
+            .lean();
+
+        return txs.filter((tx) => BillingDiscrepancyService.isLeaseStartAccrualTransaction(tx));
     }
 
     static async reverseDuplicateAccrualTransactions({
@@ -1318,6 +1334,22 @@ class BillingDiscrepancyService {
         );
 
         if (!tx) {
+            const leaseInMonth = await BillingDiscrepancyService.findLeaseStartAccrualsForMonth(
+                application,
+                debtor,
+                studentId,
+                month,
+                year
+            );
+            if (leaseInMonth.length > 0) {
+                const leaseStart = leaseInMonth[0];
+                return {
+                    type: 'lease_start',
+                    exists: true,
+                    amount: BillingDiscrepancyService.extractRentAmountFromTransaction(leaseStart),
+                    transaction: leaseStart
+                };
+            }
             return { type: 'monthly_rent_accrual', exists: false, amount: 0, transaction: null };
         }
 
@@ -1330,18 +1362,17 @@ class BillingDiscrepancyService {
     }
 
     static async getLeaseStartAccrual(application, debtor, month, year) {
-        const debtorId = debtor?._id?.toString();
-        const leaseStart = await TransactionEntry.findOne({
-            source: 'rental_accrual',
-            'metadata.type': 'lease_start',
-            status: { $nin: ['deleted', 'reversed'] },
-            $or: [
-                { 'metadata.applicationId': application._id.toString() },
-                { 'metadata.applicationId': application._id },
-                { 'metadata.applicationCode': application.applicationCode },
-                ...(debtorId ? [{ 'metadata.debtorId': debtorId }] : [])
-            ]
-        }).lean();
+        const studentId = application.student?._id?.toString() || application.student?.toString();
+        const inMonth = await BillingDiscrepancyService.findLeaseStartAccrualsForMonth(
+            application,
+            debtor,
+            studentId,
+            month,
+            year
+        );
+        const leaseStart =
+            inMonth[0] ||
+            (await BillingDiscrepancyService.findAllLeaseStartAccruals(application, debtor, studentId))[0];
 
         if (!leaseStart) {
             return { type: 'lease_start', exists: false, amount: 0, transaction: null };
