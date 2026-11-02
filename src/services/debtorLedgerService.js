@@ -35,21 +35,32 @@ class DebtorLedgerService {
             if (!/^\d{4}-\d{2}$/.test(monthKey)) continue;
             const txs = bucket.transactions || [];
             const monthlyAccruals = txs.filter((t) => t.rentEntryKind === 'monthly_rent_accrual');
+            const leaseStarts = txs.filter((t) => t.rentEntryKind === 'lease_start');
             const negotiations = txs.filter((t) => t.rentEntryKind === 'negotiated_adjustment');
             const isHealthyAccrualWithNegotiation =
                 monthlyAccruals.length === 1 && negotiations.length >= 1;
+            const isLeaseStartMonthOk = leaseStarts.length >= 1 && monthlyAccruals.length === 0;
+            const rentAccrualSatisfied = monthlyAccruals.length >= 1 || leaseStarts.length >= 1;
             summary[monthKey] = {
                 monthlyAccrualCount: monthlyAccruals.length,
+                leaseStartCount: leaseStarts.length,
                 negotiationCount: negotiations.length,
-                isDuplicateAccrual: monthlyAccruals.length >= 2,
+                rentAccrualSatisfied,
+                isLeaseStartMonthOk,
+                isDuplicateAccrual: monthlyAccruals.length >= 2 || leaseStarts.length >= 2,
                 isHealthyAccrualWithNegotiation,
-                showDuplicateWarning: monthlyAccruals.length >= 2,
-                suppressDuplicateWarning: isHealthyAccrualWithNegotiation,
-                statusMessage: isHealthyAccrualWithNegotiation
-                    ? 'Monthly accrual + NEG-RENT negotiation — not a duplicate.'
-                    : monthlyAccruals.length >= 2
-                      ? 'Two or more monthly rent accruals — reverse extras only.'
-                      : null
+                showDuplicateWarning: monthlyAccruals.length >= 2 || leaseStarts.length >= 2,
+                suppressDuplicateWarning:
+                    isHealthyAccrualWithNegotiation || isLeaseStartMonthOk,
+                statusMessage: isLeaseStartMonthOk
+                    ? 'Move-in month — lease_start accrual satisfies this month (no monthly accrual required).'
+                    : isHealthyAccrualWithNegotiation
+                      ? 'Monthly accrual + NEG-RENT negotiation — not a duplicate.'
+                      : monthlyAccruals.length >= 2
+                        ? 'Two or more monthly rent accruals — reverse extras only.'
+                        : leaseStarts.length >= 2
+                          ? 'Two or more lease_start accruals — reverse extras only.'
+                          : null
             };
         }
         return summary;

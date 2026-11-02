@@ -9,6 +9,7 @@ const AccrualCorrectionService = require('./accrualCorrectionService');
 const { backfillTransactionsForDebtor } = require('./transactionBackfillService');
 const { syncDebtorTotalsWithAR } = require('./debtorService');
 const { isHeaderLikeName } = require('../utils/accrualListParser');
+const { getCalendarParts } = require('../utils/calendarDate');
 
 /**
  * Unified billing discrepancy detection and repair for admin use.
@@ -84,52 +85,86 @@ class BillingDiscrepancyService {
     }
 
     /**
-     * Lease months from (start+1) through current calendar month, capped to last N months.
+     * Billable lease months through current calendar month (not future), last N months window.
+     * Move-in month expects lease_start; later months expect monthly_rent_accrual.
      */
     static enumerateLeaseMonthsForPropertyScan(application, { monthsBack = 12, asOf = new Date() } = {}) {
-        const RentalAccrualService = require('./rentalAccrualService');
-        const leaseStartDate = new Date(application.startDate);
-        const leaseEndDate = new Date(application.endDate);
+        const start = getCalendarParts(application.startDate);
+        const end = getCalendarParts(application.endDate);
+        if (!start || !end) return [];
+
         const currentMonth = asOf.getMonth() + 1;
         const currentYear = asOf.getFullYear();
-
         const windowStart = new Date(asOf.getFullYear(), asOf.getMonth() - (monthsBack - 1), 1);
-
-        let checkMonth = leaseStartDate.getMonth() + 1;
-        let checkYear = leaseStartDate.getFullYear();
-        checkMonth += 1;
-        if (checkMonth > 12) {
-            checkMonth = 1;
-            checkYear += 1;
-        }
+        const asOfEnd = new Date(currentYear, currentMonth, 0, 23, 59, 59, 999);
 
         let endCheckMonth;
         let endCheckYear;
-        if (currentYear < leaseEndDate.getFullYear()) {
+        if (currentYear < end.year) {
             endCheckMonth = currentMonth;
             endCheckYear = currentYear;
-        } else if (currentYear > leaseEndDate.getFullYear()) {
-            endCheckMonth = leaseEndDate.getMonth() + 1;
-            endCheckYear = leaseEndDate.getFullYear();
+        } else if (currentYear > end.year) {
+            endCheckMonth = end.month;
+            endCheckYear = end.year;
         } else {
-            endCheckMonth = Math.min(leaseEndDate.getMonth() + 1, currentMonth);
+            endCheckMonth = Math.min(end.month, currentMonth);
             endCheckYear = currentYear;
         }
 
         const months = [];
+        let checkMonth = start.month;
+        let checkYear = start.year;
+
         while (checkYear < endCheckYear || (checkYear === endCheckYear && checkMonth <= endCheckMonth)) {
             const monthStart = new Date(checkYear, checkMonth - 1, 1);
-            if (
-                monthStart >= windowStart
-                && RentalAccrualService.shouldAccrueMonthForLease(
+            if (monthStart > asOfEnd) break;
+            if (monthStart < windowStart) {
+                checkMonth += 1;
+                if (checkMonth > 12) {
+                    checkMonth = 1;
+                    checkYear += 1;
+                }
+                continue;
+            }
+
+            const monthIndex = RentalAccrualService.monthIndexFromLeaseStart(
+                application.startDate,
+                checkMonth,
+                checkYear
+            );
+            if (monthIndex < 0) {
+                checkMonth += 1;
+                if (checkMonth > 12) {
+                    checkMonth = 1;
+                    checkYear += 1;
+                }
+                continue;
+            }
+
+            if (monthIndex === 0) {
+                const leaseStartDate = new Date(application.startDate);
+                if (leaseStartDate <= asOfEnd) {
+                    months.push({
+                        month: checkMonth,
+                        year: checkYear,
+                        billingExpectation: 'lease_start'
+                    });
+                }
+            } else if (
+                RentalAccrualService.shouldAccrueMonthForLease(
                     application.startDate,
                     application.endDate,
                     checkMonth,
                     checkYear
                 )
             ) {
-                months.push({ month: checkMonth, year: checkYear });
+                months.push({
+                    month: checkMonth,
+                    year: checkYear,
+                    billingExpectation: 'monthly_rent_accrual'
+                });
             }
+
             checkMonth += 1;
             if (checkMonth > 12) {
                 checkMonth = 1;
@@ -144,7 +179,56 @@ class BillingDiscrepancyService {
         const studentId = application.student?._id?.toString() || application.student?.toString();
         const tenantName = BillingDiscrepancyService.getStudentName(application);
 
-        for (const { month, year } of monthTargets) {
+        for (const target of monthTargets) {
+            const { month, year, billingExpectation = 'monthly_rent_accrual' } = target;
+
+            if (billingExpectation === 'lease_start') {
+                const leaseStarts = await BillingDiscrepancyService.findAllLeaseStartAccruals(
+                    application,
+                    debtor
+                );
+                if (leaseStarts.length > 1) {
+                    const keep = leaseStarts[0];
+                    const extras = leaseStarts.slice(1);
+                    issues.push({
+                        tenantName,
+                        applicationId: application._id.toString(),
+                        studentId: studentId || null,
+                        debtorId: debtor._id.toString(),
+                        issue: 'duplicate',
+                        issueType: 'duplicate_accrual',
+                        accrualType: 'lease_start',
+                        month,
+                        year,
+                        monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
+                        detail:
+                            'Two or more lease_start accruals for this tenant. Keep one; reverse extras.',
+                        fixAction: 'reverse_duplicate_accrual',
+                        fixLabel: 'Fix',
+                        duplicateCount: leaseStarts.length,
+                        keepTransactionId: keep._id.toString(),
+                        duplicateTransactionIds: extras.map((t) => t._id.toString())
+                    });
+                } else if (leaseStarts.length === 0) {
+                    issues.push({
+                        tenantName,
+                        applicationId: application._id.toString(),
+                        studentId: studentId || null,
+                        debtorId: debtor._id.toString(),
+                        issue: 'missing',
+                        issueType: 'missing_lease_start',
+                        month,
+                        year,
+                        monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
+                        detail:
+                            'No lease_start accrual for the move-in month. This is not a missing monthly accrual — post lease start.',
+                        fixAction: 'sync_accrual',
+                        fixLabel: 'Sync'
+                    });
+                }
+                continue;
+            }
+
             const allMonthly = await BillingDiscrepancyService.findAllMonthlyAccrualTransactions(
                 application,
                 debtor,
@@ -239,10 +323,12 @@ class BillingDiscrepancyService {
                     debtorId: debtor._id.toString(),
                     issue: 'missing',
                     issueType: 'missing_monthly_accrual',
+                    accrualType: 'monthly_rent_accrual',
                     month,
                     year,
                     monthLabel: BillingDiscrepancyService.formatMonthYearLabel(month, year),
-                    detail: 'No rent accrual on debtor ledger for this lease month',
+                    detail:
+                        'No monthly_rent_accrual for this lease month (move-in month uses lease_start instead).',
                     fixAction: 'sync_accrual',
                     fixLabel: 'Sync'
                 });
@@ -270,12 +356,18 @@ class BillingDiscrepancyService {
             summary: {
                 issueCount: issues.filter((i) => i.issue !== 'healthy').length,
                 duplicateCount: issues.filter((i) => i.issueType === 'duplicate_accrual').length,
-                missingCount: issues.filter((i) => i.issueType === 'missing_monthly_accrual').length,
+                missingCount: issues.filter((i) =>
+                    i.issueType === 'missing_monthly_accrual' || i.issueType === 'missing_lease_start'
+                ).length,
+                missingLeaseStartCount: issues.filter((i) => i.issueType === 'missing_lease_start').length,
+                missingMonthlyCount: issues.filter((i) => i.issueType === 'missing_monthly_accrual').length,
                 healthyNegotiationCount: issues.filter((i) => i.issueType === 'accrual_with_negotiation')
                     .length
             },
             duplicateRule:
-                'Accrual plus NEG-RENT for the same month is healthy — not a duplicate.'
+                'Accrual plus NEG-RENT for the same month is healthy — not a duplicate.',
+            leaseStartRule:
+                'Move-in month is satisfied by lease_start — not monthly_rent_accrual.'
         };
     }
 
@@ -342,7 +434,9 @@ class BillingDiscrepancyService {
                 window: `Property scans cover the last ${monthsBack} months through today.`,
                 duplicateRule:
                     'Accrual plus negotiated rent adjustment (NEG-RENT) is not a duplicate.',
-                sync: 'Sync posts missing accruals; fix duplicates via reverse_duplicate_accrual only when two+ monthly accruals exist.'
+                leaseStartRule:
+                    'Move-in month is satisfied by lease_start accrual — not monthly_rent_accrual.',
+                sync: 'Sync posts missing lease_start or monthly accruals; fix duplicates only when two+ entries of the same type exist.'
             },
             summary: {
                 tenantsScanned: applications.length,
