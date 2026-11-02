@@ -56,11 +56,65 @@ class BillingDiscrepancyService {
             return false;
         }
         const desc = String(tx.description || '');
+        if (/lease start/i.test(desc)) return false;
         return (
             tx.source === 'rental_accrual' &&
             (tx.metadata?.type === 'monthly_rent_accrual' ||
                 /monthly.*(rent|accrual)/i.test(desc))
         );
+    }
+
+    static isLeaseStartAccrualTransaction(tx) {
+        if (!tx || BillingDiscrepancyService.isNegotiatedRentAdjustment(tx)) return false;
+        if (BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx)) return false;
+        const desc = String(tx.description || '');
+        return (
+            tx.source === 'rental_accrual' &&
+            (tx.metadata?.type === 'lease_start' || /lease start/i.test(desc))
+        );
+    }
+
+    static buildAccrualIdentityOr(application, debtor, studentId) {
+        const applicationId = application._id.toString();
+        const debtorId = debtor?._id?.toString();
+        const sid = studentId?.toString();
+        const studentName = BillingDiscrepancyService.getStudentName(application);
+
+        const identityOr = [
+            { 'metadata.applicationId': applicationId },
+            { 'metadata.applicationId': application._id },
+            ...(sid ? [
+                { 'metadata.studentId': sid },
+                { 'metadata.userId': sid },
+                { sourceId: sid }
+            ] : []),
+            { 'metadata.studentId': applicationId },
+            { sourceId: application._id }
+        ];
+
+        if (debtorId) {
+            identityOr.push(
+                { 'metadata.debtorId': debtorId },
+                { sourceModel: 'Debtor', sourceId: debtorId },
+                { sourceModel: 'Debtor', sourceId: new mongoose.Types.ObjectId(debtorId) },
+                { 'entries.accountCode': `1100-${debtorId}` }
+            );
+        }
+        if (debtor?.accountCode) {
+            identityOr.push({ 'entries.accountCode': debtor.accountCode });
+        }
+
+        const nameTokens = BillingDiscrepancyService.nameTokens(studentName).filter((t) => t.length > 2);
+        if (nameTokens.length >= 2) {
+            identityOr.push({
+                description: new RegExp(
+                    `${nameTokens[0]}.*${nameTokens[nameTokens.length - 1]}|${nameTokens[nameTokens.length - 1]}.*${nameTokens[0]}`,
+                    'i'
+                )
+            });
+        }
+
+        return identityOr;
     }
 
     /** Only true duplicate monthly accruals — excludes negotiations paired with one accrual. */

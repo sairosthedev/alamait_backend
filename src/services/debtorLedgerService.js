@@ -20,7 +20,7 @@ class DebtorLedgerService {
         if (transaction.source === 'rental_accrual_reversal') {
             return 'accrual_reversal';
         }
-        if (transaction.metadata?.type === 'lease_start') {
+        if (BillingDiscrepancyService.isLeaseStartAccrualTransaction(transaction)) {
             return 'lease_start';
         }
         if (BillingDiscrepancyService.isMonthlyRentAccrualTransaction(transaction)) {
