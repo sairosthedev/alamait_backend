@@ -29,16 +29,24 @@ class BillingDiscrepancyService {
         return BillingDiscrepancyService.normalizeName(name).split(' ').filter(Boolean);
     }
 
-    /** Negotiated rent adjustment — not a duplicate monthly accrual. */
+    /** Negotiated rent adjustment — never a duplicate monthly accrual (accrual + negotiation is normal). */
     static isNegotiatedRentAdjustment(tx) {
         if (!tx) return false;
         const meta = tx.metadata || {};
-        return (
+        const desc = String(tx.description || '');
+        const ref = String(tx.reference || tx.transactionId || '');
+        if (
             meta.type === 'negotiated_payment_adjustment' ||
             meta.transactionType === 'negotiated_payment_adjustment' ||
             meta.isNegotiated === true ||
-            /negotiated rent adjustment/i.test(String(tx.description || ''))
-        );
+            meta.isAdjustment === true
+        ) {
+            return true;
+        }
+        if (ref.startsWith('NEG-RENT')) return true;
+        if (/negotiated (rent|payment|discount)/i.test(desc)) return true;
+        if (tx.source === 'manual' && /negotiat/i.test(desc)) return true;
+        return false;
     }
 
     static isMonthlyRentAccrualTransaction(tx) {
@@ -46,11 +54,24 @@ class BillingDiscrepancyService {
         if (tx.metadata?.type === 'lease_start' || tx.metadata?.type === 'monthly_levy_accrual') {
             return false;
         }
+        const desc = String(tx.description || '');
         return (
             tx.source === 'rental_accrual' &&
             (tx.metadata?.type === 'monthly_rent_accrual' ||
-                /monthly.*(rent|accrual)/i.test(String(tx.description || '')))
+                /monthly.*(rent|accrual)/i.test(desc))
         );
+    }
+
+    /** Only true duplicate monthly accruals — excludes negotiations paired with one accrual. */
+    static pickDuplicateMonthlyAccrualGroup(transactions = []) {
+        const accruals = (transactions || []).filter((tx) =>
+            BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx)
+        );
+        if (accruals.length < 2) return null;
+        const sorted = [...accruals].sort(
+            (a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)
+        );
+        return { keep: sorted[0], extras: sorted.slice(1), all: sorted };
     }
 
     static async getNegotiationDiscountForMonth(studentId, debtorId, month, year) {
@@ -699,6 +720,18 @@ class BillingDiscrepancyService {
             try {
                 const tx = await TransactionEntry.findById(id);
                 if (!tx || tx.status === 'reversed') continue;
+                if (BillingDiscrepancyService.isNegotiatedRentAdjustment(tx)) {
+                    errors.push({
+                        id,
+                        error: 'Skipped: negotiated rent adjustment is not a duplicate accrual'
+                    });
+                    continue;
+                }
+                if (!BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx)
+                    && tx.metadata?.type !== 'lease_start') {
+                    errors.push({ id, error: 'Skipped: not a monthly rent accrual' });
+                    continue;
+                }
                 tx.status = 'reversed';
                 tx.metadata = {
                     ...(tx.metadata || {}),
@@ -746,6 +779,7 @@ class BillingDiscrepancyService {
 
         const groups = new Map();
         for (const tx of txns) {
+            if (!BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx)) continue;
             const appId = tx.metadata?.applicationId?.toString?.() || tx.metadata?.applicationId || null;
             const debtorId = tx.metadata?.debtorId?.toString?.() || tx.metadata?.debtorId || null;
             const arEntry = (tx.entries || []).find(
@@ -900,7 +934,8 @@ class BillingDiscrepancyService {
             update_lease_end: 'Admin: update lease end date (student left early or not on actual list)',
             extend_lease_end: 'Admin: extend lease to month-end when it was cut short, then accrue rent',
             reconcile_accrual: 'Create missing rent accrual from lease/transaction backfill',
-            reverse_duplicate_accrual: 'Reverse extra duplicate accrual(s); keep the earliest entry',
+            reverse_duplicate_accrual:
+                'Reverse extra monthly_rent_accrual only (same month). Accrual + negotiated adjustment is not a duplicate.',
             negotiate: 'Admin or finance: adjust ledger rent to match Excel actual (discount or increase)',
             review: 'Review manually — actual exceeds system accrual'
         };
@@ -910,7 +945,8 @@ class BillingDiscrepancyService {
             missing_debtor: 'Admin or finance: run rent accrual reconciliation (backfill + sync debtor)',
             missing_lease_start: 'Admin or finance: run rent accrual reconciliation to create lease_start entry',
             missing_monthly_accrual: 'Admin or finance: run rent accrual reconciliation to create monthly_rent_accrual',
-            duplicate_accrual: 'Reverse duplicate accrual entries (keep earliest, void extras)',
+            duplicate_accrual:
+                'Two or more monthly rent accruals for the same month — not accrual + negotiation. Reverse extras only.',
             extra_accrual: 'Admin: update lease end date, then run rent accrual reconciliation',
             amount_mismatch: 'Admin or finance: negotiate to match Excel actual amount',
             student_not_in_system: 'Admin: add student manually or via CSV import',
@@ -1234,17 +1270,18 @@ class BillingDiscrepancyService {
                 const allMonthly = await BillingDiscrepancyService.findAllMonthlyAccrualTransactions(
                     application, debtor, studentId, scanMonth, scanYear
                 );
-                if (allMonthly.length > 1) {
-                    const keep = allMonthly[0];
-                    const extras = allMonthly.slice(1);
+                const dupeGroup = BillingDiscrepancyService.pickDuplicateMonthlyAccrualGroup(allMonthly);
+                if (dupeGroup) {
+                    const { keep, extras, all } = dupeGroup;
                     duplicateIssue = BillingDiscrepancyService.buildIssue(application, 'duplicate_accrual', {
                         month: scanMonth,
                         year: scanYear,
                         accrualType: 'monthly_rent_accrual',
-                        duplicateCount: allMonthly.length,
+                        duplicateCount: all.length,
+                        note: 'Negotiated rent adjustments for this month are separate and should not be reversed.',
                         keepTransactionId: keep._id.toString(),
                         duplicateTransactionIds: extras.map((t) => t._id.toString()),
-                        transactionIds: allMonthly.map((t) => t._id.toString()),
+                        transactionIds: all.map((t) => t._id.toString()),
                         actualAmount: BillingDiscrepancyService.extractRentAmountFromTransaction(keep),
                         expectedAmount: expectedRent,
                         fixAction: 'reverse_duplicate_accrual',

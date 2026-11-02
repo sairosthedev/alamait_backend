@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const RentalAccrualService = require('./rentalAccrualService');
 const TransactionEntry = require('../models/TransactionEntry');
+const BillingDiscrepancyService = require('./billingDiscrepancyService');
 
 class AccrualIntegrityService {
   static _running = false;
@@ -98,6 +99,8 @@ class AccrualIntegrityService {
     let scanned = 0;
     for (let tx = await cursor.next(); tx != null; tx = await cursor.next()) {
       scanned++;
+      if (BillingDiscrepancyService.isNegotiatedRentAdjustment(tx)) continue;
+      if (!BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx)) continue;
       const monthKey = getMonthKey(tx);
       const arCode = getAr(tx);
       if (!monthKey || !arCode) continue;
@@ -113,6 +116,7 @@ class AccrualIntegrityService {
       const keep = sorted[0];
       const toReverse = sorted.slice(1);
       for (const dup of toReverse) {
+        if (BillingDiscrepancyService.isNegotiatedRentAdjustment(dup)) continue;
         dup.status = 'reversed';
         dup.metadata = {
           ...(dup.metadata || {}),
