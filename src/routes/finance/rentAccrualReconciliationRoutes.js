@@ -5,9 +5,8 @@ const excelUpload = require('../../middleware/excelUpload');
 const BillingDiscrepancyController = require('../../controllers/admin/billingDiscrepancyController');
 const leaseController = require('../../controllers/admin/leaseController');
 const {
-    validateApplicationId,
-    validateDebtorId,
-    validateStudentId
+    resolveReconciliationIdentifier,
+    handleLeaseValidation
 } = require('../../middleware/leaseValidation');
 
 const financeRoles = ['finance_admin', 'finance_user', 'ceo', 'admin'];
@@ -25,16 +24,34 @@ router.get('/property-scan', BillingDiscrepancyController.scanPropertyAccruals);
 router.post('/compare', BillingDiscrepancyController.compareList);
 router.get('/student/:studentId/diagnose', BillingDiscrepancyController.diagnoseStudent);
 
-router.get('/applications/:applicationId/reconciliation',
-    validateApplicationId,
+router.get(
+    '/applications/:applicationId/reconciliation',
+    (req, res, next) => {
+        req.query.applicationId = req.params.applicationId;
+        next();
+    },
+    resolveReconciliationIdentifier,
+    handleLeaseValidation,
     leaseController.getLeaseReconciliationStatus
 );
-router.get('/debtors/:debtorId/reconciliation',
-    validateDebtorId,
+router.get(
+    '/debtors/:debtorId/reconciliation',
+    (req, res, next) => {
+        req.query.debtorId = req.params.debtorId;
+        next();
+    },
+    resolveReconciliationIdentifier,
+    handleLeaseValidation,
     leaseController.getLeaseReconciliationStatus
 );
-router.get('/students/:studentId/reconciliation',
-    validateStudentId,
+router.get(
+    '/students/:studentId/reconciliation',
+    (req, res, next) => {
+        req.query.studentId = req.params.studentId;
+        next();
+    },
+    resolveReconciliationIdentifier,
+    handleLeaseValidation,
     leaseController.getLeaseReconciliationStatus
 );
 

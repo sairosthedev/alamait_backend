@@ -32,6 +32,8 @@ function pickReconciliationIdentifier(req) {
         req.query.application,
         req.query.debtorId,
         req.query.debtor,
+        req.query.debtorCode,
+        req.query.accountCode,
         req.query.id,
         req.query.tenantId,
         req.query.studentId
@@ -41,12 +43,57 @@ function pickReconciliationIdentifier(req) {
         if (isPlaceholderTenantId(raw)) continue;
         const s = String(raw).trim();
         if (mongoose.Types.ObjectId.isValid(s)) return s;
+        if (/^DR\d+/i.test(s) || /^1100-/i.test(s)) return s;
     }
     return null;
 }
 
-exports.resolveReconciliationIdentifier = (req, res, next) => {
-    const id = pickReconciliationIdentifier(req);
+/**
+ * Map :id / :debtorId path segments to a real debtor _id (DR code, 1100-*, student id, etc.).
+ */
+exports.resolveDebtorIdParam = async (req, res, next) => {
+    const raw = req.params.id || req.params.debtorId;
+    if (raw == null || raw === '') {
+        return next();
+    }
+    try {
+        const { resolveDebtorRecord } = require('../services/debtorService');
+        const debtor = await resolveDebtorRecord(raw);
+        if (!debtor?._id) {
+            return res.status(404).json({
+                success: false,
+                message: 'Debtor not found',
+                hint: 'Use debtor MongoDB id, DR code, student/application id, or AR code 1100-{debtorId}'
+            });
+        }
+        const resolved = debtor._id.toString();
+        if (req.params.id) req.params.id = resolved;
+        if (req.params.debtorId) req.params.debtorId = resolved;
+        req.resolvedDebtorId = resolved;
+    } catch (err) {
+        return res.status(500).json({
+            success: false,
+            message: 'Error resolving debtor identifier',
+            error: err.message
+        });
+    }
+    next();
+};
+
+exports.resolveReconciliationIdentifier = async (req, res, next) => {
+    let id = pickReconciliationIdentifier(req);
+
+    if (id && !mongoose.Types.ObjectId.isValid(id)) {
+        try {
+            const { resolveDebtorRecord } = require('../services/debtorService');
+            const debtor = await resolveDebtorRecord(id);
+            if (debtor?._id) {
+                id = debtor._id.toString();
+            }
+        } catch (_) {
+            /* optional */
+        }
+    }
 
     if (!id) {
         const hadPlaceholderStudent =

@@ -47,17 +47,33 @@ class LeaseUpdateService {
      * Resolve application + debtor from student, application, or debtor id.
      */
     static async resolveLeaseContext(identifier) {
-        if (!identifier || !mongoose.Types.ObjectId.isValid(String(identifier))) {
+        const { resolveDebtorRecord } = require('./debtorService');
+        let id = identifier != null ? String(identifier).trim() : '';
+
+        if (!id) {
             throw new Error('Invalid lease identifier');
         }
 
-        const id = String(identifier);
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            const debtorOnly = await resolveDebtorRecord(id);
+            if (debtorOnly?._id) {
+                id = debtorOnly._id.toString();
+            } else {
+                throw new Error('Invalid lease identifier');
+            }
+        }
+
         let application = null;
         let debtor = null;
 
         application = await Application.findById(id).lean();
+        const explicitApplication = Boolean(application);
         if (!application) {
             debtor = await Debtor.findById(id).lean();
+            if (!debtor) {
+                const resolved = await resolveDebtorRecord(id);
+                debtor = resolved?.toObject?.() || (resolved ? await Debtor.findById(resolved._id).lean() : null);
+            }
             if (debtor?.application) {
                 application = await Application.findById(debtor.application).lean();
             }
@@ -71,7 +87,16 @@ class LeaseUpdateService {
         if (!application) {
             application = await Application.findOne({
                 student: id,
-                status: { $in: ['approved', 'expired'] }
+                status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] }
+            })
+                .sort({ endDate: -1 })
+                .lean();
+        }
+        if (!application && debtor?.contactInfo?.email) {
+            const email = String(debtor.contactInfo.email).trim();
+            application = await Application.findOne({
+                email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+                status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] }
             })
                 .sort({ endDate: -1 })
                 .lean();
@@ -84,6 +109,33 @@ class LeaseUpdateService {
             debtor = await Debtor.findOne({
                 $or: [{ application: application._id }, { user: application.student }]
             }).lean();
+        }
+        if (!debtor) {
+            const resolved = await resolveDebtorRecord(application._id);
+            debtor = resolved?.toObject?.() || (resolved ? await Debtor.findById(resolved._id).lean() : null);
+        }
+
+        if (debtor && application && !explicitApplication) {
+            const { findLatestApplicationForDebtor } = require('./debtorService');
+            const latest = await findLatestApplicationForDebtor(debtor);
+            if (latest && latest._id.toString() !== application._id.toString()) {
+                application = latest;
+            }
+        }
+
+        if (debtor && application) {
+            try {
+                const appDoc = await Application.findById(application._id);
+                if (appDoc) {
+                    await LeaseUpdateService.syncDebtorLeaseFromApplication(
+                        appDoc,
+                        null
+                    );
+                    debtor = await Debtor.findById(debtor._id).lean();
+                }
+            } catch (syncErr) {
+                console.warn(`⚠️ syncDebtorLeaseFromApplication: ${syncErr.message}`);
+            }
         }
 
         return {

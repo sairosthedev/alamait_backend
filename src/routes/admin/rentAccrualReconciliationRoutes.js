@@ -6,8 +6,8 @@ const BillingDiscrepancyController = require('../../controllers/admin/billingDis
 const leaseController = require('../../controllers/admin/leaseController');
 const {
     validateApplicationId,
-    validateDebtorId,
-    validateStudentId
+    resolveReconciliationIdentifier,
+    handleLeaseValidation
 } = require('../../middleware/leaseValidation');
 
 router.use(auth);
@@ -23,16 +23,35 @@ router.get('/property-scan', BillingDiscrepancyController.scanPropertyAccruals);
 router.post('/compare', BillingDiscrepancyController.compareList);
 router.get('/student/:studentId/diagnose', BillingDiscrepancyController.diagnoseStudent);
 
-router.get('/applications/:applicationId/reconciliation',
+router.get(
+    '/applications/:applicationId/reconciliation',
+    (req, res, next) => {
+        req.query.applicationId = req.params.applicationId;
+        next();
+    },
     validateApplicationId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
     leaseController.getLeaseReconciliationStatus
 );
-router.get('/debtors/:debtorId/reconciliation',
-    validateDebtorId,
+router.get(
+    '/debtors/:debtorId/reconciliation',
+    (req, res, next) => {
+        req.query.debtorId = req.params.debtorId;
+        next();
+    },
+    resolveReconciliationIdentifier,
+    handleLeaseValidation,
     leaseController.getLeaseReconciliationStatus
 );
-router.get('/students/:studentId/reconciliation',
-    validateStudentId,
+router.get(
+    '/students/:studentId/reconciliation',
+    (req, res, next) => {
+        req.query.studentId = req.params.studentId;
+        next();
+    },
+    resolveReconciliationIdentifier,
+    handleLeaseValidation,
     leaseController.getLeaseReconciliationStatus
 );
 

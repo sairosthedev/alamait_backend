@@ -14,6 +14,98 @@ const Account = require('../models/Account');
  * @param {string} originalUserId - Original User ID (for reference, optional)
  * @returns {Promise<Object>} Account object
  */
+/**
+ * Resolve a debtor from debtor id, user id, application id, DR code, or 1100-{debtorId} AR code.
+ */
+exports.resolveDebtorRecord = async function resolveDebtorRecord(identifier) {
+    if (identifier == null || identifier === '') return null;
+
+    const raw = String(identifier).trim();
+    const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    if (mongoose.Types.ObjectId.isValid(raw)) {
+        let debtor = await Debtor.findById(raw);
+        if (debtor) return debtor;
+        debtor = await Debtor.findOne({ user: raw });
+        if (debtor) return debtor;
+        debtor = await Debtor.findOne({ application: raw });
+        if (debtor) return debtor;
+    }
+
+    if (/^1100-/i.test(raw)) {
+        const suffix = raw.replace(/^1100-/i, '');
+        if (mongoose.Types.ObjectId.isValid(suffix)) {
+            const byId = await Debtor.findById(suffix);
+            if (byId) return byId;
+        }
+        const byCode = await Debtor.findOne({ accountCode: raw });
+        if (byCode) return byCode;
+    }
+
+    const byCode = await Debtor.findOne({
+        debtorCode: new RegExp(`^${escape(raw)}$`, 'i')
+    });
+    if (byCode) return byCode;
+
+    if (raw.includes('@')) {
+        const byEmail = await Debtor.findOne({
+            'contactInfo.email': new RegExp(`^${escape(raw)}$`, 'i')
+        });
+        if (byEmail) return byEmail;
+    }
+
+    return null;
+};
+
+/**
+ * Pick the current application for a debtor (re-applications / Add Tenant keep same DR code).
+ */
+exports.findLatestApplicationForDebtor = async function findLatestApplicationForDebtor(debtor) {
+    if (!debtor) return null;
+
+    const statusFilter = { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] };
+    const seen = new Set();
+    const candidates = [];
+
+    const push = (app) => {
+        if (!app?._id) return;
+        const key = app._id.toString();
+        if (seen.has(key)) return;
+        seen.add(key);
+        candidates.push(app);
+    };
+
+    if (debtor.application) {
+        push(await Application.findById(debtor.application).lean());
+    }
+
+    const email = debtor.contactInfo?.email?.trim();
+    if (email) {
+        const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const byEmail = await Application.find({
+            email: new RegExp(`^${escape(email)}$`, 'i'),
+            status: statusFilter
+        })
+            .sort({ endDate: -1 })
+            .lean();
+        byEmail.forEach(push);
+    }
+
+    if (debtor.user) {
+        const byStudent = await Application.find({
+            student: debtor.user,
+            status: statusFilter
+        })
+            .sort({ endDate: -1 })
+            .lean();
+        byStudent.forEach(push);
+    }
+
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => new Date(b.endDate) - new Date(a.endDate));
+    return candidates[0];
+};
+
 async function ensureStudentARAccount(debtorId, studentName, originalUserId = null) {
     const mainAR = await Account.findOne({ code: '1100' });
     if (!mainAR) {
@@ -1176,25 +1268,9 @@ exports.syncDebtorOperationalLinks = async (debtorId, { persist = true } = {}) =
     }
 
     const fixes = {};
-    let application = null;
+    let application = await exports.findLatestApplicationForDebtor(debtor);
 
-    if (debtor.application) {
-        application = await Application.findById(debtor.application);
-    }
-
-    if (!application && debtor.contactInfo?.email) {
-        application = await Application.findOne({
-            email: new RegExp(
-                `^${String(debtor.contactInfo.email).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-                'i'
-            ),
-            status: { $nin: ['cancelled', 'rejected', 'forfeited'] }
-        })
-            .sort({ endDate: -1 })
-            .exec();
-    }
-
-  if (!application) {
+    if (!application) {
         const tx = await TransactionEntry.findOne({
             status: { $nin: ['deleted', 'reversed'] },
             $or: [
@@ -1243,8 +1319,9 @@ exports.syncDebtorOperationalLinks = async (debtorId, { persist = true } = {}) =
     }
 
     if (application) {
-        if (!debtor.application) {
-            fixes.application = String(application._id);
+        const latestAppId = application._id.toString();
+        if (String(debtor.application || '') !== latestAppId) {
+            fixes.application = latestAppId;
             if (persist) debtor.application = application._id;
         }
         if (!debtor.applicationCode && application.applicationCode) {
@@ -1287,6 +1364,19 @@ exports.syncDebtorOperationalLinks = async (debtorId, { persist = true } = {}) =
                 },
                 { runValidators: false }
             );
+        }
+
+        if (persist) {
+            try {
+                const LeaseUpdateService = require('./leaseUpdateService');
+                const appDoc =
+                    application.save ? application : await Application.findById(application._id);
+                if (appDoc) {
+                    await LeaseUpdateService.syncDebtorLeaseFromApplication(appDoc, null);
+                }
+            } catch (leaseSyncErr) {
+                console.warn(`syncDebtorOperationalLinks lease sync: ${leaseSyncErr.message}`);
+            }
         }
     }
 

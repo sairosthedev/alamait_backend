@@ -44,18 +44,18 @@ const LeaseAccrualReconciliationPanel = ({
     if (applicationId) {
       return [
         `${apiBase}/api/finance/leases/applications/${applicationId}/reconciliation`,
+        `${apiBase}/api/finance/rent-accrual-reconciliation/applications/${applicationId}/reconciliation`,
         `${apiBase}/api/admin/leases/applications/${applicationId}/reconciliation`,
-        `${apiBase}/api/admin/rent-accrual-reconciliation/applications/${applicationId}/reconciliation`,
-        `${apiBase}/api/finance/rent-accrual-reconciliation/applications/${applicationId}/reconciliation`
+        `${apiBase}/api/admin/rent-accrual-reconciliation/applications/${applicationId}/reconciliation`
       ];
     }
     if (debtorId) {
       return [
         `${apiBase}/api/finance/debtors/${debtorId}/reconciliation`,
         `${apiBase}/api/finance/leases/debtors/${debtorId}/reconciliation`,
+        `${apiBase}/api/finance/rent-accrual-reconciliation/debtors/${debtorId}/reconciliation`,
         `${apiBase}/api/admin/leases/debtors/${debtorId}/reconciliation`,
-        `${apiBase}/api/admin/rent-accrual-reconciliation/debtors/${debtorId}/reconciliation`,
-        `${apiBase}/api/finance/rent-accrual-reconciliation/debtors/${debtorId}/reconciliation`
+        `${apiBase}/api/admin/rent-accrual-reconciliation/debtors/${debtorId}/reconciliation`
       ];
     }
     if (effectiveStudentId) {
@@ -158,6 +158,27 @@ const LeaseAccrualReconciliationPanel = ({
         setEndDate(fallback.applicationLease.endDate || '');
         setLoading(false);
         return;
+      }
+
+      if (debtorId) {
+        const query = `?debtorId=${encodeURIComponent(debtorId)}`;
+        const leaseQueryUrls = [
+          `${apiBase}/api/finance/leases/reconciliation${query}`,
+          `${apiBase}/api/admin/leases/reconciliation${query}`
+        ];
+        for (const url of leaseQueryUrls) {
+          try {
+            const response = await axios.get(url, { headers: authHeaders });
+            const data = response.data?.data;
+            setStatus(data);
+            setStartDate(data?.applicationLease?.startDate || '');
+            setEndDate(data?.applicationLease?.endDate || '');
+            setLoading(false);
+            return;
+          } catch (_) {
+            /* try next */
+          }
+        }
       }
 
       throw lastError;

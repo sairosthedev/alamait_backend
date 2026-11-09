@@ -5,8 +5,8 @@ const leaseController = require('../../controllers/admin/leaseController');
 const { auth, checkRole } = require('../../middleware/auth');
 const {
     resolveReconciliationIdentifier,
-    handleLeaseValidation,
-    validateDebtorId
+    resolveDebtorIdParam,
+    handleLeaseValidation
 } = require('../../middleware/leaseValidation');
 
 // All routes require authentication
@@ -26,16 +26,16 @@ router.get(
     '/:id/reconciliation',
     (req, res, next) => {
         req.params.debtorId = req.params.id;
+        req.query.debtorId = req.params.id;
         next();
     },
-    validateDebtorId,
-    handleLeaseValidation,
     resolveReconciliationIdentifier,
+    handleLeaseValidation,
     leaseController.getLeaseReconciliationStatus
 );
 
-// Get debtor by ID
-router.get('/:id', debtorController.getDebtorById);
+// Get debtor by ID (also accepts DR####, 1100-{id}, student/application id)
+router.get('/:id', resolveDebtorIdParam, debtorController.getDebtorById);
 
 router.post('/:id/sync-operational-links', debtorController.syncDebtorOperationalLinks);
 

@@ -285,23 +285,17 @@ exports.getAllDebtors = async (req, res) => {
 exports.getDebtorById = async (req, res) => {
     try {
         const { id } = req.params;
+        const { resolveDebtorRecord } = require('../../services/debtorService');
 
-        // First get the debtor without population to preserve the original user ObjectId
-        let debtorRaw = await Debtor.findById(id).lean();
-
-        // 🆕 If id is not a Debtor _id (e.g. User ID or Application ID), resolve to actual debtor
-        if (!debtorRaw) {
-            debtorRaw = await Debtor.findOne({ user: id }).lean();
-            if (!debtorRaw) {
-                debtorRaw = await Debtor.findOne({ application: id }).lean();
-            }
-            if (!debtorRaw) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Debtor not found'
-                });
-            }
+        const debtorDoc = await resolveDebtorRecord(id);
+        if (!debtorDoc) {
+            return res.status(404).json({
+                success: false,
+                message: 'Debtor not found',
+                hint: 'Use debtor MongoDB id, DR code, student/application id, or AR code 1100-{debtorId}'
+            });
         }
+        let debtorRaw = debtorDoc.toObject ? debtorDoc.toObject() : await Debtor.findById(debtorDoc._id).lean();
 
         const debtorId = debtorRaw._id.toString();
 

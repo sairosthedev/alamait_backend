@@ -1387,23 +1387,16 @@ exports.adminUploadSignedLease = (req, res) => {
 exports.repairTenantOperationalLinks = async (req, res) => {
     try {
         const Debtor = require('../../models/Debtor');
-        const { syncDebtorOperationalLinks } = require('../../services/debtorService');
+        const { syncDebtorOperationalLinks, resolveDebtorRecord } = require('../../services/debtorService');
         const { debtorId, debtorCode, email } = { ...req.query, ...req.body };
 
         let debtor = null;
         if (debtorId) {
-            debtor = await Debtor.findById(debtorId);
+            debtor = await resolveDebtorRecord(debtorId);
         } else if (debtorCode) {
-            debtor = await Debtor.findOne({
-                debtorCode: new RegExp(`^${String(debtorCode).trim()}$`, 'i')
-            });
+            debtor = await resolveDebtorRecord(debtorCode);
         } else if (email) {
-            debtor = await Debtor.findOne({
-                'contactInfo.email': new RegExp(
-                    `^${String(email).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-                    'i'
-                )
-            });
+            debtor = await resolveDebtorRecord(email);
         }
 
         if (!debtor) {

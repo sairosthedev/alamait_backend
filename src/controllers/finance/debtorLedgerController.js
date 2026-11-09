@@ -20,10 +20,13 @@ class DebtorLedgerController {
 
             const Debtor = require('../../models/Debtor');
             const Application = require('../../models/Application');
-            const debtor = await Debtor.findById(debtorId).lean();
-            if (!debtor) {
+            const { resolveDebtorRecord } = require('../../services/debtorService');
+            const debtorDoc = await resolveDebtorRecord(debtorId);
+            if (!debtorDoc) {
                 return res.status(404).json({ success: false, message: 'Debtor not found' });
             }
+            const resolvedDebtorId = debtorDoc._id.toString();
+            const debtor = await Debtor.findById(resolvedDebtorId).lean();
 
             if (!studentId && debtor.user) {
                 studentId = debtor.user.toString();
@@ -40,9 +43,9 @@ class DebtorLedgerController {
                 application = await Application.findById(debtor.application).lean();
             }
             
-            console.log(`📊 API: Getting ledger for debtor ${debtorId}, student ${studentId}`);
+            console.log(`📊 API: Getting ledger for debtor ${resolvedDebtorId}, student ${studentId}`);
             
-            const ledgerData = await DebtorLedgerService.getDebtorLedger(debtorId, studentId, {
+            const ledgerData = await DebtorLedgerService.getDebtorLedger(resolvedDebtorId, studentId, {
                 includeAccrualIssues,
                 application,
                 monthsBack: req.query.monthsBack ? parseInt(req.query.monthsBack, 10) : 12
