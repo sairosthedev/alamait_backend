@@ -552,6 +552,19 @@ exports.deleteResidence = async (req, res) => {
 exports.getRoomsByResidence = async (req, res) => {
     try {
         const { residenceId } = req.params;
+        const { asOf, month, year } = req.query;
+
+        let asOfDate = new Date();
+        if (asOf) {
+            const parsed = new Date(asOf);
+            if (!isNaN(parsed.getTime())) asOfDate = parsed;
+        } else if (month && year) {
+            const m = parseInt(month, 10);
+            const y = parseInt(year, 10);
+            if (m >= 1 && m <= 12 && !isNaN(y)) {
+                asOfDate = new Date(y, m - 1, 15);
+            }
+        }
         
         if (!residenceId) {
             return res.status(400).json({
@@ -575,7 +588,8 @@ exports.getRoomsByResidence = async (req, res) => {
             (residence.rooms || []).map(async (room) => {
                 const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(
                     residenceId,
-                    room.roomNumber
+                    room.roomNumber,
+                    asOfDate
                 );
                 const leaseOccupants = (occ.validStudents || []).map((o) => ({
                     id: o.id,
@@ -611,7 +625,8 @@ exports.getRoomsByResidence = async (req, res) => {
         res.status(200).json({
             success: true,
             data: rooms,
-            residenceName: residence.name
+            residenceName: residence.name,
+            asOf: asOfDate.toISOString()
         });
     } catch (error) {
         console.error('Error in getRoomsByResidence:', error);

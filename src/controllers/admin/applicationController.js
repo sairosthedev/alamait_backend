@@ -1247,44 +1247,8 @@ exports.deleteApplication = async (req, res) => {
     }
 };
 
-// Get expired students
-exports.getExpiredStudents = async (req, res) => {
-    try {
-        console.log('🔍 Getting expired students...');
-        
-        const currentDate = new Date();
-        
-        // Find students whose room validity has expired
-        const expiredStudents = await User.find({
-            role: 'student',
-            roomValidUntil: { $lt: currentDate },
-            currentRoom: { $exists: true, $ne: null }
-        }).select('firstName lastName email currentRoom roomValidUntil roomApprovalDate residence')
-          .populate('residence', 'name');
-        
-        console.log(`✅ Found ${expiredStudents.length} expired students`);
-        
-        res.json({
-            success: true,
-            count: expiredStudents.length,
-            expiredStudents: expiredStudents.map(student => ({
-                id: student._id,
-                firstName: student.firstName,
-                lastName: student.lastName,
-                email: student.email,
-                currentRoom: student.currentRoom,
-                roomValidUntil: student.roomValidUntil,
-                roomApprovalDate: student.roomApprovalDate,
-                residence: student.residence ? {
-                    id: student.residence._id,
-                    name: student.residence.name
-                } : null,
-                daysExpired: Math.ceil((currentDate - student.roomValidUntil) / (1000 * 60 * 60 * 24))
-            }))
-        });
-        
-    } catch (error) {
-        console.error('❌ Error getting expired students:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
+// Get expired students (ended leases — same handler as /api/admin/students/expired)
+exports.getExpiredStudents = (req, res) => {
+    const studentController = require('./studentController');
+    return studentController.getExpiredStudents(req, res);
 };

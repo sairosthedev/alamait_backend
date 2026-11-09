@@ -7,42 +7,104 @@
 
 const Application = require('../models/Application');
 const { Residence } = require('../models/Residence');
+const {
+    resolveResidenceRoomAlias,
+    normalizeRoomKey
+} = require('./residenceRoomAliases');
 
 class RoomOccupancyUtils {
 
     /**
+     * Labels that may appear on applications (allocatedRoom) for a catalog room.
+     */
+    static async collectAllocatedRoomLabels(residenceId, roomNumber) {
+        const labels = new Set([String(roomNumber || '').trim()].filter(Boolean));
+        const residence = await Residence.findById(residenceId).lean();
+        if (!residence) {
+            return [...labels];
+        }
+
+        const catalogRoom = (residence.rooms || []).find(
+            (r) => normalizeRoomKey(r.roomNumber) === normalizeRoomKey(roomNumber)
+        );
+        if (catalogRoom) {
+            labels.add(catalogRoom.roomNumber);
+            const resolved = resolveResidenceRoomAlias(catalogRoom.roomNumber, residence);
+            if (resolved) labels.add(resolved);
+        }
+
+        const resolvedInput = resolveResidenceRoomAlias(roomNumber, residence);
+        if (resolvedInput) labels.add(resolvedInput);
+
+        const resName = String(residence.name || '').trim();
+        if (resName) {
+            labels.add(resName);
+            labels.add(`${resName} House`);
+        }
+
+        for (const r of residence.rooms || []) {
+            const nk = normalizeRoomKey(r.roomNumber);
+            for (const l of [...labels]) {
+                if (normalizeRoomKey(l) === nk) {
+                    labels.add(r.roomNumber);
+                }
+            }
+        }
+
+        return [...labels].filter(Boolean);
+    }
+
+    static buildAllocatedRoomOr(labels = []) {
+        const list = [...new Set((labels || []).map((l) => String(l).trim()).filter(Boolean))];
+        if (!list.length) {
+            return { allocatedRoom: { $exists: false } };
+        }
+        return {
+            $or: [
+                { allocatedRoom: { $in: list } },
+                { preferredRoom: { $in: list } },
+                { currentRoom: { $in: list } },
+                { 'allocatedRoomDetails.roomNumber': { $in: list } }
+            ]
+        };
+    }
+
+    /**
      * Approved applications whose lease includes `asOf` for this physical room.
      */
-    static buildLeaseActiveQuery(residenceId, roomNumber, asOf) {
+    static buildLeaseActiveQuery(residenceId, roomNumber, asOf, allocatedRoomLabels = null) {
+        const labels = allocatedRoomLabels || [roomNumber];
         return {
             residence: residenceId,
             status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
             startDate: { $exists: true, $ne: null, $lte: asOf },
             endDate: { $exists: true, $ne: null, $gte: asOf },
             paymentStatus: { $ne: 'cancelled' },
-            $or: [
-                { allocatedRoom: roomNumber },
-                { 'allocatedRoomDetails.roomNumber': roomNumber }
-            ]
+            ...RoomOccupancyUtils.buildAllocatedRoomOr(labels)
         };
     }
 
     /**
      * Approved applications whose lease window overlaps [periodStart, periodEnd].
      */
-    static buildLeaseOverlapQuery(residenceId, roomNumber, periodStart, periodEnd, excludeApplicationId = null) {
+    static buildLeaseOverlapQuery(
+        residenceId,
+        roomNumber,
+        periodStart,
+        periodEnd,
+        excludeApplicationId = null,
+        allocatedRoomLabels = null
+    ) {
         const start = new Date(periodStart);
         const end = new Date(periodEnd);
+        const labels = allocatedRoomLabels || [roomNumber];
         const query = {
             residence: residenceId,
             status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
             startDate: { $exists: true, $ne: null, $lte: end },
             endDate: { $exists: true, $ne: null, $gte: start },
             paymentStatus: { $ne: 'cancelled' },
-            $or: [
-                { allocatedRoom: roomNumber },
-                { 'allocatedRoomDetails.roomNumber': roomNumber }
-            ]
+            ...RoomOccupancyUtils.buildAllocatedRoomOr(labels)
         };
         if (excludeApplicationId) {
             query._id = { $ne: excludeApplicationId };
@@ -54,7 +116,15 @@ class RoomOccupancyUtils {
      * Approved leases overlapping the period, one entry per distinct occupant.
      */
     static async getOverlappingLeasesForPeriod(residenceId, roomNumber, periodStart, periodEnd, excludeApplicationId = null) {
-        const query = this.buildLeaseOverlapQuery(residenceId, roomNumber, periodStart, periodEnd, excludeApplicationId);
+        const labels = await this.collectAllocatedRoomLabels(residenceId, roomNumber);
+        const query = this.buildLeaseOverlapQuery(
+            residenceId,
+            roomNumber,
+            periodStart,
+            periodEnd,
+            excludeApplicationId,
+            labels
+        );
         const applications = await Application.find(query)
             .select('firstName lastName email student startDate endDate applicationCode')
             .lean();
@@ -104,7 +174,8 @@ class RoomOccupancyUtils {
     static async calculateAccurateRoomOccupancy(residenceId, roomNumber, asOfDate = new Date()) {
         try {
             const asOf = asOfDate ? new Date(asOfDate) : new Date();
-            const leaseQuery = this.buildLeaseActiveQuery(residenceId, roomNumber, asOf);
+            const labels = await this.collectAllocatedRoomLabels(residenceId, roomNumber);
+            const leaseQuery = this.buildLeaseActiveQuery(residenceId, roomNumber, asOf, labels);
 
             // Primary source: approved applications with lease window covering `asOf`
             const approvedApplications = await Application.find(leaseQuery).lean();

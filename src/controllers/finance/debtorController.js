@@ -305,6 +305,10 @@ exports.getDebtorById = async (req, res) => {
 
         const debtorId = debtorRaw._id.toString();
 
+        const { syncDebtorOperationalLinks } = require('../../services/debtorService');
+        await syncDebtorOperationalLinks(debtorId, { persist: true });
+        debtorRaw = await Debtor.findById(debtorId).lean();
+
         // Fix debtor.user when null or wrongly set to Application _id instead of User _id
         if (debtorRaw.application || debtorRaw.user) {
             const Application = require('../../models/Application');
@@ -634,10 +638,21 @@ exports.getDebtorById = async (req, res) => {
                     enhancedDebtor.isExpired = false;
                 }
             }
+        } else if (debtor.application?.student) {
+            const fallbackStudentId =
+                debtor.application.student._id?.toString() || debtor.application.student.toString();
+            const studentInfo = await getStudentInfo(fallbackStudentId);
+            if (studentInfo) {
+                enhancedDebtor.studentInfo = studentInfo;
+                enhancedDebtor.resolvedStudentId = fallbackStudentId;
+                enhancedDebtor.isExpired = Boolean(studentInfo.isExpired);
+            }
         } else {
-            // If no user, try to get student info from debtor's accountCode or other identifiers
-            enhancedDebtor.isExpired = true;
             enhancedDebtor.studentInfo = null;
+        }
+
+        if (studentId) {
+            enhancedDebtor.resolvedStudentId = String(studentId);
         }
 
         res.status(200).json({
@@ -667,6 +682,24 @@ exports.getDebtorById = async (req, res) => {
             success: false,
             message: 'Error fetching debtor',
             error: error.message
+        });
+    }
+};
+
+exports.syncDebtorOperationalLinks = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { syncDebtorOperationalLinks } = require('../../services/debtorService');
+        const result = await syncDebtorOperationalLinks(id, { persist: true });
+        if (!result.success) {
+            return res.status(404).json(result);
+        }
+        return res.json({ success: true, ...result });
+    } catch (error) {
+        console.error('Error syncing debtor operational links:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
         });
     }
 };

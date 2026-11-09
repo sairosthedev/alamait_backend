@@ -1373,24 +1373,104 @@ exports.adminUploadSignedLease = (req, res) => {
     });
 };
 
-// Fetch expired (archived) students
+// Tenants with ended leases (and archives) — for expired / historical admin lists
 exports.getExpiredStudents = async (req, res) => {
     try {
-        const { page = 1, limit = 20 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        const total = await ExpiredStudent.countDocuments();
-        const expiredStudents = await ExpiredStudent.find()
-            .sort({ archivedAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
+        const mongoose = require('mongoose');
+        const Application = require('../../models/Application');
+        const { page = 1, limit = 100, residence } = req.query;
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10) || 100));
+        const skip = (pageNum - 1) * limitNum;
+        const now = new Date();
+
+        const endedLeaseQuery = {
+            status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
+            endDate: { $exists: true, $ne: null, $lt: now },
+            $or: [
+                { allocatedRoom: { $exists: true, $ne: null, $ne: '' } },
+                { preferredRoom: { $exists: true, $ne: null, $ne: '' } }
+            ]
+        };
+        if (residence && mongoose.Types.ObjectId.isValid(residence)) {
+            endedLeaseQuery.residence = residence;
+        }
+
+        const [endedApplications, archiveTotal, archives] = await Promise.all([
+            Application.find(endedLeaseQuery)
+                .select(
+                    'firstName lastName email student allocatedRoom preferredRoom residence startDate endDate applicationCode status'
+                )
+                .populate('residence', 'name')
+                .sort({ endDate: -1 })
+                .lean(),
+            ExpiredStudent.countDocuments(),
+            ExpiredStudent.find()
+                .sort({ archivedAt: -1 })
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        const fromApplications = endedApplications.map((app) => ({
+            id: app.student?.toString() || app._id.toString(),
+            applicationId: app._id.toString(),
+            firstName: app.firstName,
+            lastName: app.lastName,
+            studentName: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
+            email: app.email,
+            studentId: app.student || null,
+            currentRoom: app.allocatedRoom || app.preferredRoom || null,
+            roomValidUntil: app.endDate,
+            leaseStart: app.startDate,
+            leaseEnd: app.endDate,
+            applicationCode: app.applicationCode,
+            residence: app.residence
+                ? { id: app.residence._id, name: app.residence.name }
+                : null,
+            source: 'ended_lease',
+            status: 'expired'
+        }));
+
+        const seen = new Set(fromApplications.map((r) => r.applicationId));
+        for (const rec of archives) {
+            const app = rec.application;
+            const appId = app?._id?.toString?.() || app?.toString?.();
+            if (appId && seen.has(appId)) continue;
+            const student = rec.student && typeof rec.student === 'object' ? rec.student : null;
+            fromApplications.push({
+                id: student?._id?.toString() || rec._id.toString(),
+                applicationId: appId || null,
+                firstName: student?.firstName || app?.firstName || '',
+                lastName: student?.lastName || app?.lastName || '',
+                studentName:
+                    `${student?.firstName || app?.firstName || ''} ${student?.lastName || app?.lastName || ''}`.trim(),
+                email: student?.email || app?.email || '',
+                studentId: student?._id || null,
+                currentRoom: student?.currentRoom || app?.allocatedRoom || null,
+                roomValidUntil: app?.endDate || student?.roomValidUntil,
+                archivedAt: rec.archivedAt,
+                source: 'archived',
+                status: 'expired'
+            });
+        }
+
+        const total = fromApplications.length;
+        const paged = fromApplications.slice(skip, skip + limitNum);
+
         res.json({
             success: true,
-            expiredStudents,
+            expiredStudents: paged,
+            count: paged.length,
+            total,
+            sources: {
+                endedLeases: endedApplications.length,
+                archived: archiveTotal
+            },
             pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
+                currentPage: pageNum,
+                totalPages: Math.ceil(total / limitNum) || 1,
                 total,
-                limit: parseInt(limit)
+                limit: limitNum
             }
         });
     } catch (error) {
@@ -1640,14 +1720,24 @@ exports.manualAddStudent = async (req, res) => {
             return res.status(404).json({ error: 'Residence not found' });
         }
 
-        const room = residence.rooms.find(r => r.roomNumber === roomNumber);
+        const { resolveResidenceRoomAlias } = require('../../utils/residenceRoomAliases');
+        const catalogRoomNumber = resolveResidenceRoomAlias(roomNumber, residence);
+        const room =
+            residence.rooms.find((r) => r.roomNumber === catalogRoomNumber) ||
+            residence.rooms.find((r) => r.roomNumber === roomNumber);
         if (!room) {
             return res.status(404).json({ error: 'Room not found in this residence' });
         }
+        const normalizedRoomNumber = room.roomNumber;
 
         // Check room availability using lease dates and blocking bookings
         const Booking = require('../../models/Booking');
-        const availability = await Booking.checkAvailability(residenceId, roomNumber, startDate, endDate);
+        const availability = await Booking.checkAvailability(
+            residenceId,
+            normalizedRoomNumber,
+            startDate,
+            endDate
+        );
         
         if (!availability.available) {
             const roomCapacity = availability.capacity || room.capacity || 1;
@@ -1943,8 +2033,8 @@ exports.manualAddStudent = async (req, res) => {
             paymentStatus: 'paid', // Mark as paid since admin is adding manually
             startDate: parsedStartDate,
             endDate: parsedEndDate,
-            preferredRoom: roomNumber,
-            allocatedRoom: roomNumber,
+            preferredRoom: normalizedRoomNumber,
+            allocatedRoom: normalizedRoomNumber,
             residence: residenceId,
             applicationCode: applicationCode, // Set the generated application code
             applicationDate: new Date(),
@@ -1996,7 +2086,7 @@ exports.manualAddStudent = async (req, res) => {
                 if (!residenceId) {
                     throw new Error('residenceId is required but was not provided');
                 }
-                if (!roomNumber) {
+                if (!normalizedRoomNumber) {
                     throw new Error('roomNumber is required but was not provided');
                 }
                 if (!req.user?._id) {
@@ -2005,7 +2095,7 @@ exports.manualAddStudent = async (req, res) => {
                 
                 const debtor = await createDebtorForStudent(student, {
                     residenceId: residenceId,
-                    roomNumber: roomNumber,
+                    roomNumber: normalizedRoomNumber,
                     createdBy: req.user._id,
                     application: application._id, // Link to the application
                     applicationCode: application.applicationCode, // Link application code
@@ -2106,10 +2196,10 @@ exports.manualAddStudent = async (req, res) => {
         const approvalDate = new Date();
         const validUntil = new Date(endDate);
         
-        student.currentRoom = roomNumber;
         student.roomValidUntil = validUntil;
         student.roomApprovalDate = approvalDate;
         student.residence = residenceId;
+        student.currentRoom = normalizedRoomNumber;
         await student.save();
 
         // Create booking record
@@ -2117,7 +2207,7 @@ exports.manualAddStudent = async (req, res) => {
             student: student._id,
             residence: residenceId,
             room: {
-                roomNumber: roomNumber,
+                roomNumber: normalizedRoomNumber,
                 type: room.type,
                 price: room.price
             },

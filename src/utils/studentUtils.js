@@ -545,6 +545,12 @@ async function buildResolvedDebtorUserMap(debtors) {
         }
     }
 
+    for (const app of apps) {
+        if (app?.student) {
+            existingUsers.add(String(app.student));
+        }
+    }
+
     return { map, validUserIds: existingUsers };
 }
 
@@ -896,6 +902,9 @@ async function listStudentsIncludingExpired({
 
         const userIdRaw = d.user ? String(d.user) : null;
         let userId = userIdRaw ? (debtorUserMap.get(userIdRaw) || userIdRaw) : null;
+        if (!userId && linkedApp?.student) {
+            userId = String(linkedApp.student);
+        }
         if (userId && !validUserIds.has(userId)) {
             userId = null;
         }

@@ -1161,6 +1161,148 @@ exports.getDebtorCollectionSummary = async () => {
  * Sync debtor totals with AR data
  * This ensures the debtors collection reflects the correct expected and paid amounts from the accounting system
  */
+/**
+ * Repair debtor ↔ user ↔ application ↔ room links so admin room/tenant lists match finance.
+ */
+exports.syncDebtorOperationalLinks = async (debtorId, { persist = true } = {}) => {
+    const mongoose = require('mongoose');
+    const TransactionEntry = require('../models/TransactionEntry');
+    const User = require('../models/User');
+    const { resolveResidenceRoomAlias } = require('../utils/residenceRoomAliases');
+
+    const debtor = await Debtor.findById(debtorId);
+    if (!debtor) {
+        return { success: false, error: 'Debtor not found' };
+    }
+
+    const fixes = {};
+    let application = null;
+
+    if (debtor.application) {
+        application = await Application.findById(debtor.application);
+    }
+
+    if (!application && debtor.contactInfo?.email) {
+        application = await Application.findOne({
+            email: new RegExp(
+                `^${String(debtor.contactInfo.email).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+                'i'
+            ),
+            status: { $nin: ['cancelled', 'rejected', 'forfeited'] }
+        })
+            .sort({ endDate: -1 })
+            .exec();
+    }
+
+  if (!application) {
+        const tx = await TransactionEntry.findOne({
+            status: { $nin: ['deleted', 'reversed'] },
+            $or: [
+                { 'metadata.debtorId': debtorId.toString() },
+                { 'entries.accountCode': debtor.accountCode }
+            ]
+        })
+            .sort({ date: -1 })
+            .lean();
+
+        if (tx?.metadata?.applicationId && mongoose.Types.ObjectId.isValid(tx.metadata.applicationId)) {
+            application = await Application.findById(tx.metadata.applicationId);
+        }
+        if (!application && tx?.metadata?.studentId) {
+            application = await Application.findOne({
+                student: tx.metadata.studentId,
+                status: { $nin: ['cancelled', 'rejected', 'forfeited'] }
+            })
+                .sort({ endDate: -1 })
+                .exec();
+        }
+    }
+
+    let studentUserId = application?.student?.toString() || null;
+    if (!studentUserId) {
+        const tx = await TransactionEntry.findOne({
+            'metadata.studentId': { $exists: true, $ne: null },
+            $or: [
+                { 'metadata.debtorId': debtorId.toString() },
+                { 'entries.accountCode': debtor.accountCode }
+            ]
+        })
+            .sort({ date: -1 })
+            .lean();
+        if (tx?.metadata?.studentId) {
+            studentUserId = String(tx.metadata.studentId);
+        }
+    }
+
+    if (studentUserId && mongoose.Types.ObjectId.isValid(studentUserId)) {
+        const userExists = await User.exists({ _id: studentUserId });
+        if (userExists && String(debtor.user || '') !== studentUserId) {
+            fixes.user = studentUserId;
+            if (persist) debtor.user = studentUserId;
+        }
+    }
+
+    if (application) {
+        if (!debtor.application) {
+            fixes.application = String(application._id);
+            if (persist) debtor.application = application._id;
+        }
+        if (!debtor.applicationCode && application.applicationCode) {
+            if (persist) debtor.applicationCode = application.applicationCode;
+        }
+        if (!debtor.residence && application.residence) {
+            if (persist) debtor.residence = application.residence;
+        }
+
+        let roomLabel = application.allocatedRoom || application.preferredRoom || debtor.roomNumber;
+        if (application.residence && roomLabel) {
+            const residence = await Residence.findById(application.residence);
+            if (residence) {
+                const normalized = resolveResidenceRoomAlias(roomLabel, residence);
+                if (normalized && normalized !== application.allocatedRoom) {
+                    fixes.allocatedRoom = normalized;
+                    if (persist) {
+                        application.allocatedRoom = normalized;
+                        await application.save();
+                    }
+                }
+                roomLabel = normalized || roomLabel;
+            }
+        }
+
+        if (roomLabel && debtor.roomNumber !== roomLabel) {
+            fixes.roomNumber = roomLabel;
+            if (persist) debtor.roomNumber = roomLabel;
+        }
+
+        if (persist && studentUserId) {
+            await User.findByIdAndUpdate(
+                studentUserId,
+                {
+                    $set: {
+                        residence: application.residence,
+                        currentRoom: application.allocatedRoom || roomLabel,
+                        roomValidUntil: application.endDate
+                    }
+                },
+                { runValidators: false }
+            );
+        }
+    }
+
+    if (persist && Object.keys(fixes).length) {
+        await debtor.save();
+    }
+
+    return {
+        success: true,
+        fixes,
+        applicationId: application?._id?.toString() || null,
+        studentId: studentUserId,
+        roomNumber: application?.allocatedRoom || debtor.roomNumber || null
+    };
+};
+
 exports.syncDebtorTotalsWithAR = async (debtorId = null) => {
     try {
         const TransactionEntry = require('../models/TransactionEntry');

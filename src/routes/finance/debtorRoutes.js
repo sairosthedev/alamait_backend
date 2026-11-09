@@ -37,6 +37,8 @@ router.get(
 // Get debtor by ID
 router.get('/:id', debtorController.getDebtorById);
 
+router.post('/:id/sync-operational-links', debtorController.syncDebtorOperationalLinks);
+
 // Update debtor account
 router.put('/:id', debtorController.updateDebtor);
 
