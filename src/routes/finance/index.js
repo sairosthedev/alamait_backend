@@ -44,9 +44,12 @@ router.get(
 );
 router.get(
     '/leases/debtors/:debtorId/reconciliation',
-    validateDebtorId,
-    handleLeaseValidation,
+    (req, res, next) => {
+        req.query.debtorId = req.params.debtorId;
+        next();
+    },
     resolveReconciliationIdentifier,
+    handleLeaseValidation,
     leaseController.getLeaseReconciliationStatus
 );
 router.get(

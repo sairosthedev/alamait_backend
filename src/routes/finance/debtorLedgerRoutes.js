@@ -1,11 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
+const { resolveDebtorIdParam } = require('../../middleware/leaseValidation');
 const DebtorLedgerController = require('../../controllers/finance/debtorLedgerController');
 
 // Apply authentication and role checking to all routes
 router.use(auth);
 router.use(checkRole(['admin', 'finance']));
+
+router.param('debtorId', (req, res, next, debtorId) => {
+    req.params.debtorId = debtorId;
+    req.params.id = debtorId;
+    resolveDebtorIdParam(req, res, next);
+});
 
 /**
  * @route   GET /api/finance/debtors/:debtorId/ledger

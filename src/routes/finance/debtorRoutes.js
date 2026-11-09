@@ -21,6 +21,23 @@ router.post('/', debtorController.createDebtor);
 // Get all debtors with filtering and pagination
 router.get('/', debtorController.getAllDebtors);
 
+// Static paths must be registered before :id (Express matches in order)
+router.get('/comprehensive/all', debtorController.getAllDebtorsComprehensive);
+router.get('/collection/report', debtorController.getDebtorsCollectionReport);
+router.get('/collection/summary', debtorController.getDebtorCollectionSummary);
+router.get('/check/students-without-debtors', debtorController.checkStudentsWithoutDebtors);
+router.post('/bulk-create', debtorController.bulkCreateDebtors);
+router.post('/bulk-create-for-students', debtorController.bulkCreateDebtorsForStudents);
+router.post('/sync-ar', debtorController.syncDebtorWithAR);
+router.post('/sync-all-payment-history', debtorController.syncAllDebtorsPaymentHistory);
+router.post('/student/:userId', debtorController.createDebtorForExistingStudent);
+
+// Resolve DR####, 1100-*, student/application ids to debtor _id for all :id routes below
+router.param('id', (req, res, next, id) => {
+    req.params.id = id;
+    resolveDebtorIdParam(req, res, next);
+});
+
 // Lease vs accrual status (debtor detail pages — use when studentId is N/A)
 router.get(
     '/:id/reconciliation',
@@ -34,8 +51,7 @@ router.get(
     leaseController.getLeaseReconciliationStatus
 );
 
-// Get debtor by ID (also accepts DR####, 1100-{id}, student/application id)
-router.get('/:id', resolveDebtorIdParam, debtorController.getDebtorById);
+router.get('/:id', debtorController.getDebtorById);
 
 router.post('/:id/sync-operational-links', debtorController.syncDebtorOperationalLinks);
 
@@ -51,18 +67,8 @@ router.post('/:id/payment', debtorController.addPayment);
 // Get debtor balance and history
 router.get('/:id/balance', debtorController.getDebtorBalance);
 
-// Get all debtors with comprehensive data mapping
-router.get('/comprehensive/all', debtorController.getAllDebtorsComprehensive);
-
-// Get debtors collection report with AR linkage
-router.get('/collection/report', debtorController.getDebtorsCollectionReport);
-
-// Get debtor collection summary
-router.get('/collection/summary', debtorController.getDebtorCollectionSummary);
-
 // Sync debtor with AR data
 router.post('/sync-ar/:id', debtorController.syncDebtorWithAR);
-router.post('/sync-ar', debtorController.syncDebtorWithAR);
 
 // Get comprehensive debtor data with all related collections
 router.get('/:id/comprehensive', debtorController.getDebtorComprehensiveData);
@@ -73,26 +79,11 @@ router.get('/:id/payment-history', debtorController.getDebtorPaymentHistory);
 // Get debtor transactions
 router.get('/:id/transactions', debtorController.getDebtorTransactions);
 
-// Create debtor for existing student
-router.post('/student/:userId', debtorController.createDebtorForExistingStudent);
-
-// Bulk create debtors for all students
-router.post('/bulk-create', debtorController.bulkCreateDebtors);
-
-// Check which students don't have debtor accounts
-router.get('/check/students-without-debtors', debtorController.checkStudentsWithoutDebtors);
-
-// Bulk create debtor accounts for students without debtors
-router.post('/bulk-create-for-students', debtorController.bulkCreateDebtorsForStudents);
-
 // Delete debtor account (only if no outstanding balance)
 router.delete('/:id', debtorController.deleteDebtor);
 
 // Sync payment history for a specific debtor
 router.post('/:id/sync-payment-history', debtorController.syncDebtorPaymentHistory);
-
-// Sync payment history for all debtors
-router.post('/sync-all-payment-history', debtorController.syncAllDebtorsPaymentHistory);
 
 // Validate payment history for a debtor
 router.get('/:id/validate-payment-history', debtorController.validateDebtorPaymentHistory);
