@@ -47,6 +47,7 @@ const {
     getStudentLeases,
     downloadSignedLease,
     getExpiredStudents,
+    repairTenantOperationalLinks,
     getAllSignedLeases,
     manualAddStudent,
     uploadCsvStudents,
@@ -128,6 +129,7 @@ router.use(checkRole('admin', 'finance', 'finance_admin', 'finance_user', 'ceo')
 // Place fixed routes BEFORE any :studentId routes
 router.get('/all-signed-leases', getAllSignedLeases);
 router.get('/expired', getExpiredStudents);
+router.post('/repair-operational-links', repairTenantOperationalLinks);
 
 // Modified GET students route to handle both list and detailed views
 router.get('/', async (req, res) => {

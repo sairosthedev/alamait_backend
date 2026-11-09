@@ -698,30 +698,77 @@ async function listStudentsIncludingExpired({
     const residenceFilter =
         residence && mongoose.Types.ObjectId.isValid(residence) ? residence.toString() : null;
 
+    let residenceStudentIds = [];
+    let residenceDebtorIds = [];
+    let residenceApplicationIds = [];
+    if (residenceFilter) {
+        const residenceApps = await Application.find({
+            residence: residenceFilter,
+            status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] }
+        })
+            .select('_id student debtor')
+            .lean();
+        residenceApplicationIds = residenceApps.map((a) => a._id);
+        residenceStudentIds = residenceApps
+            .map((a) => a.student && String(a.student))
+            .filter(Boolean);
+        const debtorsAtResidence = await Debtor.find({
+            $or: [
+                { residence: residenceFilter },
+                { application: { $in: residenceApplicationIds } }
+            ]
+        })
+            .select('_id')
+            .lean();
+        residenceDebtorIds = debtorsAtResidence.map((d) => d._id);
+    }
+
     const activeQuery = { role: 'student' };
     if (residenceFilter) {
-        activeQuery.residence = residenceFilter;
+        activeQuery.$or = [
+            { residence: residenceFilter },
+            ...(residenceStudentIds.length ? [{ _id: { $in: residenceStudentIds } }] : [])
+        ];
     }
     if (searchRe) {
-        activeQuery.$or = [
-            { firstName: searchRe },
-            { lastName: searchRe },
-            { email: searchRe },
-            { phone: searchRe }
-        ];
+        const searchClause = {
+            $or: [
+                { firstName: searchRe },
+                { lastName: searchRe },
+                { email: searchRe },
+                { phone: searchRe }
+            ]
+        };
+        if (activeQuery.$or) {
+            activeQuery.$and = [{ $or: activeQuery.$or }, searchClause];
+            delete activeQuery.$or;
+        } else {
+            Object.assign(activeQuery, searchClause);
+        }
     }
 
     const debtorQuery = {};
-    if (residenceFilter) {
+    if (residenceFilter && residenceDebtorIds.length) {
+        debtorQuery._id = { $in: residenceDebtorIds };
+    } else if (residenceFilter) {
         debtorQuery.residence = residenceFilter;
     }
     if (searchRe) {
-        debtorQuery.$or = [
-            { 'contactInfo.name': searchRe },
-            { 'contactInfo.email': searchRe },
-            { 'contactInfo.phone': searchRe },
-            { debtorCode: searchRe }
-        ];
+        const debtorSearch = {
+            $or: [
+                { 'contactInfo.name': searchRe },
+                { 'contactInfo.email': searchRe },
+                { 'contactInfo.phone': searchRe },
+                { debtorCode: searchRe },
+                { accountCode: searchRe }
+            ]
+        };
+        if (debtorQuery._id) {
+            debtorQuery.$and = [{ _id: debtorQuery._id }, debtorSearch];
+            delete debtorQuery._id;
+        } else {
+            Object.assign(debtorQuery, debtorSearch);
+        }
     }
 
     const [activeUsers, expiredRecords, debtors] = await Promise.all([
@@ -881,6 +928,37 @@ async function listStudentsIncludingExpired({
         : [];
     const debtorAppById = new Map(debtorApps.map((a) => [String(a._id), a]));
 
+    const debtorEmails = [
+        ...new Set(
+            debtors.map((d) => String(d.contactInfo?.email || '').trim().toLowerCase()).filter(Boolean)
+        )
+    ];
+    const appByEmailCache = new Map();
+    if (debtorEmails.length) {
+        const appsByEmail = await Application.find({
+            $and: [
+                {
+                    $or: debtorEmails.map((e) => ({
+                        email: new RegExp(`^${e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+                    }))
+                },
+                { status: { $nin: ['cancelled', 'rejected', 'forfeited'] } },
+                ...(residenceFilter ? [{ residence: residenceFilter }] : [])
+            ]
+        })
+            .select(
+                'status startDate endDate allocatedRoom firstName lastName email phone student residence applicationCode'
+            )
+            .sort({ endDate: -1 })
+            .lean();
+        for (const app of appsByEmail) {
+            const key = String(app.email || '').trim().toLowerCase();
+            if (key && !appByEmailCache.has(key)) {
+                appByEmailCache.set(key, app);
+            }
+        }
+    }
+
     // Merge debtors — fills gaps where tenant exists in AR but not User/ExpiredStudent
     for (const d of debtors) {
         const name = String(d.contactInfo?.name || '').trim();
@@ -890,27 +968,40 @@ async function listStudentsIncludingExpired({
         const email = d.contactInfo?.email || '';
         const phone = d.contactInfo?.phone || '';
 
-        const linkedApp = d.application ? debtorAppById.get(String(d.application)) : null;
-        const isExpired = linkedApp
+        let linkedApp = d.application ? debtorAppById.get(String(d.application)) : null;
+        let isExpiredFlag = linkedApp
             ? isApplicationExpired(linkedApp)
             : Boolean(d.isExpired) ||
               d.status === 'expired' ||
               String(d.status || '').toLowerCase() === 'inactive';
 
-        if (!includeExpired && isExpired) continue;
-        if (!includeActive && !isExpired) continue;
+        if (!includeExpired && isExpiredFlag) continue;
+        if (!includeActive && !isExpiredFlag) continue;
 
         const userIdRaw = d.user ? String(d.user) : null;
         let userId = userIdRaw ? (debtorUserMap.get(userIdRaw) || userIdRaw) : null;
         if (!userId && linkedApp?.student) {
             userId = String(linkedApp.student);
         }
-        if (userId && !validUserIds.has(userId)) {
-            userId = null;
+        if (!linkedApp && d.contactInfo?.email) {
+            const emailKey = String(d.contactInfo.email).trim().toLowerCase();
+            linkedApp = appByEmailCache.get(emailKey) || null;
         }
+        const applicationOnly = !userId || !validUserIds.has(userId);
         const debtorId = String(d._id);
-        const applicationId = d.application ? String(d.application) : null;
+        const applicationId = (d.application ? String(d.application) : null) || linkedApp?._id?.toString();
         const primaryId = userId || applicationId || debtorId;
+
+        if (residenceFilter) {
+            const appRes = linkedApp?.residence?.toString?.() || linkedApp?.residence;
+            const debtorRes =
+                d.residence?._id?.toString?.() || d.residence?.toString?.() || d.residence;
+            const atResidence =
+                debtorRes === residenceFilter || appRes === residenceFilter;
+            if (!atResidence) {
+                continue;
+            }
+        }
 
         let studentResidence = d.residence || null;
         if (studentResidence && typeof studentResidence === 'object' && studentResidence._id) {
@@ -919,6 +1010,8 @@ async function listStudentsIncludingExpired({
                 name: studentResidence.name || null
             };
         }
+
+        const linkedExpired = linkedApp ? isApplicationExpired(linkedApp) : isExpired;
 
         upsert(primaryId, {
             _id: mongoose.Types.ObjectId.isValid(primaryId)
@@ -929,9 +1022,9 @@ async function listStudentsIncludingExpired({
             lastName: linkedApp?.lastName || lastName,
             email: linkedApp?.email || email,
             phone: linkedApp?.phone || phone,
-            status: isExpired ? 'expired' : 'active',
-            isExpired,
-            applicationOnly: !userId,
+            status: linkedExpired ? 'expired' : 'active',
+            isExpired: linkedExpired,
+            applicationOnly,
             expiredAt: d.expiredAt || null,
             expirationReason: d.expirationReason || null,
             residence: studentResidence || linkedApp?.residence || null,
@@ -954,6 +1047,63 @@ async function listStudentsIncludingExpired({
             const row = byId.get(primaryId);
             if (row) byId.set(debtorId, { ...row, id: primaryId, _id: row._id });
         }
+    }
+
+    // Approved applications at residence (catches tenants missing debtor.user / debtor.residence)
+    const applicationQuery = {
+        status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] }
+    };
+    if (residenceFilter) {
+        applicationQuery.residence = residenceFilter;
+    }
+    if (searchRe) {
+        applicationQuery.$or = [
+            { firstName: searchRe },
+            { lastName: searchRe },
+            { email: searchRe },
+            { phone: searchRe },
+            { applicationCode: searchRe }
+        ];
+    }
+  const residenceApplications = await Application.find(applicationQuery)
+        .select(
+            'firstName lastName email phone student allocatedRoom residence startDate endDate applicationCode status debtor'
+        )
+        .populate('residence', 'name _id')
+        .lean();
+
+    for (const app of residenceApplications) {
+        const appExpired = isApplicationExpired(app);
+        if (!includeExpired && appExpired) continue;
+        if (!includeActive && !appExpired) continue;
+
+        const sid = app.student ? String(app.student) : null;
+        const primaryId = sid || String(app._id);
+        if (byId.has(primaryId) || byId.has(String(app._id))) {
+            continue;
+        }
+
+        upsert(primaryId, {
+            _id: sid && mongoose.Types.ObjectId.isValid(sid) ? new mongoose.Types.ObjectId(sid) : app._id,
+            id: primaryId,
+            firstName: app.firstName || '',
+            lastName: app.lastName || '',
+            email: app.email || '',
+            phone: app.phone || '',
+            status: appExpired ? 'expired' : 'active',
+            isExpired: appExpired,
+            applicationOnly: !sid,
+            residence: app.residence || null,
+            currentRoom: app.allocatedRoom || null,
+            roomValidUntil: app.endDate || null,
+            startDate: app.startDate || null,
+            endDate: app.endDate || null,
+            applicationId: String(app._id),
+            applicationCode: app.applicationCode || null,
+            applicationStatus: app.status || null,
+            debtorId: app.debtor ? String(app.debtor) : null,
+            source: 'application'
+        });
     }
 
     let students = Array.from(byId.values())

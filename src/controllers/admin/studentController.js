@@ -467,14 +467,24 @@ const safeDateFormat = (date) => {
 // Get all students with pagination and filters (includes expired by default)
 exports.getAllStudents = async (req, res) => {
     try {
-        const { page = 1, limit = 1000, search, status, residence } = req.query;
+        const { page = 1, limit = 1000, search, status, residence, debtorCode, email } = req.query;
         const { listStudentsIncludingExpired } = require('../../utils/studentUtils');
+        const { syncDebtorOperationalLinks } = require('../../services/debtorService');
+        const Debtor = require('../../models/Debtor');
 
         const rawStatus = String(status || 'all').toLowerCase();
         const statusFilter = ['active', 'expired', 'all'].includes(rawStatus) ? rawStatus : 'all';
 
+        const searchTerm = search || debtorCode || email || '';
+        if (debtorCode) {
+            const debtor = await Debtor.findOne({ debtorCode: new RegExp(`^${String(debtorCode).trim()}$`, 'i') });
+            if (debtor) {
+                await syncDebtorOperationalLinks(debtor._id, { persist: true });
+            }
+        }
+
         const result = await listStudentsIncludingExpired({
-            search,
+            search: searchTerm,
             status: statusFilter,
             residence,
             page,
@@ -1371,6 +1381,41 @@ exports.adminUploadSignedLease = (req, res) => {
             res.status(500).json({ error: 'Failed to upload signed lease' });
         }
     });
+};
+
+// Repair finance ↔ ops links for one tenant (debtor code, email, or debtor id)
+exports.repairTenantOperationalLinks = async (req, res) => {
+    try {
+        const Debtor = require('../../models/Debtor');
+        const { syncDebtorOperationalLinks } = require('../../services/debtorService');
+        const { debtorId, debtorCode, email } = { ...req.query, ...req.body };
+
+        let debtor = null;
+        if (debtorId) {
+            debtor = await Debtor.findById(debtorId);
+        } else if (debtorCode) {
+            debtor = await Debtor.findOne({
+                debtorCode: new RegExp(`^${String(debtorCode).trim()}$`, 'i')
+            });
+        } else if (email) {
+            debtor = await Debtor.findOne({
+                'contactInfo.email': new RegExp(
+                    `^${String(email).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+                    'i'
+                )
+            });
+        }
+
+        if (!debtor) {
+            return res.status(404).json({ success: false, message: 'Debtor not found' });
+        }
+
+        const result = await syncDebtorOperationalLinks(debtor._id, { persist: true });
+        return res.json({ success: true, debtorId: debtor._id, debtorCode: debtor.debtorCode, ...result });
+    } catch (error) {
+        console.error('repairTenantOperationalLinks:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // Tenants with ended leases (and archives) — for expired / historical admin lists
