@@ -1186,8 +1186,10 @@ class BillingDiscrepancyService {
                     });
                     continue;
                 }
-                if (!BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx)
-                    && tx.metadata?.type !== 'lease_start') {
+                if (
+                    !BillingDiscrepancyService.isMonthlyRentAccrualTransaction(tx) &&
+                    !BillingDiscrepancyService.isLeaseStartAccrualTransaction(tx)
+                ) {
                     errors.push({ id, error: 'Skipped: not a monthly rent accrual' });
                     continue;
                 }
@@ -1713,7 +1715,13 @@ class BillingDiscrepancyService {
 
             let duplicateIssue = null;
             if (isLeaseStartMonth) {
-                const leaseStarts = await BillingDiscrepancyService.findAllLeaseStartAccruals(application, debtor);
+                const leaseStarts = await BillingDiscrepancyService.findLeaseStartAccrualsForMonth(
+                    application,
+                    debtor,
+                    studentId,
+                    scanMonth,
+                    scanYear
+                );
                 if (leaseStarts.length > 1) {
                     const keep = leaseStarts[0];
                     const extras = leaseStarts.slice(1);
