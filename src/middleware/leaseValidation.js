@@ -1,5 +1,55 @@
 const mongoose = require('mongoose');
+const Debtor = require('../models/Debtor');
 const { body, param, validationResult } = require('express-validator');
+
+/**
+ * Resolve debtor without relying on debtorService module load order (mongoose import).
+ */
+async function resolveDebtorRecordFast(raw) {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+
+    if (mongoose.Types.ObjectId.isValid(s)) {
+        const byId = await Debtor.findById(s);
+        if (byId) return byId;
+        const byUser = await Debtor.findOne({ user: s });
+        if (byUser) return byUser;
+        const byApp = await Debtor.findOne({ application: s });
+        if (byApp) return byApp;
+    }
+
+    if (/^1100-/i.test(s)) {
+        const suffix = s.replace(/^1100-/i, '');
+        if (mongoose.Types.ObjectId.isValid(suffix)) {
+            const byId = await Debtor.findById(suffix);
+            if (byId) return byId;
+        }
+        const byCode = await Debtor.findOne({ accountCode: s });
+        if (byCode) return byCode;
+    }
+
+    const escape = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (/^DR\d+/i.test(s)) {
+        const byDr = await Debtor.findOne({
+            debtorCode: new RegExp(`^${escape(s)}$`, 'i')
+        });
+        if (byDr) return byDr;
+    }
+
+    if (s.includes('@')) {
+        const byEmail = await Debtor.findOne({
+            'contactInfo.email': new RegExp(`^${escape(s)}$`, 'i')
+        });
+        if (byEmail) return byEmail;
+    }
+
+    try {
+        const { resolveDebtorRecord } = require('../services/debtorService');
+        return await resolveDebtorRecord(s);
+    } catch (_) {
+        return null;
+    }
+}
 
 function isPlaceholderTenantId(value) {
     const s = String(value ?? '').trim();
@@ -57,8 +107,7 @@ exports.resolveDebtorIdParam = async (req, res, next) => {
         return next();
     }
     try {
-        const { resolveDebtorRecord } = require('../services/debtorService');
-        const debtor = await resolveDebtorRecord(raw);
+        const debtor = await resolveDebtorRecordFast(raw);
         if (!debtor?._id) {
             return res.status(404).json({
                 success: false,

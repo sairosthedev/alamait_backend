@@ -21,6 +21,7 @@ const Account = require('../models/Account');
 exports.resolveDebtorRecord = async function resolveDebtorRecord(identifier) {
     if (identifier == null || identifier === '') return null;
 
+    const mongoose = require('mongoose');
     const raw = String(identifier).trim();
     const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -61,6 +62,32 @@ exports.resolveDebtorRecord = async function resolveDebtorRecord(identifier) {
 /**
  * Pick the current application for a debtor (re-applications / Add Tenant keep same DR code).
  */
+/**
+ * All ids that can appear on transaction metadata / AR for one tenant key.
+ */
+exports.expandFinanceEntityIds = async function expandFinanceEntityIds(rawId) {
+    if (rawId == null || rawId === '') return [];
+    const ids = new Set();
+    const raw = String(rawId).trim();
+    ids.add(raw);
+
+    const debtor = await exports.resolveDebtorRecord(raw);
+    if (debtor) {
+        ids.add(debtor._id.toString());
+        if (debtor.user) ids.add(debtor.user.toString());
+        if (debtor.application) ids.add(debtor.application.toString());
+        if (debtor.accountCode) ids.add(debtor.accountCode);
+    }
+
+    if (mongoose.Types.ObjectId.isValid(raw)) {
+        const Application = require('../models/Application');
+        const app = await Application.findById(raw).select('student').lean();
+        if (app?.student) ids.add(app.student.toString());
+    }
+
+    return Array.from(ids);
+};
+
 exports.findLatestApplicationForDebtor = async function findLatestApplicationForDebtor(debtor) {
     if (!debtor) return null;
 

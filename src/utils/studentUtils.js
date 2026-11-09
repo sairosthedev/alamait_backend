@@ -401,6 +401,22 @@ async function resolveStudentIdentifier(studentId) {
         return user._id.toString();
     }
 
+    const Application = require('../models/Application');
+    const app = await Application.findById(idString).select('student').lean();
+    if (app?.student) {
+        return app.student.toString();
+    }
+
+    try {
+        const { resolveDebtorRecord } = require('../services/debtorService');
+        const debtor = await resolveDebtorRecord(idString);
+        if (debtor?.user) {
+            return debtor.user.toString();
+        }
+    } catch (_) {
+        /* optional */
+    }
+
     // Build OR conditions to find matching expired student records
     const orConditions = [
         { 'student._id': idString },

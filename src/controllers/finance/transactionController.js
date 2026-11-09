@@ -184,10 +184,12 @@ class TransactionController {
             }
 
             if (studentId) {
+                const { expandFinanceEntityIds } = require('../../services/debtorService');
                 const canonicalStudentId = await resolveStudentIdentifier(studentId);
                 const identifierVariants = await getLinkedStudentIdentifiers(canonicalStudentId || studentId);
+                const expandedIds = await expandFinanceEntityIds(studentId);
                 const idStrings = Array.from(new Set(
-                    (identifierVariants && identifierVariants.length ? identifierVariants : [studentId])
+                    [...expandedIds, ...(identifierVariants && identifierVariants.length ? identifierVariants : [studentId])]
                         .map((id) => id && id.toString())
                         .filter(Boolean)
                 ));
