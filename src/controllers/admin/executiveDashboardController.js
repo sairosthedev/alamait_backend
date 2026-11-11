@@ -13,7 +13,7 @@ const FastExecutiveDashboardService = require('../../services/fastExecutiveDashb
 const cacheService = require('../../services/cacheService');
 
 function getCacheKey(year, month) {
-    return `executive-dashboard:v5:${year}:${month}`;
+    return `executive-dashboard:v6:${year}:${month}`;
 }
 
 /**
@@ -102,17 +102,34 @@ exports.getExecutiveDashboard = async (req, res) => {
                     : totalRooms > 0
                       ? Math.round((occupiedRooms / totalRooms) * 100)
                       : null;
+            const occupants = occ.totalOccupants || 0;
+            const bedUtilization =
+                typeof occ.bedUtilization === 'number'
+                    ? occ.bedUtilization
+                    : totalCapacity > 0
+                      ? Math.min(100, Math.round((occupants / totalCapacity) * 100))
+                      : null;
             return {
                 residenceId: residence._id,
                 name: residence.name,
                 revenue: pnl.revenue,
                 expenses: pnl.expenses,
                 net: pnl.net,
+                /** % of rentable rooms with ≥1 active lease (matches Room Management). */
                 occupancy: occupancyRate,
+                roomOccupancyPercent: occupancyRate,
+                /** % of beds filled — do not use as headline room occupancy. */
+                bedUtilization,
                 rooms: totalRooms,
                 capacity: totalCapacity,
-                occupants: occ.totalOccupants || 0,
-                occupiedRooms
+                occupants,
+                occupiedRooms,
+                vacantRooms:
+                    typeof occ.vacantRooms === 'number'
+                        ? occ.vacantRooms
+                        : Math.max(0, totalRooms - occupiedRooms),
+                storedOccupancy: occ.storedOccupancy ?? null,
+                storedOccupiedRooms: occ.storedOccupiedRooms ?? null
             };
         });
 

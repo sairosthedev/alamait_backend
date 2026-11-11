@@ -12,7 +12,22 @@ const {
     normalizeRoomKey
 } = require('./residenceRoomAliases');
 
+/** Application statuses that count toward physical occupancy */
+const ACTIVE_LEASE_STATUSES = ['approved', 'allocated', 'active', 'enrolled'];
+
 class RoomOccupancyUtils {
+
+    static buildResidenceScope(residenceId) {
+        const id = residenceId != null ? String(residenceId) : '';
+        return {
+            $or: [
+                { residence: residenceId },
+                { residenceId },
+                { residenceId: id },
+                { 'allocatedRoomDetails.residenceId': id }
+            ]
+        };
+    }
 
     /**
      * Labels that may appear on applications (allocatedRoom) for a catalog room.
@@ -75,12 +90,14 @@ class RoomOccupancyUtils {
     static buildLeaseActiveQuery(residenceId, roomNumber, asOf, allocatedRoomLabels = null) {
         const labels = allocatedRoomLabels || [roomNumber];
         return {
-            residence: residenceId,
-            status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
-            startDate: { $exists: true, $ne: null, $lte: asOf },
-            endDate: { $exists: true, $ne: null, $gte: asOf },
-            paymentStatus: { $ne: 'cancelled' },
-            ...RoomOccupancyUtils.buildAllocatedRoomOr(labels)
+            $and: [
+                RoomOccupancyUtils.buildResidenceScope(residenceId),
+                { status: { $in: ACTIVE_LEASE_STATUSES } },
+                { startDate: { $exists: true, $ne: null, $lte: asOf } },
+                { endDate: { $exists: true, $ne: null, $gte: asOf } },
+                { paymentStatus: { $ne: 'cancelled' } },
+                RoomOccupancyUtils.buildAllocatedRoomOr(labels)
+            ]
         };
     }
 
@@ -98,18 +115,18 @@ class RoomOccupancyUtils {
         const start = new Date(periodStart);
         const end = new Date(periodEnd);
         const labels = allocatedRoomLabels || [roomNumber];
-        const query = {
-            residence: residenceId,
-            status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
-            startDate: { $exists: true, $ne: null, $lte: end },
-            endDate: { $exists: true, $ne: null, $gte: start },
-            paymentStatus: { $ne: 'cancelled' },
-            ...RoomOccupancyUtils.buildAllocatedRoomOr(labels)
-        };
+        const clauses = [
+            RoomOccupancyUtils.buildResidenceScope(residenceId),
+            { status: { $in: ACTIVE_LEASE_STATUSES } },
+            { startDate: { $exists: true, $ne: null, $lte: end } },
+            { endDate: { $exists: true, $ne: null, $gte: start } },
+            { paymentStatus: { $ne: 'cancelled' } },
+            RoomOccupancyUtils.buildAllocatedRoomOr(labels)
+        ];
         if (excludeApplicationId) {
-            query._id = { $ne: excludeApplicationId };
+            clauses.push({ _id: { $ne: excludeApplicationId } });
         }
-        return query;
+        return { $and: clauses };
     }
 
     /**
@@ -212,7 +229,9 @@ class RoomOccupancyUtils {
 
             // Get room details
             const residence = await Residence.findById(residenceId);
-            const room = residence?.rooms.find(r => r.roomNumber === roomNumber);
+            const room = residence?.rooms.find(
+                (r) => normalizeRoomKey(r.roomNumber) === normalizeRoomKey(roomNumber)
+            );
             const capacity = room?.capacity || 1;
 
             return {
@@ -245,10 +264,25 @@ class RoomOccupancyUtils {
     /**
      * Residence-level snapshot (same rules as Room Management / admin dashboard occupancy).
      */
+    static embeddedRoomStatusSnapshot(rooms = []) {
+        const roomList = Array.isArray(rooms) ? rooms : [];
+        const rentable = roomList.filter((r) => String(r.status || '').toLowerCase() !== 'maintenance');
+        const inUse = rentable.filter((r) => {
+            const s = String(r.status || '').toLowerCase();
+            return s === 'occupied' || s === 'reserved';
+        });
+        const totalRooms = rentable.length;
+        const storedOccupiedRooms = inUse.length;
+        const storedOccupancy =
+            totalRooms > 0 ? Math.round((storedOccupiedRooms / totalRooms) * 100) : null;
+        return { totalRooms, storedOccupiedRooms, storedOccupancy };
+    }
+
     static async calculateResidenceOccupancySnapshot(residenceId, rooms = [], asOfDate = new Date()) {
         const asOf = asOfDate ? new Date(asOfDate) : new Date();
         const roomList = Array.isArray(rooms) ? rooms : [];
         const rentableRooms = roomList.filter((r) => String(r.status || '').toLowerCase() !== 'maintenance');
+        const stored = RoomOccupancyUtils.embeddedRoomStatusSnapshot(rentableRooms);
 
         let occupiedRooms = 0;
         let totalOccupants = 0;
@@ -274,13 +308,21 @@ class RoomOccupancyUtils {
         const totalRooms = rentableRooms.length;
         const occupancy =
             totalRooms > 0 ? Math.round((occupiedRooms / totalRooms) * 100) : null;
+        const bedUtilization =
+            totalCapacity > 0
+                ? Math.min(100, Math.round((totalOccupants / totalCapacity) * 100))
+                : null;
 
         return {
             totalRooms,
             occupiedRooms,
+            vacantRooms: Math.max(0, totalRooms - occupiedRooms),
             totalOccupants,
             totalCapacity,
-            occupancy
+            occupancy,
+            bedUtilization,
+            storedOccupancy: stored.storedOccupancy,
+            storedOccupiedRooms: stored.storedOccupiedRooms
         };
     }
 
