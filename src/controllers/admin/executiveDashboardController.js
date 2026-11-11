@@ -13,7 +13,7 @@ const FastExecutiveDashboardService = require('../../services/fastExecutiveDashb
 const cacheService = require('../../services/cacheService');
 
 function getCacheKey(year, month) {
-    return `executive-dashboard:v4:${year}:${month}`;
+    return `executive-dashboard:v5:${year}:${month}`;
 }
 
 /**
@@ -56,7 +56,9 @@ exports.getExecutiveDashboard = async (req, res) => {
             FastExecutiveDashboardService.getResidenceMonthPnL(yearNum, monthNum, residences),
             FastExecutiveDashboardService.getCashReceivedByResidence(yearNum, monthNum),
             FastExecutiveDashboardService.getExpenseBreakdown(yearNum, monthNum, residences),
-            FastExecutiveDashboardService.getOccupancyByResidence(residences),
+            FastExecutiveDashboardService.getOccupancyByResidence(residences, {
+                asOf: FastExecutiveDashboardService.asOfForDashboardMonth(yearNum, monthNum)
+            }),
             FastExecutiveDashboardService.getMaintenancesByResidence(yearNum, monthNum, residences),
             FastExecutiveDashboardService.getRecentMaintenances(10),
             FastExecutiveDashboardService.getApplications(yearNum, monthNum)
@@ -82,7 +84,7 @@ exports.getExecutiveDashboard = async (req, res) => {
             const resId = residence._id.toString();
             const pnl = residencePnL[resId] || { revenue: 0, expenses: 0, net: 0 };
             const occ = occupancyByResidence[resId] || {
-                occupiedRooms: new Set(),
+                occupiedRooms: 0,
                 totalOccupants: 0,
                 totalRooms: 0,
                 totalCapacity: 0,
@@ -90,12 +92,16 @@ exports.getExecutiveDashboard = async (req, res) => {
             };
             const totalRooms = occ.totalRooms || (residence.rooms || []).length;
             const totalCapacity = occ.totalCapacity || totalRooms;
-            const occupiedRooms = occ.occupiedRooms?.size || 0;
-            const occupancyRate = typeof occ.occupancy === 'number'
-                ? occ.occupancy
-                : (totalCapacity > 0
-                    ? Math.min(100, Math.round(((occ.totalOccupants || 0) / totalCapacity) * 100))
-                    : null);
+            const occupiedRooms =
+                typeof occ.occupiedRooms === 'number'
+                    ? occ.occupiedRooms
+                    : occ.occupiedRooms?.size || 0;
+            const occupancyRate =
+                typeof occ.occupancy === 'number'
+                    ? occ.occupancy
+                    : totalRooms > 0
+                      ? Math.round((occupiedRooms / totalRooms) * 100)
+                      : null;
             return {
                 residenceId: residence._id,
                 name: residence.name,

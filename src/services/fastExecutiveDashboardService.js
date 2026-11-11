@@ -471,61 +471,41 @@ class FastExecutiveDashboardService {
         };
     }
 
-    static async getOccupancyByResidence(residences) {
-        const now = new Date();
-        const apps = await Application.find({
-            status: { $nin: ['cancelled', 'rejected', 'forfeited', 'waitlisted'] },
-            startDate: { $exists: true, $ne: null, $lte: now },
-            endDate: { $exists: true, $ne: null, $gte: now },
-            paymentStatus: { $ne: 'cancelled' }
-        })
-            .select('residence residenceId allocatedRoomDetails allocatedRoom student email')
-            .lean();
+    /**
+     * Occupancy aligned with Room Management: lease-active on `asOf`, per catalog room.
+     * @param {object[]} residences — lean residences with rooms[]
+     * @param {{ asOf?: Date }} [options]
+     */
+    static async getOccupancyByResidence(residences, options = {}) {
+        const RoomOccupancyUtils = require('../utils/roomOccupancyUtils');
+        const asOf = options.asOf ? new Date(options.asOf) : new Date();
 
         const byRes = {};
-        residences.forEach((r) => {
-            const rooms = Array.isArray(r.rooms) ? r.rooms : [];
-            const rentableRooms = rooms.filter((room) => room.status !== 'maintenance');
-            byRes[r._id.toString()] = {
-                occupiedRooms: new Set(),
-                occupantKeys: new Set(),
-                totalOccupants: 0,
-                totalRooms: rentableRooms.length,
-                totalCapacity: rentableRooms.reduce(
-                    (sum, room) => sum + (Number(room.capacity) > 0 ? Number(room.capacity) : 1),
-                    0
-                )
-            };
-        });
-
-        apps.forEach((app) => {
-            const resId =
-                app.residenceId?.toString() ||
-                app.allocatedRoomDetails?.residenceId?.toString() ||
-                app.residence?.toString();
-            if (!resId || !byRes[resId]) return;
-
-            const occupantKey = app.student?.toString()
-                || (app.email && String(app.email).toLowerCase())
-                || String(app._id);
-            if (byRes[resId].occupantKeys.has(occupantKey)) return;
-
-            byRes[resId].occupantKeys.add(occupantKey);
-            byRes[resId].totalOccupants += 1;
-
-            const room = app.allocatedRoom || app.allocatedRoomDetails?.roomNumber;
-            if (room) byRes[resId].occupiedRooms.add(String(room));
-        });
-
-        Object.values(byRes).forEach((row) => {
-            const denominator = row.totalCapacity > 0 ? row.totalCapacity : row.totalRooms;
-            row.occupancy = denominator > 0
-                ? Math.min(100, Math.round((row.totalOccupants / denominator) * 100))
-                : null;
-            delete row.occupantKeys;
-        });
+        await Promise.all(
+            (residences || []).map(async (r) => {
+                const resId = r._id.toString();
+                const snapshot = await RoomOccupancyUtils.calculateResidenceOccupancySnapshot(
+                    r._id,
+                    r.rooms || [],
+                    asOf
+                );
+                byRes[resId] = snapshot;
+            })
+        );
 
         return byRes;
+    }
+
+    /** Last moment of calendar month, or now if still inside that month. */
+    static asOfForDashboardMonth(year, month) {
+        const y = parseInt(year, 10);
+        const m = parseInt(month, 10);
+        if (Number.isNaN(y) || Number.isNaN(m) || m < 1 || m > 12) {
+            return new Date();
+        }
+        const monthEnd = new Date(y, m, 0, 23, 59, 59, 999);
+        const now = new Date();
+        return now.getTime() < monthEnd.getTime() ? now : monthEnd;
     }
 
     static async getMaintenancesByResidence(year, month, residences) {

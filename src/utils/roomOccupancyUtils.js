@@ -243,6 +243,48 @@ class RoomOccupancyUtils {
     }
     
     /**
+     * Residence-level snapshot (same rules as Room Management / admin dashboard occupancy).
+     */
+    static async calculateResidenceOccupancySnapshot(residenceId, rooms = [], asOfDate = new Date()) {
+        const asOf = asOfDate ? new Date(asOfDate) : new Date();
+        const roomList = Array.isArray(rooms) ? rooms : [];
+        const rentableRooms = roomList.filter((r) => String(r.status || '').toLowerCase() !== 'maintenance');
+
+        let occupiedRooms = 0;
+        let totalOccupants = 0;
+        let totalCapacity = 0;
+
+        await Promise.all(
+            rentableRooms.map(async (room) => {
+                const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(
+                    residenceId,
+                    room.roomNumber,
+                    asOf
+                );
+                const cap = Number(occ.capacity) > 0 ? Number(occ.capacity) : 1;
+                const count = Number(occ.currentOccupancy) || 0;
+                totalCapacity += cap;
+                totalOccupants += count;
+                if (count > 0) {
+                    occupiedRooms += 1;
+                }
+            })
+        );
+
+        const totalRooms = rentableRooms.length;
+        const occupancy =
+            totalRooms > 0 ? Math.round((occupiedRooms / totalRooms) * 100) : null;
+
+        return {
+            totalRooms,
+            occupiedRooms,
+            totalOccupants,
+            totalCapacity,
+            occupancy
+        };
+    }
+
+    /**
      * Update room occupancy in residence document
      * @param {string} residenceId - Residence ID
      * @param {string} roomNumber - Room number
