@@ -74,6 +74,62 @@ function normalizeExpenseJournalLine(line) {
     return { ...line, debit, credit };
 }
 
+function formatDateKeyForJournal(date) {
+    const d = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(d.getTime())) return 'nodate';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+/** Invoice # from Excel — never treat a payment date cell as an invoice number. */
+function readInvoiceNumber(raw) {
+    if (raw == null || raw === '') return '';
+    if (raw instanceof Date && !Number.isNaN(raw.getTime())) return '';
+    const s = String(raw).trim();
+    if (!s) return '';
+    if (/Coordinated Universal Time|GMT[+-]?\d*/i.test(s)) return '';
+    if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s/i.test(s)) return '';
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return '';
+    return s;
+}
+
+function buildPaymentJournalKey({ sheetPrefix, invoiceNumber, rowNumber, customer, paymentTotal, date }) {
+    const sheet = sheetPrefix ? String(sheetPrefix).trim() : 'SHEET';
+    const rowPart = `R${rowNumber}`;
+    const inv = readInvoiceNumber(invoiceNumber);
+    if (inv) {
+        return `PAY-${sheet}-${inv}-${rowPart}`;
+    }
+    const name = String(customer || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || 'tenant';
+    const amt = (Math.round(Number(paymentTotal) * 100) / 100).toFixed(2);
+    const d = formatDateKeyForJournal(date || new Date());
+    return `PAY-${sheet}-${name}-${amt}-${d}-${rowPart}`;
+}
+
+function buildChargeJournalKey({ sheetPrefix, invoiceNumber, rowNumber, customer, date }) {
+    const sheet = sheetPrefix ? String(sheetPrefix).trim() : 'SHEET';
+    const rowPart = `R${rowNumber}`;
+    const inv = readInvoiceNumber(invoiceNumber);
+    if (inv) {
+        return `CHG-${sheet}-${inv}-${rowPart}`;
+    }
+    const name = String(customer || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || 'tenant';
+    const d = formatDateKeyForJournal(date || new Date());
+    return `CHG-${sheet}-${name}-${d}-${rowPart}`;
+}
+
 function toDate(v) {
     if (v == null || v === '') return null;
     if (v instanceof Date && !Number.isNaN(v.getTime())) return v;
@@ -769,7 +825,7 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
         const totalAmount = toNumber(get(row, 'totalAmount'));
         const payments = paymentCols.map((c) => toNumber(cellRaw(row.getCell(c))));
         let paymentTotal = payments.reduce((s, n) => s + n, 0);
-        const invoiceNumber = String(get(row, 'invoiceNumber') ?? '').trim();
+        const invoiceNumber = readInvoiceNumber(get(row, 'invoiceNumber'));
         const roomNumber = String(get(row, 'roomNumber') ?? '').trim();
         const rowDate = toDate(get(row, 'date'));
         const invoiceDate = toDate(get(row, 'invoiceDate')) || rowDate;
@@ -792,9 +848,7 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
 
         const missingInvoiceNumber = !invoiceNumber;
         const sheetPrefix = sheetName ? String(sheetName).trim() : '';
-        const baseKey = invoiceNumber
-            ? invoiceNumber
-            : `MISSING-INV-${sheetPrefix || 'SHEET'}-R${rowNumber}`;
+        const baseKey = invoiceNumber || `MISSING-INV-${sheetPrefix || 'SHEET'}-R${rowNumber}`;
         const labelParts = [
             customer,
             roomNumber && `Room ${roomNumber}`,
@@ -811,7 +865,13 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
             if (chargeTotal > 0) {
                 proposed.push({
                     type: 'charge',
-                    journalKey: `CHG-${sheetPrefix ? `${sheetPrefix}-` : ''}${baseKey}`,
+                    journalKey: buildChargeJournalKey({
+                        sheetPrefix,
+                        invoiceNumber,
+                        rowNumber,
+                        customer,
+                        date: invoiceDate || reportingDate || defaultDate
+                    }),
                     description: `Invoice charge — ${label}`,
                     reference: invoiceNumber || `MISSING-INV-${sheetPrefix || 'SHEET'}-R${rowNumber}`,
                     date: invoiceDate || reportingDate || defaultDate,
@@ -831,7 +891,14 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
         if ((mode === 'payments' || mode === 'both') && paymentTotal > 0) {
             proposed.push({
                 type: 'payment',
-                journalKey: `PAY-${sheetPrefix ? `${sheetPrefix}-` : ''}${baseKey}`,
+                journalKey: buildPaymentJournalKey({
+                    sheetPrefix,
+                    invoiceNumber,
+                    rowNumber,
+                    customer,
+                    paymentTotal,
+                    date: rowDate || invoiceDate || reportingDate || defaultDate
+                }),
                 description: `Payment received — ${label}`,
                 reference: invoiceNumber || `MISSING-INV-${sheetPrefix || 'SHEET'}-R${rowNumber}`,
                 date: rowDate || invoiceDate || reportingDate || defaultDate,
@@ -1603,7 +1670,7 @@ function applySystemInvoiceToRow(row, invoice) {
     const invoiceNumber = String(invoice.invoiceNumber).trim();
     const sheetPrefix = row.sheetName ? String(row.sheetName).trim() : '';
     const typePrefix = row.type === 'charge' ? 'CHG' : 'PAY';
-    const baseKey = invoiceNumber;
+    const rowNumber = row.rowNumber || 0;
     const labelParts = [
         row.customer,
         row.roomNumber && `Room ${row.roomNumber}`,
@@ -1620,7 +1687,23 @@ function applySystemInvoiceToRow(row, invoice) {
         invoiceResolvedFromSystem: true,
         systemInvoiceId: invoice._id?.toString?.() || invoice._id,
         reference: invoiceNumber,
-        journalKey: `${typePrefix}-${sheetPrefix ? `${sheetPrefix}-` : ''}${baseKey}`,
+        journalKey:
+            row.type === 'charge'
+                ? buildChargeJournalKey({
+                      sheetPrefix,
+                      invoiceNumber,
+                      rowNumber,
+                      customer: row.customer,
+                      date: row.date
+                  })
+                : buildPaymentJournalKey({
+                      sheetPrefix,
+                      invoiceNumber,
+                      rowNumber,
+                      customer: row.customer,
+                      paymentTotal: row.paymentTotal,
+                      date: row.date
+                  }),
         description: `${descPrefix} — ${label}`
     };
 }
