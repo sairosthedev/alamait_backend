@@ -4208,7 +4208,9 @@ class TransactionController {
                 applySystemInvoiceToRow,
                 transactionSourceForInvoiceRow,
                 resolveExpenseAccountFromLabel,
-                appendExpenseJournalBalancingEntry
+                appendExpenseJournalBalancingEntry,
+                coercePaymentUploadDate,
+                buildPaymentJournalKey
             } = require('../../services/journalExcelUploadService');
             const { createPaymentRecordForJournal, tryBackfillPaymentForExistingJournal } = require('../../services/journalPaymentRecordService');
 
@@ -5346,11 +5348,31 @@ class TransactionController {
                                     (workingRow.adminFee || 0) > 0 && (workingRow.rental || 0) <= 0 ? 'admin' : 'rent';
                             }
 
+                            const paymentDate = coercePaymentUploadDate(
+                                workingRow.date || parsed.reportingDate || defaultDate,
+                                {
+                                    sheetName: sheet.name,
+                                    defaultDate,
+                                    paymentTotal: workingRow.paymentTotal
+                                }
+                            );
+                            workingRow.date = paymentDate;
+                            if (workingRow.type === 'payment') {
+                                workingRow.journalKey = buildPaymentJournalKey({
+                                    sheetPrefix: workingRow.sheetName || sheet.name,
+                                    invoiceNumber: workingRow.invoiceNumber,
+                                    rowNumber: workingRow.rowNumber,
+                                    customer: workingRow.customer,
+                                    paymentTotal: workingRow.paymentTotal,
+                                    date: paymentDate
+                                });
+                            }
+
                             await saveJournal({
                                 journalKey: workingRow.journalKey,
                                 description: workingRow.description,
                                 reference: workingRow.reference,
-                                date: workingRow.date || parsed.reportingDate || defaultDate,
+                                date: paymentDate,
                                 entries,
                                 format: parsed.format || 'invoice_payment',
                                 sourceOverride,

@@ -130,12 +130,143 @@ function buildChargeJournalKey({ sheetPrefix, invoiceNumber, rowNumber, customer
     return `CHG-${sheet}-${name}-${d}-${rowPart}`;
 }
 
+function isPlausibleLedgerDate(d) {
+    if (!d || !(d instanceof Date) || Number.isNaN(d.getTime())) return false;
+    const y = d.getFullYear();
+    return y >= 1990 && y <= 2100;
+}
+
+/** Excel serial → Date only when serial is a real calendar date (not a dollar amount like 130). */
+function excelSerialToPlausibleDate(serial) {
+    if (typeof serial !== 'number' || !Number.isFinite(serial)) return null;
+  // 1990-01-01 ≈ 32874; amounts mistaken as serials are usually < 10000
+    if (serial < 32874 || serial > 65000) return null;
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const d = new Date(excelEpoch.getTime() + Math.round(serial) * 86400000);
+    return isPlausibleLedgerDate(d) ? d : null;
+}
+
+const UPLOAD_MONTH_NAMES = [
+    'january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december'
+];
+const UPLOAD_MONTH_ABBR = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+function uploadNormalizeSheetName(name) {
+    return String(name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '');
+}
+
+function monthIndexFromUploadSheetName(sheetName) {
+    if (!sheetName) return -1;
+    const normalized = uploadNormalizeSheetName(sheetName);
+    let monthIdx = UPLOAD_MONTH_ABBR.indexOf(normalized);
+    if (monthIdx < 0) monthIdx = UPLOAD_MONTH_NAMES.indexOf(normalized);
+    if (monthIdx < 0) {
+        const m = normalized.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(\d{2,4})$/);
+        if (m) monthIdx = UPLOAD_MONTH_ABBR.indexOf(m[1]);
+    }
+    return monthIdx;
+}
+
+function isUploadMonthSheetName(name) {
+    const n = uploadNormalizeSheetName(name);
+    if (!n) return false;
+    if (UPLOAD_MONTH_ABBR.includes(n) || UPLOAD_MONTH_NAMES.includes(n)) return true;
+    return /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\d{2,4}$/.test(n);
+}
+
+/** When row has no valid date, use mid-month from tab name e.g. "November" + upload year. */
+function defaultDateFromMonthSheet(sheetName, defaultDate) {
+    if (!sheetName || !isUploadMonthSheetName(sheetName)) return null;
+    const monthIdx = monthIndexFromUploadSheetName(sheetName);
+    if (monthIdx < 0) return null;
+    const base = defaultDate ? new Date(defaultDate) : new Date();
+    const year = !Number.isNaN(base.getTime()) ? base.getFullYear() : new Date().getFullYear();
+    return new Date(year, monthIdx, 15, 12, 0, 0, 0);
+}
+
+function dateLooksLikeAmountSerial(parsed, paymentTotal) {
+    if (!parsed || !(parsed instanceof Date) || Number.isNaN(parsed.getTime())) return false;
+    if (parsed.getFullYear() < 1990) return true;
+    const amt = Number(paymentTotal);
+    if (!Number.isFinite(amt) || amt < 1 || amt > 100000) return false;
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const fromAmt = new Date(excelEpoch.getTime() + Math.round(amt) * 86400000);
+    return Math.abs(parsed.getTime() - fromAmt.getTime()) < 2 * 86400000;
+}
+
+/** Trust only typed dates — not ExcelJS Date objects built from amount serials. */
+function isExplicitPaymentDate(raw, parsed) {
+    if (!isPlausibleLedgerDate(parsed)) return false;
+    if (raw instanceof Date) return false;
+    const s = String(raw ?? '').trim();
+    if (!s) return false;
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return true;
+    if (/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(s)) return true;
+    if (/\d{1,2}[-\/][A-Za-z]{3}[-\/]\d{2,4}/i.test(s)) return true;
+    return false;
+}
+
+function resolveInvoicePaymentRowDate(rawDateCell, { reportingDate, defaultDate, sheetName, paymentTotal }) {
+    if (rawDateCell != null && paymentTotal > 0) {
+        const n =
+            typeof rawDateCell === 'number'
+                ? rawDateCell
+                : parseFloat(String(rawDateCell).replace(/[^0-9.-]/g, ''));
+        if (Number.isFinite(n) && Math.abs(n - paymentTotal) < 0.02) {
+            rawDateCell = null;
+        }
+    }
+
+    let rowDate = rawDateCell != null && rawDateCell !== '' ? toDate(rawDateCell) : null;
+    if (dateLooksLikeAmountSerial(rowDate, paymentTotal)) rowDate = null;
+    if (!isPlausibleLedgerDate(rowDate)) rowDate = null;
+
+    const monthTab = sheetName && isUploadMonthSheetName(sheetName);
+    if (monthTab && !isExplicitPaymentDate(rawDateCell, rowDate)) {
+        rowDate = null;
+    }
+
+    const fromSheet = defaultDateFromMonthSheet(sheetName, defaultDate);
+    if (rowDate) return rowDate;
+    if (fromSheet) return fromSheet;
+    if (isPlausibleLedgerDate(reportingDate)) return new Date(reportingDate);
+    if (isPlausibleLedgerDate(defaultDate)) return new Date(defaultDate);
+    return defaultDate || new Date();
+}
+
+/** Final guard before posting journals (upload handler + tests). */
+function coercePaymentUploadDate(date, { sheetName, defaultDate, paymentTotal } = {}) {
+    let d = date instanceof Date ? date : date ? new Date(date) : null;
+    if (d && Number.isNaN(d.getTime())) d = null;
+    if (d && !isPlausibleLedgerDate(d)) d = null;
+    if (d && dateLooksLikeAmountSerial(d, paymentTotal)) d = null;
+
+    const monthTab = sheetName && isUploadMonthSheetName(sheetName);
+    if (monthTab && d && !isExplicitPaymentDate(null, d)) {
+        const fromSheet = defaultDateFromMonthSheet(sheetName, defaultDate);
+        if (fromSheet) d = fromSheet;
+    }
+
+    if (d) return d;
+    const fromSheet = defaultDateFromMonthSheet(sheetName, defaultDate);
+    if (fromSheet) return fromSheet;
+    if (defaultDate && isPlausibleLedgerDate(new Date(defaultDate))) return new Date(defaultDate);
+    return new Date();
+}
+
 function toDate(v) {
     if (v == null || v === '') return null;
-    if (v instanceof Date && !Number.isNaN(v.getTime())) return v;
+    if (v instanceof Date && !Number.isNaN(v.getTime())) {
+        return isPlausibleLedgerDate(v) ? v : null;
+    }
     if (typeof v === 'number') {
-        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-        return new Date(excelEpoch.getTime() + v * 86400000);
+        const fromSerial = excelSerialToPlausibleDate(v);
+        if (fromSerial) return fromSerial;
+        return null;
     }
     const s = String(v).trim();
     // MM/DD/YY or M/D/YYYY
@@ -149,7 +280,7 @@ function toDate(v) {
         const day = p0 > 12 ? p0 : p1 > 12 ? p1 : p0;
         const month = p0 > 12 ? p1 : p1 > 12 ? p0 : p1;
         const d = new Date(year, month - 1, day);
-        if (!Number.isNaN(d.getTime())) return d;
+        if (!Number.isNaN(d.getTime()) && isPlausibleLedgerDate(d)) return d;
     }
     const dmyText = s.match(/^(\d{1,2})[-\/]([A-Za-z]{3})[-\/](\d{2,4})$/i);
     if (dmyText) {
@@ -163,11 +294,12 @@ function toDate(v) {
         if (year < 100) year += 2000;
         if (mon != null && !Number.isNaN(day) && !Number.isNaN(year)) {
             const d = new Date(year, mon, day);
-            if (!Number.isNaN(d.getTime())) return d;
+            if (!Number.isNaN(d.getTime()) && isPlausibleLedgerDate(d)) return d;
         }
     }
     const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? null : d;
+    if (Number.isNaN(d.getTime()) || !isPlausibleLedgerDate(d)) return null;
+    return d;
 }
 
 function findLabelDate(sheet, labelNeedle, maxRows = 8, maxCols = 20) {
@@ -827,9 +959,7 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
         let paymentTotal = payments.reduce((s, n) => s + n, 0);
         const invoiceNumber = readInvoiceNumber(get(row, 'invoiceNumber'));
         const roomNumber = String(get(row, 'roomNumber') ?? '').trim();
-        const rowDate = toDate(get(row, 'date'));
-        const invoiceDate = toDate(get(row, 'invoiceDate')) || rowDate;
-        const dateDue = toDate(get(row, 'dateDue'));
+        const rawRowDate = get(row, 'date');
         // Simple Date | Customer | Amount sheets: amount may only map to totalAmount, not payment cols
         if (
             paymentTotal <= 0 &&
@@ -848,6 +978,23 @@ function parseInvoicePaymentSheet(sheet, headerInfo, { defaultDate, mode = 'paym
 
         const missingInvoiceNumber = !invoiceNumber;
         const sheetPrefix = sheetName ? String(sheetName).trim() : '';
+
+        const rowDate = resolveInvoicePaymentRowDate(rawRowDate, {
+            reportingDate,
+            defaultDate,
+            sheetName: sheetPrefix || sheetName,
+            paymentTotal
+        });
+        const invoiceDate =
+            toDate(get(row, 'invoiceDate')) ||
+            resolveInvoicePaymentRowDate(get(row, 'invoiceDate'), {
+                reportingDate,
+                defaultDate,
+                sheetName: sheetPrefix || sheetName,
+                paymentTotal
+            }) ||
+            rowDate;
+        const dateDue = toDate(get(row, 'dateDue'));
         const baseKey = invoiceNumber || `MISSING-INV-${sheetPrefix || 'SHEET'}-R${rowNumber}`;
         const labelParts = [
             customer,
@@ -2079,6 +2226,8 @@ module.exports = {
     isCouncilRatesLabel,
     normalizeAccountLabel,
     buildEntriesFromInvoiceRow,
+    buildPaymentJournalKey,
+    coercePaymentUploadDate,
     buildExcelPaymentDedupKey,
     buildExcelRowDedupKey,
     excelUploadRowMatches,
