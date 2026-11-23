@@ -161,6 +161,13 @@ exports.resolveReconciliationIdentifier = async (req, res, next) => {
                     '/api/finance/leases/reconciliation?debtorId={debtorId}',
                     '/api/finance/leases/reconciliation?applicationId={applicationId}',
                     '/api/finance/debtors/{debtorId}/reconciliation'
+                ],
+                adminExamples: [
+                    '/api/admin/leases/debtors/{debtorId}/reconciliation',
+                    '/api/admin/leases/applications/{applicationId}/reconciliation',
+                    '/api/admin/leases/reconciliation?debtorId={debtorId}',
+                    '/api/admin/leases/reconciliation?applicationId={applicationId}',
+                    '/api/admin/leases/students/N/A/reconciliation?debtorId={debtorId}'
                 ]
             }
         });

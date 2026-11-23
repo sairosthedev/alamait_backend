@@ -69,6 +69,57 @@ class RoomOccupancyUtils {
         return [...labels].filter(Boolean);
     }
 
+    static occupantIdentityKeys(app) {
+        const keys = new Set();
+        const sid = app.student && (app.student._id || app.student);
+        if (sid) {
+            keys.add(`student:${String(sid)}`);
+        }
+        const email = app.email && String(app.email).trim().toLowerCase();
+        if (email) {
+            keys.add(`email:${email}`);
+        }
+        if (!keys.size) {
+            keys.add(`app:${String(app._id)}`);
+        }
+        return keys;
+    }
+
+    /**
+     * One occupant per person — merges duplicate applications (same email or student).
+     */
+    static dedupeApplicationsToOccupants(applications, mapOccupant) {
+        const groups = [];
+
+        const findGroup = (keys) =>
+            groups.find((g) => [...keys].some((k) => g.keys.has(k)));
+
+        for (const app of applications) {
+            const keys = RoomOccupancyUtils.occupantIdentityKeys(app);
+            const occupant = mapOccupant(app);
+            let group = findGroup(keys);
+
+            if (!group) {
+                group = { keys: new Set(keys), occupant };
+                groups.push(group);
+                continue;
+            }
+
+            keys.forEach((k) => group.keys.add(k));
+
+            const incomingStudent =
+                occupant.studentId ||
+                (app.student && String(app.student._id || app.student));
+            const existingStudent = group.occupant.studentId;
+
+            if (incomingStudent && !existingStudent) {
+                group.occupant = { ...group.occupant, ...occupant, id: String(incomingStudent) };
+            }
+        }
+
+        return groups.map((g) => g.occupant);
+    }
+
     static buildAllocatedRoomOr(labels = []) {
         const list = [...new Set((labels || []).map((l) => String(l).trim()).filter(Boolean))];
         if (!list.length) {
@@ -145,26 +196,19 @@ class RoomOccupancyUtils {
         const applications = await Application.find(query)
             .select('firstName lastName email student startDate endDate applicationCode')
             .lean();
-        const occupants = new Map();
-        for (const app of applications) {
-            const key = app.student
-                ? String(app.student)
-                : (app.email && String(app.email).toLowerCase());
-            if (!key || occupants.has(key)) {
-                continue;
-            }
-            occupants.set(key, {
+        return RoomOccupancyUtils.dedupeApplicationsToOccupants(applications, (app) => {
+            const sid = app.student && (app.student._id || app.student);
+            return {
                 type: 'lease',
                 name: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
                 email: app.email,
-                studentId: app.student,
+                studentId: sid || null,
                 startDate: app.startDate,
                 endDate: app.endDate,
                 applicationCode: app.applicationCode || null,
                 applicationId: app._id
-            });
-        }
-        return Array.from(occupants.values());
+            };
+        });
     }
 
     /**
@@ -199,33 +243,23 @@ class RoomOccupancyUtils {
             
             console.log(`📋 Found ${approvedApplications.length} approved applications (lease active on as-of date) for room ${roomNumber}`);
             
-            const allOccupants = new Map();
-
-            const addFromApplication = (app) => {
-                const sid = app.student && (app.student._id || app.student);
-                const key = sid
-                    ? String(sid)
-                    : (app._id && String(app._id)) ||
-                      (app.email && String(app.email).toLowerCase()) ||
-                      null;
-                if (!key) {
-                    return;
+            const validStudents = RoomOccupancyUtils.dedupeApplicationsToOccupants(
+                approvedApplications,
+                (app) => {
+                    const sid = app.student && (app.student._id || app.student);
+                    return {
+                        id: sid ? String(sid) : String(app._id),
+                        studentId: sid ? String(sid) : null,
+                        applicationId: app._id,
+                        name: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
+                        email: app.email,
+                        status: app.status,
+                        source: 'application',
+                        leaseStart: app.startDate,
+                        leaseEnd: app.endDate
+                    };
                 }
-                allOccupants.set(key, {
-                    id: sid || String(app._id),
-                    applicationId: app._id,
-                    name: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
-                    email: app.email,
-                    status: app.status,
-                    source: 'application',
-                    leaseStart: app.startDate,
-                    leaseEnd: app.endDate
-                });
-            };
-
-            approvedApplications.forEach(addFromApplication);
-
-            const validStudents = Array.from(allOccupants.values());
+            );
 
             // Get room details
             const residence = await Residence.findById(residenceId);

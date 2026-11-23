@@ -421,6 +421,21 @@ app.use('/api/admin/messages', adminMessageRoutes);
 app.use('/api/admin/events', adminEventRoutes);
 app.use('/api/admin/requests', adminRequestRoutes);
 app.use('/api/admin/lease-templates', leaseTemplateRoutes);
+const adminLeaseRoles = checkRole('admin', 'finance_admin', 'finance_user', 'ceo');
+app.get(
+    '/api/admin/leases/students/N/A/reconciliation',
+    auth,
+    adminLeaseRoles,
+    resolveReconciliationIdentifier,
+    financeLeaseController.getLeaseReconciliationStatus
+);
+app.get(
+    '/api/admin/leases/reconciliation',
+    auth,
+    adminLeaseRoles,
+    resolveReconciliationIdentifier,
+    financeLeaseController.getLeaseReconciliationStatus
+);
 app.use('/api/admin/leases', adminLeaseRoutes);
 app.use('/api/admin/students', studentStatusRoutes);
 

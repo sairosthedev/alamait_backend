@@ -2,12 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const leaseController = require('../../controllers/admin/leaseController');
-const { 
+const {
     validateStudentId,
     validateApplicationId,
     validateDebtorId,
-    validateLeaseDates, 
-    validateBulkLeaseUpdates 
+    validateLeaseDates,
+    validateBulkLeaseUpdates,
+    resolveReconciliationIdentifier,
+    handleLeaseValidation
 } = require('../../middleware/leaseValidation');
 
 // GET /api/admin/leases - Fetch all leases
@@ -36,6 +38,23 @@ router.put('/students/:studentId/lease',
 );
 
 // GET reconciliation status (lease dates vs accruals) — embed on tenant/debtor detail pages
+router.get(
+    '/reconciliation',
+    auth,
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
+
+// Literal "N/A" in URLs is two path segments (N + A), not one param — tenants without a User login
+router.get(
+    '/students/N/A/reconciliation',
+    auth,
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    resolveReconciliationIdentifier,
+    leaseController.getLeaseReconciliationStatus
+);
+
 router.get('/applications/:applicationId/reconciliation',
     auth,
     checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
@@ -46,14 +65,20 @@ router.get('/applications/:applicationId/reconciliation',
 router.get('/debtors/:debtorId/reconciliation',
     auth,
     checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    (req, res, next) => {
+        req.query.debtorId = req.params.debtorId;
+        next();
+    },
     validateDebtorId,
+    handleLeaseValidation,
+    resolveReconciliationIdentifier,
     leaseController.getLeaseReconciliationStatus
 );
 
 router.get('/students/:studentId/reconciliation',
     auth,
     checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
-    validateStudentId,
+    resolveReconciliationIdentifier,
     leaseController.getLeaseReconciliationStatus
 );
 
